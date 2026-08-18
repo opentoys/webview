@@ -2,8 +2,8 @@ package darwin
 
 import (
 	"errors"
-	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -236,9 +236,12 @@ type Platform struct {
 	// in the package-level scriptHandler (registered class is process-global).
 	ucc objc.ID
 
-	// MessageFunc is called on the host thread with the string body of each
-	// JS postMessage to window.webkit.messageHandlers.webviewBridge.
+	// MessageFunc is called with the string body of each JS postMessage to
+	// window.webkit.messageHandlers.webviewBridge.
 	MessageFunc func(string)
+	// BoundFuncs returns the JS-visible func names; the bootstrap script
+	// defines window.<name> stubs from it at page start.
+	BoundFuncs func() []string
 
 	mu     sync.Mutex
 	closed bool
@@ -386,12 +389,45 @@ func (p *Platform) Navigate(url string) error {
 	return nil
 }
 
-func (p *Platform) SetHTML(html string) error {
-	return p.Navigate("data:text/html;charset=utf-8," + url.PathEscape(html))
+// indexHead returns a byte index in html suitable for inserting a <script> tag
+// so that it runs before any user-supplied script. Looks for <head>, </head>,
+// <body>, or the first <script>, returning the index AFTER that tag or -1.
+func indexHead(html string) int {
+	lower := strings.ToLower(html)
+	for _, tag := range []string{"<head>", "<head ", "<head\t", "<head\n"} {
+		if i := strings.Index(lower, tag); i >= 0 {
+			return i + len(tag)
+		}
+	}
+	if i := strings.Index(lower, "</head>"); i >= 0 {
+		return i
+	}
+	if i := strings.Index(lower, "<body"); i >= 0 {
+		return i
+	}
+	if i := strings.Index(lower, "<script"); i >= 0 {
+		return i
+	}
+	return -1
 }
 
-// evalJS runs JS without a completion handler (fire-and-forget).
-func (p *Platform) evalJS(js string) {
+func (p *Platform) SetHTML(html string) error {
+	// Prepend the bridge bootstrap (webviewBridge + func stubs) as an inline
+	// <script> so it is available before any user-supplied script runs.
+	if p.BoundFuncs != nil {
+		if js := bootstrapJS(p.BoundFuncs()); js != "" {
+			// HTML parsing closes <script> on </script>, </script>, or </SCRIPT>.
+			// Escape </ sequences so the script body is safe inside the tag.
+			js = strings.ReplaceAll(js, "</", `<\/`)
+			tag := "<script>" + js + "</script>"
+			if i := indexHead(html); i >= 0 {
+				html = html[:i] + tag + html[i:]
+			} else {
+				html = tag + html
+			}
+		}
+	}
+	// Use loadHTMLString:baseURL: to avoid data: URL encoding issues.
 	mainThread(func() {
 		p.mu.Lock()
 		wv := p.webview
@@ -399,9 +435,39 @@ func (p *Platform) evalJS(js string) {
 		if wv == 0 {
 			return
 		}
-		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), js)
-		wv.Send(objc.RegisterName("evaluateJavaScript:completionHandler:"), str, objc.ID(0))
+		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), html)
+		wv.Send(objc.RegisterName("loadHTMLString:baseURL:"), str, objc.ID(0))
 	})
+	return nil
+}
+
+// evalJS runs JS without a completion handler (fire-and-forget), blocking on
+// the host thread.
+func (p *Platform) evalJS(js string) {
+	mainThread(func() { p.evalOnHost(js) })
+}
+
+// evalOnHost runs JS on the host thread; must be called from the host thread.
+func (p *Platform) evalOnHost(js string) {
+	p.mu.Lock()
+	wv := p.webview
+	p.mu.Unlock()
+	if wv == 0 {
+		return
+	}
+	str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), js)
+	wv.Send(objc.RegisterName("evaluateJavaScript:completionHandler:"), str, objc.ID(0))
+}
+
+// EvalHost queues js to run on the host thread without blocking, so it is safe
+// from any thread including a MessageFunc callback on the host thread (where
+// mainThread would deadlock).
+func (p *Platform) EvalHost(js string) {
+	cmd := hostCmd()
+	if cmd == nil {
+		return
+	}
+	cmd <- func() { p.evalOnHost(js) }
 }
 
 func (p *Platform) Eval(js string) error {

@@ -1,7 +1,7 @@
 package webview
 
 import (
-	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -16,10 +16,8 @@ func TestBridgeDispatch(t *testing.T) {
 	if len(replies) != 1 {
 		t.Fatalf("expected 1 reply, got %d", len(replies))
 	}
-	var got map[string]any
-	json.Unmarshal([]byte(replies[0]), &got)
-	if got["id"].(float64) != 1 || got["ok"] != true || got["result"].(float64) != 5 {
-		t.Fatalf("bad reply: %v", got)
+	if want := "webviewBridge.resolve(1, 5)"; replies[0] != want {
+		t.Fatalf("reply = %q, want %q", replies[0], want)
 	}
 }
 
@@ -29,10 +27,8 @@ func TestBridgeError(t *testing.T) {
 	msg := `{"id":2,"name":"boom","args":[]}`
 	var replies []string
 	b.HandleMessage(msg, func(js string) { replies = append(replies, js) })
-	var got map[string]any
-	json.Unmarshal([]byte(replies[0]), &got)
-	if got["ok"] != false || got["error"] != "nope" {
-		t.Fatalf("expected error reply, got %v", got)
+	if want := `webviewBridge.reject(2, "nope")`; replies[0] != want {
+		t.Fatalf("reply = %q, want %q", replies[0], want)
 	}
 }
 
@@ -41,10 +37,8 @@ func TestBridgeUnknownFunc(t *testing.T) {
 	msg := `{"id":3,"name":"nope","args":[]}`
 	var replies []string
 	b.HandleMessage(msg, func(js string) { replies = append(replies, js) })
-	var got map[string]any
-	json.Unmarshal([]byte(replies[0]), &got)
-	if got["ok"] != false {
-		t.Fatalf("expected error reply, got %v", got)
+	if want := `webviewBridge.reject(3, "webview: no bound func \"nope\"")`; replies[0] != want {
+		t.Fatalf("reply = %q, want %q", replies[0], want)
 	}
 }
 
@@ -61,11 +55,7 @@ func TestBridgeUnencodableResult(t *testing.T) {
 	if len(replies) != 1 {
 		t.Fatalf("expected 1 reply, got %d", len(replies))
 	}
-	var got map[string]any
-	if err := json.Unmarshal([]byte(replies[0]), &got); err != nil {
-		t.Fatalf("reply is not JSON: %q", replies[0])
-	}
-	if got["ok"] != false || got["error"] == nil || got["error"] == "" {
-		t.Fatalf("expected error reply, got %v", got)
+	if got := replies[0]; !strings.Contains(got, "webviewBridge.reject(4, ") || !strings.Contains(got, "json: unsupported type") {
+		t.Fatalf("reply = %q, want reject with json error", got)
 	}
 }

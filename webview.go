@@ -39,7 +39,9 @@ type W struct {
 }
 
 func New(opts Options) (*W, error) {
-	return &W{p: newPlatform(opts), bridge: newBridge()}, nil
+	w := &W{bridge: newBridge()}
+	w.p = buildPlatform(opts, w)
+	return w, nil
 }
 
 // Run blocks until the window closes or Close is called.

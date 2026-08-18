@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 )
 
@@ -30,6 +31,17 @@ func (b *bridge) Bind(name string, fn any) error {
 	return nil
 }
 
+// funcNames returns the bound names, for bootstrap injection.
+func (b *bridge) funcNames() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(b.funcs))
+	for name := range b.funcs {
+		out = append(out, name)
+	}
+	return out
+}
+
 // HandleMessage processes a JS -> Go {id,name,args} message and emits reply JS.
 func (b *bridge) HandleMessage(msg string, emit func(string)) {
 	var in struct {
@@ -53,20 +65,20 @@ func (b *bridge) HandleMessage(msg string, emit func(string)) {
 		emit(renderError(in.ID, err))
 		return
 	}
-	payload, err := json.Marshal(map[string]any{"id": in.ID, "ok": true, "result": result})
+	payload, err := json.Marshal(result)
 	if err != nil {
 		emit(renderError(in.ID, err))
 		return
 	}
-	emit(string(payload))
+	emit("webviewBridge.resolve(" + strconv.Itoa(in.ID) + ", " + string(payload) + ")")
 }
 
 func renderError(id int, err error) string {
-	payload, jerr := json.Marshal(map[string]any{"id": id, "ok": false, "error": err.Error()})
+	lit, jerr := json.Marshal(err.Error())
 	if jerr != nil {
 		return "webviewBridge.reject(null)"
 	}
-	return string(payload)
+	return "webviewBridge.reject(" + strconv.Itoa(id) + ", " + string(lit) + ")"
 }
 
 // callFunc calls fn with JSON args, returns JSON-encodable result.
