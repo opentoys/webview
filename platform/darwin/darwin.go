@@ -1,3 +1,5 @@
+//go:build darwin
+
 package darwin
 
 import (
@@ -65,6 +67,53 @@ var uiDelegateClass objc.Class
 // does not retain its handler, so it must outlive the UCC or messages stop.
 var scriptHandler objc.ID
 
+// Cached ObjC classes (avoids repeated hash-table lookups in GetClass).
+var (
+	nsStringClass          objc.Class
+	nsURLClass             objc.Class
+	nsURLRequestClass      objc.Class
+	nsWindowClass          objc.Class
+	nsAppClass             objc.Class
+	nsDateClass            objc.Class
+	nsAutoreleasePoolClass objc.Class
+	wkUCCClass             objc.Class
+	wkWebViewConfigClass   objc.Class
+	wkWebViewClass         objc.Class
+)
+
+// Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
+var (
+	allocSel                        objc.SEL
+	initSel                         objc.SEL
+	newSel                          objc.SEL
+	drainSel                        objc.SEL
+	UTF8StringSel                   objc.SEL
+	stringWithUTF8Sel               objc.SEL
+	bodySel                         objc.SEL
+	setTitleSel                     objc.SEL
+	loadRequestSel                  objc.SEL
+	URLWithStringSel                objc.SEL
+	requestWithURLSel               objc.SEL
+	evaluateJSSel                   objc.SEL
+	loadHTMLStringSel               objc.SEL
+	orderOutSel                     objc.SEL
+	setDelegateSel                  objc.SEL
+	initWithContentRectSel          objc.SEL
+	setContentViewSel               objc.SEL
+	centerSel                       objc.SEL
+	makeKeyAndOrderFrontSel         objc.SEL
+	addScriptMessageHandlerSel      objc.SEL
+	setUserContentControllerSel     objc.SEL
+	initWithFrameSel                objc.SEL
+	setUIDelegateSel                objc.SEL
+	sharedApplicationSel            objc.SEL
+	setActivationPolicySel          objc.SEL
+	activateIgnoringOtherAppsSel    objc.SEL
+	dateWithTimeIntervalSinceNowSel objc.SEL
+	nextEventMatchingMaskSel        objc.SEL
+	sendEventSel                    objc.SEL
+)
+
 // activePlatform is the Platform whose webview is currently set up. Process-
 // global because handler methods are registered per-class, not per-instance.
 // Written once in setup() on the host thread; read from the host thread the
@@ -82,6 +131,48 @@ func init() {
 			panic(err)
 		}
 	}
+
+	// Cache frequently used ObjC classes and selectors.
+	nsStringClass = objc.GetClass("NSString")
+	nsURLClass = objc.GetClass("NSURL")
+	nsURLRequestClass = objc.GetClass("NSURLRequest")
+	nsWindowClass = objc.GetClass("NSWindow")
+	nsAppClass = objc.GetClass("NSApplication")
+	nsDateClass = objc.GetClass("NSDate")
+	nsAutoreleasePoolClass = objc.GetClass("NSAutoreleasePool")
+	wkUCCClass = objc.GetClass("WKUserContentController")
+	wkWebViewConfigClass = objc.GetClass("WKWebViewConfiguration")
+	wkWebViewClass = objc.GetClass("WKWebView")
+
+	allocSel = objc.RegisterName("alloc")
+	initSel = objc.RegisterName("init")
+	newSel = objc.RegisterName("new")
+	drainSel = objc.RegisterName("drain")
+	UTF8StringSel = objc.RegisterName("UTF8String")
+	stringWithUTF8Sel = objc.RegisterName("stringWithUTF8String:")
+	bodySel = objc.RegisterName("body")
+	setTitleSel = objc.RegisterName("setTitle:")
+	loadRequestSel = objc.RegisterName("loadRequest:")
+	URLWithStringSel = objc.RegisterName("URLWithString:")
+	requestWithURLSel = objc.RegisterName("requestWithURL:")
+	evaluateJSSel = objc.RegisterName("evaluateJavaScript:completionHandler:")
+	loadHTMLStringSel = objc.RegisterName("loadHTMLString:baseURL:")
+	orderOutSel = objc.RegisterName("orderOut:")
+	setDelegateSel = objc.RegisterName("setDelegate:")
+	initWithContentRectSel = objc.RegisterName("initWithContentRect:styleMask:backing:defer:")
+	setContentViewSel = objc.RegisterName("setContentView:")
+	centerSel = objc.RegisterName("center")
+	makeKeyAndOrderFrontSel = objc.RegisterName("makeKeyAndOrderFront:")
+	addScriptMessageHandlerSel = objc.RegisterName("addScriptMessageHandler:name:")
+	setUserContentControllerSel = objc.RegisterName("setUserContentController:")
+	initWithFrameSel = objc.RegisterName("initWithFrame:configuration:")
+	setUIDelegateSel = objc.RegisterName("setUIDelegate:")
+	sharedApplicationSel = objc.RegisterName("sharedApplication")
+	setActivationPolicySel = objc.RegisterName("setActivationPolicy:")
+	activateIgnoringOtherAppsSel = objc.RegisterName("activateIgnoringOtherApps:")
+	dateWithTimeIntervalSinceNowSel = objc.RegisterName("dateWithTimeIntervalSinceNow:")
+	nextEventMatchingMaskSel = objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:")
+	sendEventSel = objc.RegisterName("sendEvent:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -117,7 +208,7 @@ func init() {
 		if p == nil || p.MessageFunc == nil {
 			return
 		}
-		body := objc.ID(message).Send(objc.RegisterName("body"))
+		body := objc.ID(message).Send(bodySel)
 		text := goString(body)
 		p.MessageFunc(text)
 	}
@@ -235,23 +326,21 @@ func hostCmd() chan func() {
 // exit — and terminate: exits the whole process, breaking multi-window use.
 func hostLoop() {
 	runtime.LockOSThread()
-	app := objc.ID(objc.GetClass("NSApplication")).Send(objc.RegisterName("sharedApplication"))
+	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
 	if app == 0 {
 		panic("darwin: no shared NSApplication")
 	}
-	app.Send(objc.RegisterName("setActivationPolicy:"), activationRegular)
-	app.Send(objc.RegisterName("activateIgnoringOtherApps:"), true)
+	app.Send(setActivationPolicySel, activationRegular)
+	app.Send(activateIgnoringOtherAppsSel, true)
 	close(hostReady)
 
 	// nsdefaultMode is the non-blocking select on the loop's event poll.
-	nsdefaultMode := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), "kCFRunLoopDefaultMode")
+	nsdefaultMode := objc.ID(nsStringClass).Send(stringWithUTF8Sel, "kCFRunLoopDefaultMode")
 	// This manual loop never runs [NSApp run], so AppKit never drains its own
 	// autorelease pool. Each iteration allocates autoreleased objects (the
 	// poll's NSDate, any dequeued events), so drain a pool every iteration to
 	// avoid unbounded memory growth.
-	newSel := objc.RegisterName("new")
-	drainSel := objc.RegisterName("drain")
-	poolClass := objc.ID(objc.GetClass("NSAutoreleasePool"))
+	poolClass := objc.ID(nsAutoreleasePoolClass)
 	pool := poolClass.Send(newSel)
 	cmd := hostCmd()
 	for {
@@ -262,13 +351,13 @@ func hostLoop() {
 		default:
 			// Poll with a short timeout so commands are served promptly without a
 			// 100% CPU busy loop.
-			until := objc.ID(objc.GetClass("NSDate")).Send(objc.RegisterName("dateWithTimeIntervalSinceNow:"), 0.05)
+			until := objc.ID(nsDateClass).Send(dateWithTimeIntervalSinceNowSel, 0.05)
 			event := app.Send(
-				objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+				nextEventMatchingMaskSel,
 				eventMaskAny, until, nsdefaultMode, true,
 			)
 			if event != 0 {
-				app.Send(objc.RegisterName("sendEvent:"), event)
+				app.Send(sendEventSel, event)
 			}
 		}
 		// Drain the previous iteration's pool and start a fresh one.
@@ -350,7 +439,7 @@ func (p *Platform) Close() error {
 	// Hide the window so a closed platform doesn't linger on screen while the
 	// next window in the same process is running.
 	if window != 0 {
-		mainThread(func() { window.Send(objc.RegisterName("orderOut:"), 0) })
+		mainThread(func() { window.Send(orderOutSel, 0) })
 	}
 	return nil
 }
@@ -364,56 +453,56 @@ func (p *Platform) setup() error {
 	activePlatform = p
 
 	// Delegate: one per Platform, kept alive as a field.
-	delegate := objc.ID(windowDelegateClass).Send(objc.RegisterName("alloc"))
-	delegate = delegate.Send(objc.RegisterName("init"))
+	delegate := objc.ID(windowDelegateClass).Send(allocSel)
+	delegate = delegate.Send(initSel)
 	p.delegate = delegate
 
-	w := objc.ID(objc.GetClass("NSWindow")).Send(objc.RegisterName("alloc"))
+	w := objc.ID(nsWindowClass).Send(allocSel)
 	if w == 0 {
 		return errNoWindow
 	}
 	styleMask := styleTitled | styleClosable | styleResizable
-	w = w.Send(objc.RegisterName("initWithContentRect:styleMask:backing:defer:"),
+	w = w.Send(initWithContentRectSel,
 		rect(0, 0, 800, 600), styleMask, backingBuffered, false)
 	p.mu.Lock()
 	p.window = w
 	p.mu.Unlock()
-	w.Send(objc.RegisterName("setDelegate:"), delegate)
+	w.Send(setDelegateSel, delegate)
 
 	// UCC receives script messages. addScriptMessageHandler:name: does not retain
 	// the handler, so keep both the UCC and handler alive on the Platform.
-	ucc := objc.ID(objc.GetClass("WKUserContentController")).Send(objc.RegisterName("alloc"))
+	ucc := objc.ID(wkUCCClass).Send(allocSel)
 	if ucc == 0 {
 		return errors.New("darwin: failed to alloc WKUserContentController")
 	}
-	ucc = ucc.Send(objc.RegisterName("init"))
+	ucc = ucc.Send(initSel)
 	p.ucc = ucc
-	handler := objc.ID(messageHandlerClass).Send(objc.RegisterName("alloc"))
-	handler = handler.Send(objc.RegisterName("init"))
+	handler := objc.ID(messageHandlerClass).Send(allocSel)
+	handler = handler.Send(initSel)
 	scriptHandler = handler
-	ucc.Send(objc.RegisterName("addScriptMessageHandler:name:"), handler, nsString("webviewBridge"))
+	ucc.Send(addScriptMessageHandlerSel, handler, nsString("webviewBridge"))
 
-	config := objc.ID(objc.GetClass("WKWebViewConfiguration")).Send(objc.RegisterName("alloc"))
-	config = config.Send(objc.RegisterName("init"))
-	config.Send(objc.RegisterName("setUserContentController:"), ucc)
-	wv := objc.ID(objc.GetClass("WKWebView")).Send(objc.RegisterName("alloc"))
+	config := objc.ID(wkWebViewConfigClass).Send(allocSel)
+	config = config.Send(initSel)
+	config.Send(setUserContentControllerSel, ucc)
+	wv := objc.ID(wkWebViewClass).Send(allocSel)
 	if wv == 0 {
 		return errNoWebView
 	}
-	wv = wv.Send(objc.RegisterName("initWithFrame:configuration:"), rect(0, 0, 800, 600), config)
+	wv = wv.Send(initWithFrameSel, rect(0, 0, 800, 600), config)
 	p.mu.Lock()
 	p.webview = wv
 	p.mu.Unlock()
 
 	// WKUIDelegate handles JS alert/confirm/prompt.
-	uiDelegate := objc.ID(uiDelegateClass).Send(objc.RegisterName("alloc"))
-	uiDelegate = uiDelegate.Send(objc.RegisterName("init"))
+	uiDelegate := objc.ID(uiDelegateClass).Send(allocSel)
+	uiDelegate = uiDelegate.Send(initSel)
 	p.uiDelegate = uiDelegate
-	wv.Send(objc.RegisterName("setUIDelegate:"), uiDelegate)
+	wv.Send(setUIDelegateSel, uiDelegate)
 
-	w.Send(objc.RegisterName("setContentView:"), wv)
-	w.Send(objc.RegisterName("center"))
-	w.Send(objc.RegisterName("makeKeyAndOrderFront:"), 0)
+	w.Send(setContentViewSel, wv)
+	w.Send(centerSel)
+	w.Send(makeKeyAndOrderFrontSel, 0)
 
 	// Apply a title set before Run().
 	p.mu.Lock()
@@ -421,8 +510,8 @@ func (p *Platform) setup() error {
 	p.pendingTitle = ""
 	p.mu.Unlock()
 	if title != "" {
-		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), title)
-		w.Send(objc.RegisterName("setTitle:"), str)
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, title)
+		w.Send(setTitleSel, str)
 	}
 	return nil
 }
@@ -439,8 +528,8 @@ func (p *Platform) SetTitle(title string) error {
 	w := p.window
 	p.mu.Unlock()
 	mainThread(func() {
-		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), title)
-		w.Send(objc.RegisterName("setTitle:"), str)
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, title)
+		w.Send(setTitleSel, str)
 	})
 	return nil
 }
@@ -456,10 +545,10 @@ func (p *Platform) Navigate(url string) error {
 		if wv == 0 {
 			return
 		}
-		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), url)
-		nsURL := objc.ID(objc.GetClass("NSURL")).Send(objc.RegisterName("URLWithString:"), str)
-		req := objc.ID(objc.GetClass("NSURLRequest")).Send(objc.RegisterName("requestWithURL:"), nsURL)
-		wv.Send(objc.RegisterName("loadRequest:"), req)
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, url)
+		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, str)
+		req := objc.ID(nsURLRequestClass).Send(requestWithURLSel, nsURL)
+		wv.Send(loadRequestSel, req)
 	})
 	return nil
 }
@@ -510,8 +599,8 @@ func (p *Platform) SetHTML(html string) error {
 		if wv == 0 {
 			return
 		}
-		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), html)
-		wv.Send(objc.RegisterName("loadHTMLString:baseURL:"), str, objc.ID(0))
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
+		wv.Send(loadHTMLStringSel, str, objc.ID(0))
 	})
 	return nil
 }
@@ -530,8 +619,8 @@ func (p *Platform) evalOnHost(js string) {
 	if wv == 0 {
 		return
 	}
-	str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), js)
-	wv.Send(objc.RegisterName("evaluateJavaScript:completionHandler:"), str, objc.ID(0))
+	str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, js)
+	wv.Send(evaluateJSSel, str, objc.ID(0))
 }
 
 // EvalHost queues js to run on the host thread without blocking, so it is safe
@@ -552,11 +641,4 @@ func (p *Platform) Eval(js string) error {
 
 func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
 	return defaultInput, false
-}
-
-// Bind satisfies the Platform interface; the actual registry lives on W's
-// bridge. Bound funcs reach JS against this platform only during bootstrap
-// (Task 6), so there is nothing to store here yet.
-func (p *Platform) Bind(name string, fn any) error {
-	return nil
 }

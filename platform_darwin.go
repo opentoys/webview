@@ -1,6 +1,27 @@
+//go:build darwin
+
 package webview
 
 import "github.com/opentoys/webview/platform/darwin"
+
+// Type aliases forward the platform package's types so callers don't need
+// to import platform/darwin directly.
+type DialogKind = darwin.DialogKind
+
+const (
+	DialogAlert   = darwin.DialogAlert
+	DialogConfirm = darwin.DialogConfirm
+	DialogPrompt  = darwin.DialogPrompt
+)
+
+type SizeHint = darwin.SizeHint
+
+const (
+	SizeNone  = darwin.SizeNone
+	SizeMin   = darwin.SizeMin
+	SizeMax   = darwin.SizeMax
+	SizeFixed = darwin.SizeFixed
+)
 
 // buildPlatform creates the platform and wires the message handler to the
 // bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply

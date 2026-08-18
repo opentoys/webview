@@ -1,23 +1,8 @@
 package webview
 
-import "github.com/opentoys/webview/platform/darwin"
-
-type DialogKind = darwin.DialogKind
-
-const (
-	DialogAlert   = darwin.DialogAlert
-	DialogConfirm = darwin.DialogConfirm
-	DialogPrompt  = darwin.DialogPrompt
-)
-
-type SizeHint = darwin.SizeHint
-
-const (
-	SizeNone  = darwin.SizeNone
-	SizeMin   = darwin.SizeMin
-	SizeMax   = darwin.SizeMax
-	SizeFixed = darwin.SizeFixed
-)
+// DialogKind, SizeHint and their constants are defined per-platform in
+// platform_darwin.go / platform_other.go to avoid importing platform/darwin
+// in the common file (which would break linux/windows cross-compile).
 
 type Platform interface {
 	Run() error
@@ -28,7 +13,6 @@ type Platform interface {
 	SetHTML(html string) error
 	Eval(js string) error
 	Dialog(kind DialogKind, message, defaultInput string) (string, bool)
-	Bind(name string, fn any) error
 }
 
 type Options struct{ Debug bool }
@@ -62,7 +46,7 @@ func (w *W) SetSize(width, height int, hint SizeHint) {
 }
 func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
 func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
-func (w *W) Eval(js string) error { return w.p.Eval(js) }
+func (w *W) Eval(js string) error      { return w.p.Eval(js) }
 
 // Bind registers Go func fn JS-callable. On the JS side call it via the bridge
 // (Task 6 wires bootstrap + message routing).

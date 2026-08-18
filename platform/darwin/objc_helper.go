@@ -1,3 +1,5 @@
+//go:build darwin
+
 package darwin
 
 import (
@@ -18,7 +20,7 @@ func rect(x, y, w, h float64) cgRect {
 
 // nsString converts a Go string to an autoreleased NSString.
 func nsString(s string) objc.ID {
-	return objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), s)
+	return objc.ID(nsStringClass).Send(stringWithUTF8Sel, s)
 }
 
 // goString copies an NSString's UTF-8 bytes into a Go string. UTF8String
@@ -29,7 +31,7 @@ func goString(id objc.ID) string {
 	if id == 0 {
 		return ""
 	}
-	ptr := objc.Send[unsafe.Pointer](id, objc.RegisterName("UTF8String"))
+	ptr := objc.Send[unsafe.Pointer](id, UTF8StringSel)
 	if ptr == nil {
 		return ""
 	}
