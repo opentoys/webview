@@ -140,25 +140,35 @@ func hostLoop() {
 
 	// nsdefaultMode is the non-blocking select on the loop's event poll.
 	nsdefaultMode := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), "kCFRunLoopDefaultMode")
+	// This manual loop never runs [NSApp run], so AppKit never drains its own
+	// autorelease pool. Each iteration allocates autoreleased objects (the
+	// poll's NSDate, any dequeued events), so drain a pool every iteration to
+	// avoid unbounded memory growth.
+	newSel := objc.RegisterName("new")
+	drainSel := objc.RegisterName("drain")
+	poolClass := objc.ID(objc.GetClass("NSAutoreleasePool"))
+	pool := poolClass.Send(newSel)
 	cmd := hostCmd()
 	for {
 		// Run queued Go commands before blocking on events.
 		select {
 		case fn := <-cmd:
 			fn()
-			continue
 		default:
+			// Poll with a short timeout so commands are served promptly without a
+			// 100% CPU busy loop.
+			until := objc.ID(objc.GetClass("NSDate")).Send(objc.RegisterName("dateWithTimeIntervalSinceNow:"), 0.05)
+			event := app.Send(
+				objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+				eventMaskAny, until, nsdefaultMode, true,
+			)
+			if event != 0 {
+				app.Send(objc.RegisterName("sendEvent:"), event)
+			}
 		}
-		// Poll with a short timeout so commands are served promptly without a
-		// 100% CPU busy loop.
-		until := objc.ID(objc.GetClass("NSDate")).Send(objc.RegisterName("dateWithTimeIntervalSinceNow:"), 0.05)
-		event := app.Send(
-			objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
-			eventMaskAny, until, nsdefaultMode, true,
-		)
-		if event != 0 {
-			app.Send(objc.RegisterName("sendEvent:"), event)
-		}
+		// Drain the previous iteration's pool and start a fresh one.
+		pool.Send(drainSel)
+		pool = poolClass.Send(newSel)
 	}
 }
 
