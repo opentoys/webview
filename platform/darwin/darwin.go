@@ -53,6 +53,20 @@ const eventMaskAny = ^uint(0)
 // same name panics.
 var windowDelegateClass objc.Class
 
+// messageHandlerClass receives JS postMessage calls. Registered once at package
+// init, like windowDelegateClass.
+var messageHandlerClass objc.Class
+
+// scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
+// does not retain its handler, so it must outlive the UCC or messages stop.
+var scriptHandler objc.ID
+
+// activePlatform is the Platform whose webview is currently set up. Process-
+// global because handler methods are registered per-class, not per-instance.
+// Written once in setup() on the host thread; read from the host thread the
+// same way, so no lock is needed.
+var activePlatform *Platform
+
 func init() {
 	// AppKit and WebKit are not linked into a CGO_ENABLED=0 binary, so load them
 	// explicitly before looking up their classes.
@@ -84,6 +98,32 @@ func init() {
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("windowShouldClose:"), Fn: windowShouldClose},
 			{Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"), Fn: terminateAfterLastWindowClosed},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// userContentController:didReceiveScriptMessage: is called on the host thread
+	// when JS runs postMessage on this class's registered handler. ObjC method
+	// closures can't capture Go state, so route through the package-level
+	// activePlatform set in setup().
+	didReceiveMessage := func(id objc.ID, cmd objc.SEL, controller objc.ID, message objc.ID) {
+		p := activePlatform
+		if p == nil || p.MessageFunc == nil {
+			return
+		}
+		body := objc.ID(message).Send(objc.RegisterName("body"))
+		text := goString(body)
+		p.MessageFunc(text)
+	}
+	messageHandlerClass, err = objc.RegisterClass(
+		"GoWebviewScriptHandler",
+		objc.GetClass("NSObject"),
+		[]*objc.Protocol{objc.GetProtocol("WKScriptMessageHandler")},
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("userContentController:didReceiveScriptMessage:"), Fn: didReceiveMessage},
 		},
 	)
 	if err != nil {
@@ -192,6 +232,13 @@ type Platform struct {
 	window   objc.ID
 	webview  objc.ID
 	delegate objc.ID
+	// ucc keeps the WKUserContentController alive; the handler instance lives
+	// in the package-level scriptHandler (registered class is process-global).
+	ucc objc.ID
+
+	// MessageFunc is called on the host thread with the string body of each
+	// JS postMessage to window.webkit.messageHandlers.webviewBridge.
+	MessageFunc func(string)
 
 	mu     sync.Mutex
 	closed bool
@@ -239,6 +286,11 @@ func (p *Platform) Close() error {
 // setup creates the NSWindow and WKWebView, then shows them. Runs on the host
 // thread (called via mainThread from Run).
 func (p *Platform) setup() error {
+	// Route script messages of the (process-global) handler class to this
+	// platform. Called on the host thread; the didReceiveMessage handler
+	// closure reads activePlatform on the same thread, so no lock is needed.
+	activePlatform = p
+
 	// Delegate: one per Platform, kept alive as a field.
 	delegate := objc.ID(windowDelegateClass).Send(objc.RegisterName("alloc"))
 	delegate = delegate.Send(objc.RegisterName("init"))
@@ -256,8 +308,22 @@ func (p *Platform) setup() error {
 	p.mu.Unlock()
 	w.Send(objc.RegisterName("setDelegate:"), delegate)
 
+	// UCC receives script messages. addScriptMessageHandler:name: does not retain
+	// the handler, so keep both the UCC and handler alive on the Platform.
+	ucc := objc.ID(objc.GetClass("WKUserContentController")).Send(objc.RegisterName("alloc"))
+	if ucc == 0 {
+		return errors.New("darwin: failed to alloc WKUserContentController")
+	}
+	ucc = ucc.Send(objc.RegisterName("init"))
+	p.ucc = ucc
+	handler := objc.ID(messageHandlerClass).Send(objc.RegisterName("alloc"))
+	handler = handler.Send(objc.RegisterName("init"))
+	scriptHandler = handler
+	ucc.Send(objc.RegisterName("addScriptMessageHandler:name:"), handler, nsString("webviewBridge"))
+
 	config := objc.ID(objc.GetClass("WKWebViewConfiguration")).Send(objc.RegisterName("alloc"))
 	config = config.Send(objc.RegisterName("init"))
+	config.Send(objc.RegisterName("setUserContentController:"), ucc)
 	wv := objc.ID(objc.GetClass("WKWebView")).Send(objc.RegisterName("alloc"))
 	if wv == 0 {
 		return errNoWebView
