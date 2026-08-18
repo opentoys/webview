@@ -57,6 +57,10 @@ var windowDelegateClass objc.Class
 // init, like windowDelegateClass.
 var messageHandlerClass objc.Class
 
+// uiDelegateClass handles JS alert/confirm/prompt dialogs via WKUIDelegate.
+// Registered once at package init; one instance per Platform.
+var uiDelegateClass objc.Class
+
 // scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
 // does not retain its handler, so it must outlive the UCC or messages stop.
 var scriptHandler objc.ID
@@ -124,6 +128,67 @@ func init() {
 		nil,
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("userContentController:didReceiveScriptMessage:"), Fn: didReceiveMessage},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// WKUIDelegate: handles JS alert/confirm/prompt. Runs on the WebKit
+	// delivery thread, which is the host thread (same assumption as
+	// MessageFunc/didReceiveScriptMessage). activePlatform is written once
+	// in setup() on the host thread and read here on the host thread.
+	uiDelegateClass, err = objc.RegisterClass(
+		"GoWebviewUIDelegate",
+		objc.GetClass("NSObject"),
+		[]*objc.Protocol{objc.GetProtocol("WKUIDelegate")},
+		nil,
+		[]objc.MethodDef{
+			// Alert: completion block takes no args.
+			{Cmd: objc.RegisterName("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:"),
+				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, msg objc.ID, frame objc.ID, completion objc.ID) {
+					text := goString(msg)
+					dp := activePlatform
+					if dp != nil && dp.DialogFunc != nil {
+						dp.DialogFunc(DialogAlert, text, "")
+					}
+					callBlock(completion)
+				}},
+			// Confirm: completion block takes BOOL → pass true for OK.
+			{Cmd: objc.RegisterName("webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:"),
+				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, msg objc.ID, frame objc.ID, completion objc.ID) {
+					text := goString(msg)
+					ok := false
+					dp := activePlatform
+					if dp != nil && dp.DialogFunc != nil {
+						_, ok = dp.DialogFunc(DialogConfirm, text, "")
+					}
+					// BOOL as int64: on arm64 BOOL = signed char; purego
+					// marshals Go int64 → C signed char via encodeType.
+					var confirm int64
+					if ok {
+						confirm = 1
+					}
+					callBlock(completion, confirm)
+				}},
+			// Prompt: completion block takes NSString (or nil for cancel).
+			{Cmd: objc.RegisterName("webView:runJavaScriptPromptWithPrompt:defaultText:initiatedByFrame:completionHandler:"),
+				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, prompt objc.ID, defaultText objc.ID, frame objc.ID, completion objc.ID) {
+					text := goString(prompt)
+					def := goString(defaultText)
+					dp := activePlatform
+					if dp != nil && dp.DialogFunc != nil {
+						result, ok := dp.DialogFunc(DialogPrompt, text, def)
+						if ok {
+							callBlock(completion, nsString(result))
+						} else {
+							callBlock(completion, objc.ID(0))
+						}
+						return
+					}
+					// Default: return the default text.
+					callBlock(completion, nsString(def))
+				}},
 		},
 	)
 	if err != nil {
@@ -229,9 +294,10 @@ func mainThread(fn func()) {
 }
 
 type Platform struct {
-	window   objc.ID
-	webview  objc.ID
-	delegate objc.ID
+	window     objc.ID
+	webview    objc.ID
+	delegate   objc.ID
+	uiDelegate objc.ID // WKUIDelegate instance; kept alive for the webview.
 	// ucc keeps the WKUserContentController alive; the handler instance lives
 	// in the package-level scriptHandler (registered class is process-global).
 	ucc objc.ID
@@ -242,6 +308,9 @@ type Platform struct {
 	// BoundFuncs returns the JS-visible func names; the bootstrap script
 	// defines window.<name> stubs from it at page start.
 	BoundFuncs func() []string
+	// DialogFunc is called by the WKUIDelegate for JS alert/confirm/prompt.
+	// Called on the host thread (same thread as MessageFunc).
+	DialogFunc func(kind DialogKind, message, defaultInput string) (string, bool)
 
 	mu     sync.Mutex
 	closed bool
@@ -335,6 +404,12 @@ func (p *Platform) setup() error {
 	p.mu.Lock()
 	p.webview = wv
 	p.mu.Unlock()
+
+	// WKUIDelegate handles JS alert/confirm/prompt.
+	uiDelegate := objc.ID(uiDelegateClass).Send(objc.RegisterName("alloc"))
+	uiDelegate = uiDelegate.Send(objc.RegisterName("init"))
+	p.uiDelegate = uiDelegate
+	wv.Send(objc.RegisterName("setUIDelegate:"), uiDelegate)
 
 	w.Send(objc.RegisterName("setContentView:"), wv)
 	w.Send(objc.RegisterName("center"))

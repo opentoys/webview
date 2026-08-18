@@ -11,5 +11,18 @@ func buildPlatform(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
+	// DialogFunc routes WKUIDelegate calls to W's dialog handler.
+	// Runs on the host thread (same as MessageFunc).
+	p.DialogFunc = func(kind DialogKind, message, defaultInput string) (string, bool) {
+		if w.dialog != nil {
+			return w.dialog(kind, message, defaultInput)
+		}
+		switch kind {
+		case DialogConfirm:
+			return "", false
+		default:
+			return defaultInput, true
+		}
+	}
 	return p
 }

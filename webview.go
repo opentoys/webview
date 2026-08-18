@@ -36,10 +36,19 @@ type Options struct{ Debug bool }
 type W struct {
 	p      Platform
 	bridge *bridge
+	dialog func(kind DialogKind, message, defaultInput string) (string, bool)
 }
 
 func New(opts Options) (*W, error) {
 	w := &W{bridge: newBridge()}
+	w.dialog = func(kind DialogKind, message, defaultInput string) (string, bool) {
+		switch kind {
+		case DialogConfirm:
+			return "", false
+		default:
+			return defaultInput, true
+		}
+	}
 	w.p = buildPlatform(opts, w)
 	return w, nil
 }
@@ -59,4 +68,12 @@ func (w *W) Eval(js string) error { return w.p.Eval(js) }
 // (Task 6 wires bootstrap + message routing).
 func (w *W) Bind(name string, fn any) error {
 	return w.bridge.Bind(name, fn)
+}
+
+// SetDialogHandler overrides the default JS dialog handler. The handler receives
+// the dialog kind, the JS message/prompt text, and (for prompt) the default
+// input. It returns (result, ok): for confirm, ok=true means "OK"; for prompt,
+// ok=false means "cancel" and result is ignored.
+func (w *W) SetDialogHandler(h func(kind DialogKind, message, defaultInput string) (string, bool)) {
+	w.dialog = h
 }
