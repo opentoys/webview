@@ -51,3 +51,21 @@ func TestBridgeUnknownFunc(t *testing.T) {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+func TestBridgeUnencodableResult(t *testing.T) {
+	b := newBridge()
+	b.Bind("leak", func() chan int { return make(chan int) })
+	msg := `{"id":4,"name":"leak","args":[]}`
+	var replies []string
+	b.HandleMessage(msg, func(js string) { replies = append(replies, js) })
+	if len(replies) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(replies))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(replies[0]), &got); err != nil {
+		t.Fatalf("reply is not JSON: %q", replies[0])
+	}
+	if got["ok"] != false || got["error"] == nil || got["error"] == "" {
+		t.Fatalf("expected error reply, got %v", got)
+	}
+}

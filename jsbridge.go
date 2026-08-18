@@ -53,12 +53,19 @@ func (b *bridge) HandleMessage(msg string, emit func(string)) {
 		emit(renderError(in.ID, err))
 		return
 	}
-	payload, _ := json.Marshal(map[string]any{"id": in.ID, "ok": true, "result": result})
+	payload, err := json.Marshal(map[string]any{"id": in.ID, "ok": true, "result": result})
+	if err != nil {
+		emit(renderError(in.ID, err))
+		return
+	}
 	emit(string(payload))
 }
 
 func renderError(id int, err error) string {
-	payload, _ := json.Marshal(map[string]any{"id": id, "ok": false, "error": err.Error()})
+	payload, jerr := json.Marshal(map[string]any{"id": id, "ok": false, "error": err.Error()})
+	if jerr != nil {
+		return "webviewBridge.reject(null)"
+	}
 	return string(payload)
 }
 
