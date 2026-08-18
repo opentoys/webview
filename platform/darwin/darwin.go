@@ -412,3 +412,10 @@ func (p *Platform) Eval(js string) error {
 func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
 	return defaultInput, false
 }
+
+// Bind satisfies the Platform interface; the actual registry lives on W's
+// bridge. Bound funcs reach JS against this platform only during bootstrap
+// (Task 6), so there is nothing to store here yet.
+func (p *Platform) Bind(name string, fn any) error {
+	return nil
+}

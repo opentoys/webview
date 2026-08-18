@@ -28,16 +28,18 @@ type Platform interface {
 	SetHTML(html string) error
 	Eval(js string) error
 	Dialog(kind DialogKind, message, defaultInput string) (string, bool)
+	Bind(name string, fn any) error
 }
 
 type Options struct{ Debug bool }
 
 type W struct {
-	p Platform
+	p      Platform
+	bridge *bridge
 }
 
 func New(opts Options) (*W, error) {
-	return &W{p: newPlatform(opts)}, nil
+	return &W{p: newPlatform(opts), bridge: newBridge()}, nil
 }
 
 // Run blocks until the window closes or Close is called.
@@ -49,4 +51,10 @@ func (w *W) SetSize(width, height int, hint SizeHint) {
 }
 func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
 func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
-func (w *W) Eval(js string) error      { return w.p.Eval(js) }
+func (w *W) Eval(js string) error { return w.p.Eval(js) }
+
+// Bind registers Go func fn JS-callable. On the JS side call it via the bridge
+// (Task 6 wires bootstrap + message routing).
+func (w *W) Bind(name string, fn any) error {
+	return w.bridge.Bind(name, fn)
+}
