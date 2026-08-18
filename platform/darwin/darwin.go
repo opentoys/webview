@@ -2,17 +2,18 @@ package darwin
 
 import (
 	"errors"
+	"net/url"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
 
 var (
-	errNoSharedApplication = errors.New("darwin: no shared NSApplication")
-	errNoWindow            = errors.New("darwin: failed to alloc NSWindow")
-	errNoWebView           = errors.New("darwin: failed to alloc WKWebView")
+	errNoWindow  = errors.New("darwin: failed to alloc NSWindow")
+	errNoWebView = errors.New("darwin: failed to alloc WKWebView")
 )
 
 type DialogKind int
@@ -45,6 +46,9 @@ const (
 // NSBackingStoreBuffered = 2.
 const backingBuffered = 2
 
+// NSEventMaskAny = NSUIntegerMax.
+const eventMaskAny = ^uint(0)
+
 // windowDelegateClass is registered once at package init; re-registering the
 // same name panics.
 var windowDelegateClass objc.Class
@@ -67,7 +71,7 @@ func init() {
 		return true
 	}
 	// applicationShouldTerminateAfterLastWindowClosed: keeps the app alive after
-	// the last window closes so Run() only returns via Close()/terminate:.
+	// the last window closes so Run() only returns via Close().
 	terminateAfterLastWindowClosed := func(id objc.ID, cmd objc.SEL, app objc.ID) bool {
 		return false
 	}
@@ -87,14 +91,103 @@ func init() {
 	}
 }
 
+// AppKit work is thread-affine: the NSApplication adopts whichever thread first
+// creates it, and all windows/views must be created on that same thread. The Go
+// runtime can migrate goroutines between OS threads, and `go test` runs tests
+// on arbitrary goroutines, so all AppKit calls go through a single dedicated
+// host thread running a manual event loop.
+var (
+	hostOnce  sync.Once
+	hostReady chan struct{} // closed once the host loop is running
+	// hostCmdPtr is set under hostOnce before the host loop starts, so
+	// mainThread reads it after Run() has finished starting the host.
+	hostCmdPtr atomic.Pointer[chan func()]
+)
+
+// startAppHost launches the single AppKit host thread if not already running,
+// then blocks until it is ready.
+func startAppHost() {
+	hostOnce.Do(func() {
+		hostReady = make(chan struct{})
+		cmd := make(chan func(), 64)
+		hostCmdPtr.Store(&cmd)
+		go hostLoop()
+	})
+	<-hostReady
+}
+
+// hostCmd returns the command channel, or nil before the host has started.
+func hostCmd() chan func() {
+	if p := hostCmdPtr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// hostLoop runs on one pinned OS thread for the life of the process: it owns
+// the NSApplication and pumps its event loop, running queued commands in
+// between. This replaces [NSApp run], which would need [NSApp terminate:] to
+// exit — and terminate: exits the whole process, breaking multi-window use.
+func hostLoop() {
+	runtime.LockOSThread()
+	app := objc.ID(objc.GetClass("NSApplication")).Send(objc.RegisterName("sharedApplication"))
+	if app == 0 {
+		panic("darwin: no shared NSApplication")
+	}
+	app.Send(objc.RegisterName("setActivationPolicy:"), activationRegular)
+	app.Send(objc.RegisterName("activateIgnoringOtherApps:"), true)
+	close(hostReady)
+
+	// nsdefaultMode is the non-blocking select on the loop's event poll.
+	nsdefaultMode := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), "kCFRunLoopDefaultMode")
+	cmd := hostCmd()
+	for {
+		// Run queued Go commands before blocking on events.
+		select {
+		case fn := <-cmd:
+			fn()
+			continue
+		default:
+		}
+		// Poll with a short timeout so commands are served promptly without a
+		// 100% CPU busy loop.
+		until := objc.ID(objc.GetClass("NSDate")).Send(objc.RegisterName("dateWithTimeIntervalSinceNow:"), 0.05)
+		event := app.Send(
+			objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+			eventMaskAny, until, nsdefaultMode, true,
+		)
+		if event != 0 {
+			app.Send(objc.RegisterName("sendEvent:"), event)
+		}
+	}
+}
+
+// mainThread runs fn on the AppKit host thread, blocking until it completes.
+// Before the host has started (no window exists yet) it is a no-op, which makes
+// SetTitle/SetHTML/Navigate/Eval safe to call before Run().
+func mainThread(fn func()) {
+	cmd := hostCmd()
+	if cmd == nil {
+		return
+	}
+	done := make(chan struct{})
+	cmd <- func() {
+		fn()
+		close(done)
+	}
+	<-done
+}
+
 type Platform struct {
 	window   objc.ID
 	webview  objc.ID
-	app      objc.ID
 	delegate objc.ID
 
 	mu     sync.Mutex
 	closed bool
+	// pendingTitle is set by SetTitle before the window exists and applied in
+	// setup(), so a title set before Run() is not lost.
+	pendingTitle string
 	// runDone is closed by Close() to signal Run() to return.
 	runDone chan struct{}
 }
@@ -104,11 +197,12 @@ func New() *Platform {
 }
 
 func (p *Platform) Run() error {
-	runtime.LockOSThread()
-	if err := p.setup(); err != nil {
-		return err
+	startAppHost()
+	var setupErr error
+	mainThread(func() { setupErr = p.setup() })
+	if setupErr != nil {
+		return setupErr
 	}
-	p.app.Send(objc.RegisterName("run"))
 	<-p.runDone
 	return nil
 }
@@ -121,30 +215,24 @@ func (p *Platform) Close() error {
 	}
 	p.closed = true
 	close(p.runDone)
+	window := p.window
 	p.mu.Unlock()
 
-	if p.app != 0 {
-		p.app.Send(objc.RegisterName("terminate:"), p.app)
+	// Hide the window so a closed platform doesn't linger on screen while the
+	// next window in the same process is running.
+	if window != 0 {
+		mainThread(func() { window.Send(objc.RegisterName("orderOut:"), 0) })
 	}
 	return nil
 }
 
-// setup creates the NSApplication, NSWindow and WKWebView, then shows them.
+// setup creates the NSWindow and WKWebView, then shows them. Runs on the host
+// thread (called via mainThread from Run).
 func (p *Platform) setup() error {
-	app := objc.ID(objc.GetClass("NSApplication")).Send(objc.RegisterName("sharedApplication"))
-	if app == 0 {
-		return errNoSharedApplication
-	}
-	p.app = app
-
-	app.Send(objc.RegisterName("setActivationPolicy:"), activationRegular)
-	app.Send(objc.RegisterName("activateIgnoringOtherApps:"), true)
-
 	// Delegate: one per Platform, kept alive as a field.
 	delegate := objc.ID(windowDelegateClass).Send(objc.RegisterName("alloc"))
 	delegate = delegate.Send(objc.RegisterName("init"))
 	p.delegate = delegate
-	app.Send(objc.RegisterName("setDelegate:"), delegate)
 
 	w := objc.ID(objc.GetClass("NSWindow")).Send(objc.RegisterName("alloc"))
 	if w == 0 {
@@ -153,7 +241,9 @@ func (p *Platform) setup() error {
 	styleMask := styleTitled | styleClosable | styleResizable
 	w = w.Send(objc.RegisterName("initWithContentRect:styleMask:backing:defer:"),
 		rect(0, 0, 800, 600), styleMask, backingBuffered, false)
+	p.mu.Lock()
 	p.window = w
+	p.mu.Unlock()
 	w.Send(objc.RegisterName("setDelegate:"), delegate)
 
 	config := objc.ID(objc.GetClass("WKWebViewConfiguration")).Send(objc.RegisterName("alloc"))
@@ -163,20 +253,86 @@ func (p *Platform) setup() error {
 		return errNoWebView
 	}
 	wv = wv.Send(objc.RegisterName("initWithFrame:configuration:"), rect(0, 0, 800, 600), config)
+	p.mu.Lock()
 	p.webview = wv
+	p.mu.Unlock()
 
 	w.Send(objc.RegisterName("setContentView:"), wv)
 	w.Send(objc.RegisterName("center"))
 	w.Send(objc.RegisterName("makeKeyAndOrderFront:"), 0)
+
+	// Apply a title set before Run().
+	p.mu.Lock()
+	title := p.pendingTitle
+	p.pendingTitle = ""
+	p.mu.Unlock()
+	if title != "" {
+		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), title)
+		w.Send(objc.RegisterName("setTitle:"), str)
+	}
 	return nil
 }
 
-func (p *Platform) SetTitle(title string) error { return nil }
+func (p *Platform) SetTitle(title string) error {
+	p.mu.Lock()
+	if p.window == 0 {
+		// No window yet (called before Run): remember the title and apply it
+		// once setup() creates the window.
+		p.pendingTitle = title
+		p.mu.Unlock()
+		return nil
+	}
+	w := p.window
+	p.mu.Unlock()
+	mainThread(func() {
+		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), title)
+		w.Send(objc.RegisterName("setTitle:"), str)
+	})
+	return nil
+}
+
 func (p *Platform) SetSize(width, height int, hint SizeHint) {
 }
-func (p *Platform) Navigate(url string) error { return nil }
-func (p *Platform) SetHTML(html string) error { return nil }
-func (p *Platform) Eval(js string) error      { return nil }
+
+func (p *Platform) Navigate(url string) error {
+	mainThread(func() {
+		p.mu.Lock()
+		wv := p.webview
+		p.mu.Unlock()
+		if wv == 0 {
+			return
+		}
+		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), url)
+		nsURL := objc.ID(objc.GetClass("NSURL")).Send(objc.RegisterName("URLWithString:"), str)
+		req := objc.ID(objc.GetClass("NSURLRequest")).Send(objc.RegisterName("requestWithURL:"), nsURL)
+		wv.Send(objc.RegisterName("loadRequest:"), req)
+	})
+	return nil
+}
+
+func (p *Platform) SetHTML(html string) error {
+	return p.Navigate("data:text/html;charset=utf-8," + url.PathEscape(html))
+}
+
+// evalJS runs JS without a completion handler (fire-and-forget).
+func (p *Platform) evalJS(js string) {
+	mainThread(func() {
+		p.mu.Lock()
+		wv := p.webview
+		p.mu.Unlock()
+		if wv == 0 {
+			return
+		}
+		str := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), js)
+		wv.Send(objc.RegisterName("evaluateJavaScript:completionHandler:"), str, objc.ID(0))
+	})
+}
+
+func (p *Platform) Eval(js string) error {
+	p.evalJS(js)
+	return nil
+}
+
 func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
 	return defaultInput, false
 }
