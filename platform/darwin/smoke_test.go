@@ -35,6 +35,45 @@ func TestTitleAndHTML(t *testing.T) {
 	}
 }
 
+// TestHTMLBeforeRun verifies SetHTML before Run() is not dropped: previously
+// it was a silent no-op (window showed white), because the webview doesn't
+// exist until Run() creates it.
+func TestHTMLBeforeRun(t *testing.T) {
+	p := New()
+	var mu sync.Mutex
+	var got string
+	const want = "pre-run-html"
+	p.MessageFunc = func(body string) {
+		mu.Lock()
+		got = body
+		mu.Unlock()
+	}
+	// SetHTML BEFORE Run: the page script reports back via postMessage once it
+	// actually loads.
+	p.SetHTML(`<html><body><script>
+		window.webkit.messageHandlers.webviewBridge.postMessage('pre-run-html');
+	</script></body></html>`)
+	errCh := make(chan error, 1)
+	go func() { errCh <- p.Run() }()
+	defer func() {
+		p.Close()
+		<-errCh
+	}()
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		mu.Lock()
+		ok := got == want
+		mu.Unlock()
+		if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out: pre-Run SetHTML never loaded; got %q", got)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestEval(t *testing.T) {
 	p := New()
 	p.SetHTML("<html><body><h1 id='t'>old</h1></body></html>")

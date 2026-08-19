@@ -406,6 +406,9 @@ type Platform struct {
 	// pendingTitle is set by SetTitle before the window exists and applied in
 	// setup(), so a title set before Run() is not lost.
 	pendingTitle string
+	// pendingHTML is set by SetHTML before the webview exists and loaded in
+	// setup(), so HTML set before Run() is not silently dropped.
+	pendingHTML string
 	// runDone is closed by Close() to signal Run() to return.
 	runDone chan struct{}
 }
@@ -513,6 +516,17 @@ func (p *Platform) setup() error {
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, title)
 		w.Send(setTitleSel, str)
 	}
+
+	// Apply HTML set before Run() (the webview now exists).
+	p.mu.Lock()
+	html := p.pendingHTML
+	p.pendingHTML = ""
+	p.mu.Unlock()
+	if html != "" {
+		html = prependBootstrap(html)
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
+		wv.Send(loadHTMLStringSel, str, objc.ID(0))
+	}
 	return nil
 }
 
@@ -575,30 +589,47 @@ func indexHead(html string) int {
 	return -1
 }
 
-func (p *Platform) SetHTML(html string) error {
-	// Prepend the bridge bootstrap (webviewBridge + func stubs) as an inline
-	// <script> so it is available before any user-supplied script runs.
-	if p.BoundFuncs != nil {
-		if js := bootstrapJS(p.BoundFuncs()); js != "" {
-			// HTML parsing closes <script> on </script>, </script>, or </SCRIPT>.
-			// Escape </ sequences so the script body is safe inside the tag.
-			js = strings.ReplaceAll(js, "</", `<\/`)
-			tag := "<script>" + js + "</script>"
-			if i := indexHead(html); i >= 0 {
-				html = html[:i] + tag + html[i:]
-			} else {
-				html = tag + html
-			}
+// boundFuncNames returns the JS-visible func names from the active platform's
+// BoundFuncs. Used by prependBootstrap; activePlatform is set in setup() before
+// any SetHTML path runs, so it is always current.
+func boundFuncNames() []string {
+	if p := activePlatform; p != nil && p.BoundFuncs != nil {
+		return p.BoundFuncs()
+	}
+	return nil
+}
+
+// prependBootstrap inserts the bridge bootstrap (webviewBridge + func stubs) as
+// an inline <script> so it is available before any user-supplied script runs.
+func prependBootstrap(html string) string {
+	if js := bootstrapJS(boundFuncNames()); js != "" {
+		// HTML parsing closes <script> on </script>, </script>, or </SCRIPT>.
+		// Escape </ sequences so the script body is safe inside the tag.
+		js = strings.ReplaceAll(js, "</", `<\/`)
+		tag := "<script>" + js + "</script>"
+		if i := indexHead(html); i >= 0 {
+			html = html[:i] + tag + html[i:]
+		} else {
+			html = tag + html
 		}
 	}
+	return html
+}
+
+func (p *Platform) SetHTML(html string) error {
+	p.mu.Lock()
+	wv := p.webview
+	if wv == 0 {
+		// No webview yet (called before Run): remember the HTML and load it
+		// once setup() creates the webview.
+		p.pendingHTML = html
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+	html = prependBootstrap(html)
 	// Use loadHTMLString:baseURL: to avoid data: URL encoding issues.
 	mainThread(func() {
-		p.mu.Lock()
-		wv := p.webview
-		p.mu.Unlock()
-		if wv == 0 {
-			return
-		}
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
 		wv.Send(loadHTMLStringSel, str, objc.ID(0))
 	})
