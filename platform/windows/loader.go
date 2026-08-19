@@ -13,9 +13,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// WebView2CreateEnvironmentWithOptions is the function signature from WebView2Loader.dll.
+// WebView2CreateEnvironmentWithOptions is the function signature from
+// WebView2Loader.dll's CreateCoreWebView2EnvironmentWithOptions.
+// Args: (browserExecutableFolder, userDataFolder, environmentOptions, completedHandler).
 type WebView2CreateEnvironmentWithOptions func(
-	reserved, browserExecutableFolder, userDataFolder, environmentOptions uintptr,
+	browserExecutableFolder, userDataFolder, environmentOptions uintptr,
 	handler *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) uintptr
 
@@ -60,9 +62,9 @@ func loadWebView2Loader() (WebView2CreateEnvironmentWithOptions, error) {
 }
 
 func makeLoaderFunc(proc *syscall.LazyProc) WebView2CreateEnvironmentWithOptions {
-	return func(reserved, browserExe, userData, envOpts uintptr,
+	return func(browserExe, userData, envOpts uintptr,
 		handler *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler) uintptr {
-		r, _, _ := proc.Call(reserved, browserExe, userData, envOpts,
+		r, _, _ := proc.Call(browserExe, userData, envOpts,
 			uintptr(unsafe.Pointer(handler)))
 		runtime.KeepAlive(handler)
 		return r
