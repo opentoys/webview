@@ -1,6 +1,8 @@
 package webview
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDefaultDialog(t *testing.T) {
 	w, err := New(Options{})
@@ -42,5 +44,23 @@ func TestCustomDialog(t *testing.T) {
 	result, ok := w.dialog(DialogPrompt, "name:", "Bob")
 	if result != "Bob" || ok != false {
 		t.Fatalf("prompt: got (%q, %v), want (\"Bob\", false)", result, ok)
+	}
+}
+
+func TestSetOpenPanelHandler(t *testing.T) {
+	w, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Default: no override → handler nil (native panel in platform).
+	if w.openPanel != nil {
+		t.Fatal("default openPanel handler should be nil")
+	}
+	h := func(params OpenPanelParams, cb func([]string, bool)) {
+		cb([]string{"/tmp/x"}, true)
+	}
+	w.SetOpenPanelHandler(h)
+	if w.openPanel == nil {
+		t.Fatal("SetOpenPanelHandler did not install handler")
 	}
 }

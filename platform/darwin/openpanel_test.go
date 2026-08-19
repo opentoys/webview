@@ -54,8 +54,8 @@ func TestOpenPanelResult(t *testing.T) {
 // set, without touching the native panel.
 func TestOpenPanelFuncRouting(t *testing.T) {
 	p := New()
-	called := make(chan openPanelParams, 1)
-	p.OpenPanelFunc = func(params openPanelParams, cb func([]string, bool)) {
+	called := make(chan OpenPanelParams, 1)
+	p.OpenPanelFunc = func(params OpenPanelParams, cb func([]string, bool)) {
 		called <- params
 	}
 	errCh := make(chan error, 1)
@@ -63,7 +63,7 @@ func TestOpenPanelFuncRouting(t *testing.T) {
 	waitWindow(t, p)
 
 	mainThread(func() {
-		p.showOpenPanel(openPanelParams{AllowsMultipleSelection: true}, objc.Block(0))
+		p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: true}, objc.Block(0))
 	})
 	select {
 	case params := <-called:

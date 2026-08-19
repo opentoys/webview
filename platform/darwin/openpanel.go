@@ -8,8 +8,8 @@ import (
 	"github.com/ebitengine/purego/objc"
 )
 
-// openPanelParams is the info a runOpenPanelWithParameters: handler receives.
-type openPanelParams struct {
+// OpenPanelParams is the info a runOpenPanelWithParameters: handler receives.
+type OpenPanelParams struct {
 	AllowsMultipleSelection bool
 }
 
@@ -24,7 +24,7 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 		return
 	}
 	allowsMulti := objc.ID(paramsObj).Send(allowsMultipleSelectionSel) != 0
-	p.showOpenPanel(openPanelParams{AllowsMultipleSelection: allowsMulti}, objc.Block(completion))
+	p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: allowsMulti}, objc.Block(completion))
 }
 
 // showOpenPanel presents the native NSOpenPanel for <input type=file>, or
@@ -38,7 +38,7 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 // block is invoked directly with panel.URLs on return — no Go-side block
 // round-trip, which purego's block cache cannot serve for AppKit-invoked
 // blocks (AppKit copies them to a different address than the stored key).
-func (p *Platform) showOpenPanel(params openPanelParams, completion objc.Block) {
+func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.Block) {
 	if p.OpenPanelFunc != nil {
 		p.OpenPanelFunc(params, func(paths []string, ok bool) {
 			completeOpenPanel(completion, paths, ok)

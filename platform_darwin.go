@@ -47,5 +47,15 @@ func buildPlatform(opts Options, w *W) Platform {
 			return defaultInput, true
 		}
 	}
+	// OpenPanelFunc routes <input type=file> to W's override (if any). The
+	// platform's OpenPanelParams mirrors the public webview.OpenPanelParams;
+	// convert so the app-facing handler sees the common type.
+	p.OpenPanelFunc = func(params darwin.OpenPanelParams, cb func([]string, bool)) {
+		if w.openPanel != nil {
+			w.openPanel(OpenPanelParams{
+				AllowsMultipleSelection: params.AllowsMultipleSelection,
+			}, cb)
+		}
+	}
 	return p
 }

@@ -483,7 +483,7 @@ type Platform struct {
 	// When set, WebKit does not show the default panel; the app must call
 	// callback with the absolute paths the user chose, or (nil,false) to
 	// cancel. callback is async and safe from any goroutine.
-	OpenPanelFunc func(params openPanelParams, callback func(paths []string, ok bool))
+	OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
 
 	// Debug enables web-developer tooling where the platform supports it.
 	// On macOS a right-click inspector depends on Safari's Develop service,

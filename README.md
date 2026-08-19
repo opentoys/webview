@@ -7,6 +7,7 @@ No-CGO webview framework for Go, powered by [purego](https://github.com/ebitengi
 - macOS WKWebView backend (working)
 - Full JS bridge: call Go from JavaScript, return results via promises
 - JS dialog handling (alert, confirm, prompt)
+- `<input type=file>` maps to a native macOS file picker (single/multiple)
 - Zero cgo dependency -- cross-compiles like any pure Go project
 - Windows (WebView2) and Linux (WebKitGTK) planned
 
@@ -68,6 +69,8 @@ CGO_ENABLED=0 go build -o counter ./example
 | `w.Eval(js)` | Execute JavaScript |
 | `w.Bind(name, fn)` | Expose a Go function to JavaScript (returns a Promise) |
 | `w.SetDialogHandler(fn)` | Override the default JS dialog handler |
+| `w.SetOpenPanelHandler(fn)` | Replace the native file picker for `<input type=file>` |
+| `<input type=file>` | Opens a native macOS file picker (modal) |
 
 ## Status
 

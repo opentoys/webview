@@ -18,19 +18,36 @@ type Platform interface {
 // Options configures the webview. Field semantics are per-platform; each
 // platform backend implements what it can.
 type Options struct {
+	// Debug enables web-developer tooling where the platform supports it.
+	// Reserved for future backends; macOS currently has no effect (a WebKit
+	// inspector depends on Safari's Develop service, unreachable from this
+	// run loop).
 	Debug bool
 	// Incognito makes the webview use a non-persistent (in-memory) data store:
 	// no cookies, cache, or localStorage written to disk.
 	Incognito bool
 	// DataDir sets the persistent website data store directory (cookies, cache,
 	// localStorage). Empty = platform default. Ignored when Incognito is set.
+	// macOS does not support a custom store directory (WKWebsiteDataStore has
+	// no public initializer), so DataDir is ignored there.
 	DataDir string
 }
 
+// OpenPanelParams describes the <input type=file> that triggered the picker.
+type OpenPanelParams struct {
+	AllowsMultipleSelection bool
+}
+
+// OpenPanelFunc replaces the native file picker for <input type=file>. The
+// handler must call callback with the absolute paths the user chose, or
+// (nil,false) to cancel. callback is async and safe from any goroutine.
+type OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
+
 type W struct {
-	p      Platform
-	bridge *bridge
-	dialog func(kind DialogKind, message, defaultInput string) (string, bool)
+	p         Platform
+	bridge    *bridge
+	dialog    func(kind DialogKind, message, defaultInput string) (string, bool)
+	openPanel OpenPanelFunc
 }
 
 func New(opts Options) (*W, error) {
@@ -70,4 +87,12 @@ func (w *W) Bind(name string, fn any) error {
 // ok=false means "cancel" and result is ignored.
 func (w *W) SetDialogHandler(h func(kind DialogKind, message, defaultInput string) (string, bool)) {
 	w.dialog = h
+}
+
+// SetOpenPanelHandler replaces the native file picker shown for
+// <input type=file>. The handler must call callback with the absolute paths the
+// user chose, or (nil,false) to cancel. callback is async and safe from any
+// goroutine.
+func (w *W) SetOpenPanelHandler(h OpenPanelFunc) {
+	w.openPanel = h
 }
