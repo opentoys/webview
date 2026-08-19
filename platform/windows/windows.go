@@ -4,6 +4,7 @@ package windows
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -136,7 +137,7 @@ func (p *Platform) setup() error {
 
 	// Register window class.
 	hInst, _, _ := pGetModuleHandleW.Call(0)
-	className, _ := windows.UTF16PtrFromString("GoWebviewWindow")
+	className := utf16PtrFromStr("GoWebviewWindow")
 	p.wndProc = windows.NewCallback(p.wndproc)
 
 	wc := WNDCLASSEXW{
@@ -148,7 +149,7 @@ func (p *Platform) setup() error {
 	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
 	// Create main window.
-	title, _ := windows.UTF16PtrFromString(p.pendingTitle)
+	title := utf16PtrFromStr(p.pendingTitle)
 	p.hwnd, _, _ = pCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
@@ -157,6 +158,7 @@ func (p *Platform) setup() error {
 		CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
 		0, 0, hInst, 0,
 	)
+	runtime.KeepAlive(title)
 
 	// Create child widget to host WebView2 controller.
 	p.hwndWidget, _, _ = pCreateWindowExW.Call(
@@ -167,6 +169,7 @@ func (p *Platform) setup() error {
 		0, 0, 0, 0,
 		p.hwnd, 0, hInst, 0,
 	)
+	runtime.KeepAlive(className)
 
 	p.resizeWidget()
 	pShowWindow.Call(p.hwnd, SW_SHOW)
@@ -181,19 +184,23 @@ func (p *Platform) setup() error {
 	// Default data dir: %AppData%\<exe-name>.
 	dataDir := p.DataDir
 	if dataDir == "" {
-		appData, _ := windows.KnownFolderPath(windows.FOLDERID_RoamingAppData, 0)
-		var buf [windows.MAX_PATH]uint16
-		n, _ := windows.GetModuleFileName(0, &buf[0], uint32(len(buf)))
-		if n > 0 {
-			exeName := filepath.Base(windows.UTF16ToString(buf[:n]))
-			dataDir = filepath.Join(appData, exeName)
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			appData = os.Getenv("LOCALAPPDATA")
+		}
+		if appData != "" {
+			exe, _ := os.Executable()
+			dataDir = filepath.Join(appData, filepath.Base(exe))
 		}
 	}
 	if p.Incognito {
 		dataDir = "" // empty = in-memory
 	}
 
-	r = p.createEnv(0, 0, unsafeString(dataDir), 0, p.envCompletedHandler)
+	pDataDir := utf16PtrFromStr(dataDir)
+	pDataDirUPtr := uintptr(unsafe.Pointer(pDataDir))
+	r = p.createEnv(0, 0, pDataDirUPtr, 0, p.envCompletedHandler)
+	runtime.KeepAlive(pDataDir)
 	if r != S_OK {
 		pCoUninitialize.Call()
 		return fmt.Errorf("webview: CreateEnvironmentWithOptions failed: 0x%X", r)
@@ -349,7 +356,9 @@ func (p *Platform) SetTitle(title string) error {
 		p.pendingTitle = title
 		return nil
 	}
-	pSetWindowTextW.Call(p.hwnd, unsafeString(title))
+	pTitle := utf16PtrFromStr(title)
+	pSetWindowTextW.Call(p.hwnd, uintptr(unsafe.Pointer(pTitle)))
+	runtime.KeepAlive(pTitle)
 	return nil
 }
 

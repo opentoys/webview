@@ -2,7 +2,10 @@
 
 package windows
 
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 // iCoreWebView2 is the COM interface for the core WebView2 web content.
 type iCoreWebView2 struct {
@@ -11,71 +14,79 @@ type iCoreWebView2 struct {
 
 type iCoreWebView2Vtbl struct {
 	_IUnknownVtbl
-	GetSettings                          ComProc
-	GetSource                            ComProc
-	Navigate                             ComProc
-	NavigateToString                     ComProc
-	AddNavigationStarting                ComProc
-	RemoveNavigationStarting             ComProc
-	AddContentLoading                    ComProc
-	RemoveContentLoading                 ComProc
-	AddSourceChanged                     ComProc
-	RemoveSourceChanged                  ComProc
-	AddHistoryChanged                    ComProc
-	RemoveHistoryChanged                 ComProc
-	AddNavigationCompleted               ComProc
-	RemoveNavigationCompleted            ComProc
-	AddFrameNavigationStarting           ComProc
-	RemoveFrameNavigationStarting        ComProc
-	AddFrameNavigationCompleted          ComProc
-	RemoveFrameNavigationCompleted       ComProc
-	AddScriptDialogOpening               ComProc
-	RemoveScriptDialogOpening            ComProc
-	AddPermissionRequested               ComProc
-	RemovePermissionRequested            ComProc
-	AddProcessFailed                     ComProc
-	RemoveProcessFailed                  ComProc
-	AddScriptToExecuteOnDocumentCreated  ComProc
+	GetSettings                            ComProc
+	GetSource                              ComProc
+	Navigate                               ComProc
+	NavigateToString                       ComProc
+	AddNavigationStarting                  ComProc
+	RemoveNavigationStarting               ComProc
+	AddContentLoading                      ComProc
+	RemoveContentLoading                   ComProc
+	AddSourceChanged                       ComProc
+	RemoveSourceChanged                    ComProc
+	AddHistoryChanged                      ComProc
+	RemoveHistoryChanged                   ComProc
+	AddNavigationCompleted                 ComProc
+	RemoveNavigationCompleted              ComProc
+	AddFrameNavigationStarting             ComProc
+	RemoveFrameNavigationStarting          ComProc
+	AddFrameNavigationCompleted            ComProc
+	RemoveFrameNavigationCompleted         ComProc
+	AddScriptDialogOpening                 ComProc
+	RemoveScriptDialogOpening              ComProc
+	AddPermissionRequested                 ComProc
+	RemovePermissionRequested              ComProc
+	AddProcessFailed                       ComProc
+	RemoveProcessFailed                    ComProc
+	AddScriptToExecuteOnDocumentCreated    ComProc
 	RemoveScriptToExecuteOnDocumentCreated ComProc
-	ExecuteScript                        ComProc
-	AddWebMessageReceived                ComProc
-	RemoveWebMessageReceived             ComProc
-	PostWebMessageAsString               ComProc
-	PostWebMessageAsJSON                 ComProc
-	_                                    [30]ComProc // padding for remaining slots
+	ExecuteScript                          ComProc
+	AddWebMessageReceived                  ComProc
+	RemoveWebMessageReceived               ComProc
+	PostWebMessageAsString                 ComProc
+	PostWebMessageAsJSON                   ComProc
+	_                                      [30]ComProc // padding for remaining slots
 }
 
 func (w *iCoreWebView2) Navigate(url string) uintptr {
+	p := utf16PtrFromStr(url)
 	r, _, _ := w.vtbl.Navigate.Call(
 		uintptr(unsafe.Pointer(w)),
-		unsafeString(url),
+		uintptr(unsafe.Pointer(p)),
 	)
+	runtime.KeepAlive(p)
 	return r
 }
 
 func (w *iCoreWebView2) NavigateToString(html string) uintptr {
+	p := utf16PtrFromStr(html)
 	r, _, _ := w.vtbl.NavigateToString.Call(
 		uintptr(unsafe.Pointer(w)),
-		unsafeString(html),
+		uintptr(unsafe.Pointer(p)),
 	)
+	runtime.KeepAlive(p)
 	return r
 }
 
 func (w *iCoreWebView2) ExecuteScript(js string, handler uintptr) uintptr {
+	p := utf16PtrFromStr(js)
 	r, _, _ := w.vtbl.ExecuteScript.Call(
 		uintptr(unsafe.Pointer(w)),
-		unsafeString(js),
+		uintptr(unsafe.Pointer(p)),
 		handler,
 	)
+	runtime.KeepAlive(p)
 	return r
 }
 
 func (w *iCoreWebView2) AddScriptToExecuteOnDocumentCreated(js string, handler uintptr) uintptr {
+	p := utf16PtrFromStr(js)
 	r, _, _ := w.vtbl.AddScriptToExecuteOnDocumentCreated.Call(
 		uintptr(unsafe.Pointer(w)),
-		unsafeString(js),
+		uintptr(unsafe.Pointer(p)),
 		handler,
 	)
+	runtime.KeepAlive(p)
 	return r
 }
 
@@ -92,10 +103,12 @@ func (w *iCoreWebView2) AddWebMessageReceived(
 }
 
 func (w *iCoreWebView2) PostWebMessageAsString(msg string) uintptr {
+	p := utf16PtrFromStr(msg)
 	r, _, _ := w.vtbl.PostWebMessageAsString.Call(
 		uintptr(unsafe.Pointer(w)),
-		unsafeString(msg),
+		uintptr(unsafe.Pointer(p)),
 	)
+	runtime.KeepAlive(p)
 	return r
 }
 

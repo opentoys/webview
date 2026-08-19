@@ -5,7 +5,6 @@ package windows
 import (
 	"fmt"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -63,11 +62,11 @@ var (
 	ICoreWebView2IID, _                                  = NewGUID("76ECEACB-0462-4D93-AC27-2CDFF26E526A")
 )
 
-// unsafeString returns a *uint16 for COM string params. Caller must keep
-// the Go string alive until the syscall returns.
-func unsafeString(s string) uintptr {
+// utf16PtrFromStr converts a Go string to a *uint16 for Windows APIs.
+// Caller MUST call runtime.KeepAlive(p) after the syscall to prevent GC.
+func utf16PtrFromStr(s string) *uint16 {
 	p, _ := windows.UTF16PtrFromString(s)
-	return uintptr(unsafe.Pointer(p))
+	return p
 }
 
 // S_OK
