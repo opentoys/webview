@@ -3,6 +3,8 @@
 package darwin
 
 import (
+	"fmt"
+	"os"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -24,7 +26,20 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 		return
 	}
 	allowsMulti := objc.ID(paramsObj).Send(allowsMultipleSelectionSel) != 0
-	p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: allowsMulti}, objc.Block(completion))
+	// Recover from any panic in the panel path (e.g. purego ABI mismatch) and
+	// still call WebKit's completion with nil, preventing the "completion handler
+	// was not called" crash.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "openpanel: panic in showOpenPanel: %v\n", r)
+				if completion != 0 {
+					callBlock(completion, objc.ID(0))
+				}
+			}
+		}()
+		p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: allowsMulti}, objc.Block(completion))
+	}()
 }
 
 // showOpenPanel presents the native NSOpenPanel for <input type=file>, or
