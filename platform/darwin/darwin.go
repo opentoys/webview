@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
@@ -63,6 +64,12 @@ var messageHandlerClass objc.Class
 // Registered once at package init; one instance per Platform.
 var uiDelegateClass objc.Class
 
+// downloadDelegateClass handles WKNavigationDelegate (didBecomeDownload:)
+// and WKDownloadDelegate (decideDestination/didFinish/didFail). Registered
+// once at package init; the navigation delegate is one per Platform, and
+// per-download delegate instances are created in didBecomeDownload:.
+var downloadDelegateClass objc.Class
+
 // scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
 // does not retain its handler, so it must outlive the UCC or messages stop.
 var scriptHandler objc.ID
@@ -86,6 +93,9 @@ var (
 	nsOpenPanelClass       objc.Class
 	nsFileManagerClass     objc.Class
 	nsArrayClass           objc.Class
+	nsSavePanelClass       objc.Class
+	nsWorkspaceClass       objc.Class
+	wkDownloadClass        objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -145,6 +155,13 @@ var (
 	fileURLWithPathSel              objc.SEL
 	arrayWithObjectsCountSel        objc.SEL
 	URLsSel                         objc.SEL
+	setNavigationDelegateSel        objc.SEL
+	setNameFieldStringValueSel      objc.SEL
+	suggestedFilenameSel            objc.SEL
+	sharedWorkspaceSel              objc.SEL
+	activateFileViewerSel           objc.SEL
+	savePanelSel                    objc.SEL
+	panelURLSel                     objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -183,6 +200,9 @@ func init() {
 	nsOpenPanelClass = objc.GetClass("NSOpenPanel")
 	nsFileManagerClass = objc.GetClass("NSFileManager")
 	nsArrayClass = objc.GetClass("NSArray")
+	nsSavePanelClass = objc.GetClass("NSSavePanel")
+	nsWorkspaceClass = objc.GetClass("NSWorkspace")
+	wkDownloadClass = objc.GetClass("WKDownload")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -239,6 +259,13 @@ func init() {
 	fileURLWithPathSel = objc.RegisterName("fileURLWithPath:")
 	arrayWithObjectsCountSel = objc.RegisterName("arrayWithObjects:count:")
 	URLsSel = objc.RegisterName("URLs")
+	setNavigationDelegateSel = objc.RegisterName("setNavigationDelegate:")
+	setNameFieldStringValueSel = objc.RegisterName("setNameFieldStringValue:")
+	suggestedFilenameSel = objc.RegisterName("suggestedFilename")
+	sharedWorkspaceSel = objc.RegisterName("sharedWorkspace")
+	activateFileViewerSel = objc.RegisterName("activateFileViewerSelectingURLs:")
+	savePanelSel = objc.RegisterName("savePanel")
+	panelURLSel = objc.RegisterName("URL")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -364,6 +391,74 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	// --- Download delegate (WKNavigationDelegate + WKDownloadDelegate) ---
+
+	downloadDidBecome := func(id objc.ID, cmd objc.SEL, webView objc.ID, navAction objc.ID, download objc.ID) {
+		// Each WKDownload needs its own delegate instance. alloc+init from the
+		// registered class; WebKit retains via setDelegate:.
+		inst := objc.ID(downloadDelegateClass).Send(allocSel)
+		inst = inst.Send(initSel)
+		download.Send(setDelegateSel, inst)
+	}
+
+	decideDestination := func(id objc.ID, cmd objc.SEL, download objc.ID, response objc.ID, suggestedFilename objc.ID, completion objc.ID) {
+		if completion == 0 {
+			return
+		}
+		safe := objc.Block(completion).Copy()
+		if safe == 0 {
+			return
+		}
+		defer safe.Release()
+		p := activePlatform
+		if p == nil {
+			invokeBlock(objc.ID(safe), objc.ID(0))
+			return
+		}
+		p.showSavePanel(download, suggestedFilename, objc.ID(safe))
+	}
+
+	downloadDidFinish := func(id objc.ID, cmd objc.SEL, download objc.ID) {
+		dest, ok := pendingDownloads.LoadAndDelete(downloadKey(download))
+		if !ok {
+			return
+		}
+		destURL := dest.(objc.ID)
+		if destURL == 0 {
+			return
+		}
+		// Reveal in Finder.
+		ws := objc.ID(nsWorkspaceClass).Send(sharedWorkspaceSel)
+		if ws != 0 {
+			arr := objc.ID(nsArrayClass).Send(arrayWithObjectsCountSel,
+				unsafe.Pointer(&destURL), 1)
+			ws.Send(activateFileViewerSel, arr)
+		}
+	}
+
+	downloadDidFail := func(id objc.ID, cmd objc.SEL, download objc.ID, errObj objc.ID) {
+		pendingDownloads.Delete(downloadKey(download))
+	}
+
+	downloadDelegateClass, err = objc.RegisterClass(
+		"GoWebviewDownloadDelegate",
+		objc.GetClass("NSObject"),
+		[]*objc.Protocol{
+			objc.GetProtocol("WKNavigationDelegate"),
+			objc.GetProtocol("WKDownloadDelegate"),
+		},
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("webView:navigationAction:didBecomeDownload:"), Fn: downloadDidBecome},
+			{Cmd: objc.RegisterName("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"), Fn: decideDestination},
+			{Cmd: objc.RegisterName("downloadDidFinish:"), Fn: downloadDidFinish},
+			{Cmd: objc.RegisterName("download:didFailWithError:"), Fn: downloadDidFail},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // AppKit work is thread-affine: the NSApplication adopts whichever thread first
@@ -467,7 +562,8 @@ type Platform struct {
 	window     objc.ID
 	webview    objc.ID
 	delegate   objc.ID
-	uiDelegate objc.ID // WKUIDelegate instance; kept alive for the webview.
+	uiDelegate       objc.ID // WKUIDelegate instance; kept alive for the webview.
+	downloadDelegate objc.ID // WKNavigationDelegate+WKDownloadDelegate instance.
 	// ucc keeps the WKUserContentController alive; the handler instance lives
 	// in the package-level scriptHandler (registered class is process-global).
 	ucc objc.ID
@@ -486,6 +582,10 @@ type Platform struct {
 	// callback with the absolute paths the user chose, or (nil,false) to
 	// cancel. callback is async and safe from any goroutine.
 	OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
+	// DownloadFunc overrides the native NSSavePanel for file downloads.
+	// When set, the app must call callback with the absolute save path,
+	// or "" to cancel. callback is async and safe from any goroutine.
+	DownloadFunc func(suggestedFilename string, callback func(savePath string))
 
 	// Debug enables web-developer tooling where the platform supports it.
 	// On macOS a right-click inspector depends on Safari's Develop service,
@@ -682,6 +782,13 @@ func (p *Platform) setup() error {
 	uiDelegate = uiDelegate.Send(initSel)
 	p.uiDelegate = uiDelegate
 	wv.Send(setUIDelegateSel, uiDelegate)
+
+	// WKNavigationDelegate intercepts downloads; WKDownloadDelegate handles
+	// per-download save panel + completion.
+	dlDelegate := objc.ID(downloadDelegateClass).Send(allocSel)
+	dlDelegate = dlDelegate.Send(initSel)
+	p.downloadDelegate = dlDelegate
+	wv.Send(setNavigationDelegateSel, dlDelegate)
 
 	w.Send(setContentViewSel, wv)
 	w.Send(centerSel)

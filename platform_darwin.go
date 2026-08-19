@@ -62,5 +62,17 @@ func buildPlatform(opts Options, w *W) Platform {
 			p.OpenPanelFunc = nil
 		}
 	}
+	// downloadSet pushes W's handler into the platform. When nil (no
+	// SetDownloadHandler called), p.DownloadFunc stays nil and showSavePanel
+	// runs the native NSSavePanel — which is the correct default.
+	w.downloadSet = func(fn DownloadFunc) {
+		if fn != nil {
+			p.DownloadFunc = func(suggestedFilename string, cb func(string)) {
+				fn(suggestedFilename, cb)
+			}
+		} else {
+			p.DownloadFunc = nil
+		}
+	}
 	return p
 }

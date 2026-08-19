@@ -44,6 +44,13 @@ type OpenPanelParams struct {
 // (nil,false) to cancel. callback is async and safe from any goroutine.
 type OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
 
+// DownloadFunc replaces the native save panel for file downloads. The
+// handler receives the server-suggested filename and must call callback
+// with the absolute save path, or "" to cancel. callback is async and
+// safe from any goroutine. After download completes, Finder opens at
+// the saved location automatically.
+type DownloadFunc func(suggestedFilename string, callback func(savePath string))
+
 type W struct {
 	p         Platform
 	bridge    *bridge
@@ -52,6 +59,8 @@ type W struct {
 	// openPanelSet propagates the handler to the platform backend.
 	// Set by buildPlatform; nil on backends that don't support file panels.
 	openPanelSet func(OpenPanelFunc)
+	download     DownloadFunc
+	downloadSet  func(DownloadFunc)
 }
 
 func New(opts Options) (*W, error) {
@@ -101,5 +110,17 @@ func (w *W) SetOpenPanelHandler(h OpenPanelFunc) {
 	w.openPanel = h
 	if w.openPanelSet != nil {
 		w.openPanelSet(h)
+	}
+}
+
+// SetDownloadHandler replaces the native save panel shown for file downloads.
+// The handler receives the server-suggested filename and must call callback
+// with the absolute save path, or "" to cancel. callback is async and safe
+// from any goroutine. After download completes, Finder opens at the saved
+// location automatically.
+func (w *W) SetDownloadHandler(h DownloadFunc) {
+	w.download = h
+	if w.downloadSet != nil {
+		w.downloadSet(h)
 	}
 }
