@@ -181,6 +181,15 @@ func (p *Platform) setup() error {
 	p.msgReceivedHandler = newWebMessageReceivedHandler(p)
 	p.permRequestedHandler = newPermissionRequestedHandler(p)
 
+	fmt.Fprintf(os.Stderr, "webview: handler=%p vtbl=%p QI=%d AddRef=%d Release=%d Invoke=%d\n",
+		p.envCompletedHandler,
+		p.envCompletedHandler.vtbl,
+		uintptr(p.envCompletedHandler.vtbl.QueryInterface),
+		uintptr(p.envCompletedHandler.vtbl.AddRef),
+		uintptr(p.envCompletedHandler.vtbl.Release),
+		uintptr(p.envCompletedHandler.vtbl.Invoke),
+	)
+
 	// Default data dir: %AppData%\<exe-name>.
 	dataDir := p.DataDir
 	if dataDir == "" {
@@ -199,12 +208,20 @@ func (p *Platform) setup() error {
 
 	pDataDir := utf16PtrFromStr(dataDir)
 	pDataDirUPtr := uintptr(unsafe.Pointer(pDataDir))
+
+	handlerUPtr := uintptr(unsafe.Pointer(p.envCompletedHandler))
+	fmt.Fprintf(os.Stderr, "webview: calling createEnv userData=%q(%p) handler=%p\n",
+		dataDir, pDataDir, p.envCompletedHandler)
+
 	r = p.createEnv(0, 0, pDataDirUPtr, 0, p.envCompletedHandler)
 	runtime.KeepAlive(pDataDir)
 	if r != S_OK {
+		fmt.Fprintf(os.Stderr, "webview: createEnv returned 0x%X (handlerUPtr=0x%X)\n", r, handlerUPtr)
 		pCoUninitialize.Call()
 		return fmt.Errorf("webview: CreateEnvironmentWithOptions failed: 0x%X", r)
 	}
+	fmt.Fprintf(os.Stderr, "webview: createEnv returned S_OK\n")
+	_ = handlerUPtr
 
 	return nil
 }
@@ -270,6 +287,7 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 // --- COM callback implementations ---
 
 func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Environment) uintptr {
+	fmt.Fprintf(os.Stderr, "webview: InvokeEnvCompleted error=0x%X env=%p\n", errorCode, env)
 	if errorCode != S_OK || env == nil {
 		return 0
 	}
@@ -279,6 +297,7 @@ func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Envir
 }
 
 func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCoreWebView2Controller) uintptr {
+	fmt.Fprintf(os.Stderr, "webview: InvokeControllerCompleted error=0x%X ctrl=%p\n", errorCode, controller)
 	if errorCode != S_OK || controller == nil {
 		return 0
 	}
