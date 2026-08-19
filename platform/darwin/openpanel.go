@@ -7,6 +7,7 @@ import (
 	"os"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
 
@@ -16,17 +17,25 @@ type OpenPanelParams struct {
 	AllowsDirectories       bool
 }
 
-// callBlockASM calls an ObjC block's invoke function pointer directly.
-// Reads invoke at offset 16 of the block struct and calls (block, arg).
-// Defined in call_block_amd64.s — avoids go vet unsafe.Pointer warnings
-// and bypasses purego's RegisterFunc variadic ABI issues.
-func callBlockASM(block, arg uintptr)
-
-// invokeBlock calls a WebKit-provided completion block. Uses assembly to call
-// the invoke pointer directly with the correct calling convention, matching
-// how blocks are called in ObjC runtime.
+// invokeBlock calls a WebKit-provided completion block via its invoke function
+// pointer (purego.SyscallN). Logs diagnostics to stderr.
 func invokeBlock(block objc.ID, arg objc.ID) {
-	callBlockASM(uintptr(block), uintptr(arg))
+	if block == 0 {
+		return
+	}
+	invoke := blockInvoke(uintptr(block))
+	fmt.Fprintf(os.Stderr, "invokeBlock: block=%#x arg=%#x invoke=%#x\n",
+		uintptr(block), uintptr(arg), invoke)
+	if invoke == 0 {
+		fmt.Fprintf(os.Stderr, "invokeBlock: invoke is NULL!\n")
+		return
+	}
+	// Call the block's invoke function directly via SyscallN (fixed-arg C ABI).
+	// This avoids purego.RegisterFunc variadic ABI issues.
+	// The invoke pointer is a C function: void (*)(void *block, void *arg).
+	// purego.SyscallN(fn, a1, a2) puts a1 in rdi, a2 in rsi, calls fn.
+	r, _, _ := purego.SyscallN(invoke, uintptr(block), uintptr(arg))
+	_ = r
 }
 
 // runOpenPanel is the WKUIDelegate runOpenPanelWithParameters:initiatedByFrame:
@@ -93,7 +102,11 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	// drains autorelease pools which can free the WebKit-provided block.
 	// _Block_copy promotes a stack block to the heap (or increments the
 	// refcount of a heap block). _Block_release after invocation balances it.
+	origInvoke := blockInvoke(uintptr(completion))
 	safe := objc.Block(completion).Copy()
+	safeInvoke := blockInvoke(uintptr(safe))
+	fmt.Fprintf(os.Stderr, "showOpenPanel: completion=%#x invoke=%#x safe=%#x safeInvoke=%#x\n",
+		uintptr(completion), origInvoke, uintptr(safe), safeInvoke)
 	defer safe.Release()
 
 	// NSOpenPanel has no public init; openPanel returns a configured instance.
