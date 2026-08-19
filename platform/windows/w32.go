@@ -32,6 +32,7 @@ var (
 	pPostMessageW       = user32.NewProc("PostMessageW")
 	pCoInitializeEx     = ole32.NewProc("CoInitializeEx")
 	pCoUninitialize     = ole32.NewProc("CoUninitialize")
+	pCoTaskMemFree      = ole32.NewProc("CoTaskMemFree")
 )
 
 // Window styles.
