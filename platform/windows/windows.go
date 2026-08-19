@@ -251,7 +251,6 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			p.webview = nil
 		}
 		if p.controller != nil {
-			p.controller.Close()
 			p.controller.Release()
 			p.controller = nil
 		}
@@ -285,6 +284,10 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 	}
 	p.controller = controller
 	controller.GetCoreWebView2(&p.webview)
+
+	// Set initial visibility and bounds.
+	controller.PutIsVisible(true)
+	p.resizeWidget()
 
 	// Register message handler.
 	var tok eventToken
