@@ -48,6 +48,9 @@ type W struct {
 	bridge    *bridge
 	dialog    func(kind DialogKind, message, defaultInput string) (string, bool)
 	openPanel OpenPanelFunc
+	// openPanelSet propagates the handler to the platform backend.
+	// Set by buildPlatform; nil on backends that don't support file panels.
+	openPanelSet func(OpenPanelFunc)
 }
 
 func New(opts Options) (*W, error) {
@@ -95,4 +98,7 @@ func (w *W) SetDialogHandler(h func(kind DialogKind, message, defaultInput strin
 // goroutine.
 func (w *W) SetOpenPanelHandler(h OpenPanelFunc) {
 	w.openPanel = h
+	if w.openPanelSet != nil {
+		w.openPanelSet(h)
+	}
 }

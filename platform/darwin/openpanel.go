@@ -40,9 +40,22 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 // blocks (AppKit copies them to a different address than the stored key).
 func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.Block) {
 	if p.OpenPanelFunc != nil {
-		p.OpenPanelFunc(params, func(paths []string, ok bool) {
-			completeOpenPanel(completion, paths, ok)
+		// The handler may call cb synchronously (host thread) or from another
+		// goroutine. Block until cb fires so the delegate method can call the
+		// WebKit completion before returning — WebKit asserts it is called.
+		var (
+			paths []string
+			ok    bool
+			done  = make(chan struct{})
+		)
+		p.OpenPanelFunc(params, func(p []string, o bool) {
+			paths, ok = p, o
+			close(done)
 		})
+		<-done
+		if completion != 0 {
+			callBlock(objc.ID(completion), openPanelResult(paths, ok))
+		}
 		return
 	}
 	// NSOpenPanel has no public init; openPanel returns a configured instance.
@@ -91,15 +104,13 @@ func openPanelResult(paths []string, ok bool) objc.ID {
 }
 
 // completeOpenPanel invokes the WKOpenPanel completion block. ok=false → nil
-// (cancel: WebKit emits no FileList, input stays empty). Safe from any
-// goroutine: the block is invoked on the host thread. callBlock matches the
+// (cancel: WebKit emits no FileList, input stays empty). callBlock matches the
 // dialog completion path (WebKit hands raw blocks that are not in purego's
 // block cache, so Block.Invoke would panic).
+//
+// MUST be called on the host thread — WebKit asserts the completion handler is
+// invoked before the delegate method returns. showOpenPanel already ensures this
+// (done-channel blocks the host thread until the handler calls its callback).
 func completeOpenPanel(completion objc.Block, paths []string, ok bool) {
-	cmd := hostCmd()
-	if cmd == nil {
-		return
-	}
-	result := openPanelResult(paths, ok)
-	cmd <- func() { callBlock(objc.ID(completion), result) }
+	callBlock(objc.ID(completion), openPanelResult(paths, ok))
 }

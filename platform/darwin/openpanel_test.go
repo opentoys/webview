@@ -51,12 +51,14 @@ func TestOpenPanelResult(t *testing.T) {
 }
 
 // TestOpenPanelFuncRouting verifies showOpenPanel routes to OpenPanelFunc when
-// set, without touching the native panel.
+// set, without touching the native panel. The handler must call cb (showOpenPanel
+// blocks on a done-channel until cb fires).
 func TestOpenPanelFuncRouting(t *testing.T) {
 	p := New()
 	called := make(chan OpenPanelParams, 1)
 	p.OpenPanelFunc = func(params OpenPanelParams, cb func([]string, bool)) {
 		called <- params
+		cb([]string{"/fake"}, true) // must call cb — showOpenPanel blocks until it does
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
