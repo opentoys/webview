@@ -254,29 +254,9 @@ func TestIncognito(t *testing.T) {
 	}
 }
 
-// TestDataDir: a DataDir must produce a persistent data store (WebKit honors
-// WKWebsiteDataStoreConfiguration.websiteDataStoreDirectoryURL).
-func TestDataDir(t *testing.T) {
-	p := New()
-	p.DataDir = t.TempDir()
-	errCh := make(chan error, 1)
-	go func() { errCh <- p.Run() }()
-	time.Sleep(500 * time.Millisecond)
-	p.mu.Lock()
-	wv := p.webview
-	p.mu.Unlock()
-	if wv == 0 {
-		t.Fatal("webview not created")
-	}
-	var persistent bool
-	mainThread(func() {
-		cfg := objc.ID(wv).Send(objc.RegisterName("configuration"))
-		store := objc.ID(cfg).Send(objc.RegisterName("websiteDataStore"))
-		persistent = objc.ID(store).Send(objc.RegisterName("isPersistent")) != 0
-	})
-	p.Close()
-	<-errCh
-	if !persistent {
-		t.Fatal("DataDir webview did not use a persistent data store")
+func TestOpenPanelClassCached(t *testing.T) {
+	if wkOpenPanelParamsClass == 0 || allowsMultipleSelectionSel == 0 {
+		t.Fatal("WKOpenPanelParameters class / allowsMultipleSelection selector not cached")
 	}
 }
+

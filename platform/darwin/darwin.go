@@ -82,7 +82,7 @@ var (
 	nsMenuClass            objc.Class
 	nsMenuItemClass        objc.Class
 	wkDataStoreClass       objc.Class
-	wkDataStoreConfigClass objc.Class
+	wkOpenPanelParamsClass objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -113,6 +113,7 @@ var (
 	sharedApplicationSel            objc.SEL
 	setActivationPolicySel          objc.SEL
 	activateIgnoringOtherAppsSel    objc.SEL
+	finishLaunchingSel              objc.SEL
 	dateWithTimeIntervalSinceNowSel objc.SEL
 	nextEventMatchingMaskSel        objc.SEL
 	sendEventSel                    objc.SEL
@@ -126,9 +127,8 @@ var (
 	addItemSel                      objc.SEL
 	setWebsiteDataStoreSel          objc.SEL
 	nonPersistentDataStoreSel       objc.SEL
-	setDataStoreDirectoryURLSel     objc.SEL
-	initWithConfigSel               objc.SEL
 	defaultDataStoreSel             objc.SEL
+	allowsMultipleSelectionSel      objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -163,7 +163,7 @@ func init() {
 	nsMenuClass = objc.GetClass("NSMenu")
 	nsMenuItemClass = objc.GetClass("NSMenuItem")
 	wkDataStoreClass = objc.GetClass("WKWebsiteDataStore")
-	wkDataStoreConfigClass = objc.GetClass("WKWebsiteDataStoreConfiguration")
+	wkOpenPanelParamsClass = objc.GetClass("WKOpenPanelParameters")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -191,6 +191,7 @@ func init() {
 	sharedApplicationSel = objc.RegisterName("sharedApplication")
 	setActivationPolicySel = objc.RegisterName("setActivationPolicy:")
 	activateIgnoringOtherAppsSel = objc.RegisterName("activateIgnoringOtherApps:")
+	finishLaunchingSel = objc.RegisterName("finishLaunching")
 	dateWithTimeIntervalSinceNowSel = objc.RegisterName("dateWithTimeIntervalSinceNow:")
 	nextEventMatchingMaskSel = objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:")
 	sendEventSel = objc.RegisterName("sendEvent:")
@@ -204,9 +205,8 @@ func init() {
 	setMainMenuSel = objc.RegisterName("setMainMenu:")
 	setWebsiteDataStoreSel = objc.RegisterName("setWebsiteDataStore:")
 	nonPersistentDataStoreSel = objc.RegisterName("nonPersistentDataStore")
-	setDataStoreDirectoryURLSel = objc.RegisterName("setDataStoreDirectoryURL:")
-	initWithConfigSel = objc.RegisterName("initWithConfiguration:")
 	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
+	allowsMultipleSelectionSel = objc.RegisterName("allowsMultipleSelection")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -376,6 +376,8 @@ func hostLoop() {
 	}
 	app.Send(setActivationPolicySel, activationRegular)
 	app.Send(activateIgnoringOtherAppsSel, true)
+	// Complete app launch (menu/activation setup) as a nib-less program must.
+	app.Send(finishLaunchingSel)
 	close(hostReady)
 
 	// nsdefaultMode is the non-blocking select on the loop's event poll.
@@ -445,6 +447,11 @@ type Platform struct {
 	// Called on the host thread (same thread as MessageFunc).
 	DialogFunc func(kind DialogKind, message, defaultInput string) (string, bool)
 
+	// Debug enables web-developer tooling where the platform supports it.
+	// On macOS a right-click inspector depends on Safari's Develop service,
+	// which is not reachable from a manual run loop, so macOS Debug currently
+	// only affects page load. Windows/Linux backends may wire it differently.
+	Debug bool
 	// Incognito makes the webview use a non-persistent (in-memory) website data
 	// store: no cookies/cache/localStorage written to disk.
 	Incognito bool
@@ -568,28 +575,12 @@ func setupMainMenu() {
 
 // setupDataStore returns the WKWebsiteDataStore for the platform: a non-
 // persistent (in-memory, incognito) store when Incognito is set, else the
-// default persistent store or a persistent store rooted at DataDir. Runs on
-// the host thread from setup().
+// default persistent store. WKWebsiteDataStore has no public initializer and
+// the private custom-directory path is unavailable, so DataDir (a Windows/
+// Linux concept) is ignored on darwin. Runs on the host thread from setup().
 func (p *Platform) setupDataStore() objc.ID {
 	if p.Incognito {
 		return objc.ID(wkDataStoreClass).Send(nonPersistentDataStoreSel)
-	}
-	if p.DataDir != "" {
-		// Custom persistent store directory. WKWebsiteDataStore has no public
-		// initializer (init/new are NS_UNAVAILABLE), so a directory-based store
-		// requires the private "_initWithConfiguration:". Guard with
-		// respondsToSelector: and fall back to the default store if absent.
-		conf := objc.ID(wkDataStoreConfigClass).Send(allocSel)
-		conf = conf.Send(initSel)
-		dir := nsString(p.DataDir)
-		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, dir)
-		conf.Send(setDataStoreDirectoryURLSel, nsURL)
-		const privInit = "_initWithConfiguration:"
-		if objc.ID(wkDataStoreClass).Send(objc.RegisterName("respondsToSelector:"), objc.RegisterName(privInit)) != 0 {
-			return objc.ID(wkDataStoreClass).Send(objc.RegisterName(privInit), conf)
-		}
-		// Private API unavailable on this OS: fall back to the default store.
-		return objc.ID(wkDataStoreClass).Send(defaultDataStoreSel)
 	}
 	return objc.ID(wkDataStoreClass).Send(defaultDataStoreSel)
 }
