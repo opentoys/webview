@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -63,6 +64,7 @@ func makeLoaderFunc(proc *syscall.LazyProc) WebView2CreateEnvironmentWithOptions
 		handler *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler) uintptr {
 		r, _, _ := proc.Call(reserved, browserExe, userData, envOpts,
 			uintptr(unsafe.Pointer(handler)))
+		runtime.KeepAlive(handler)
 		return r
 	}
 }
