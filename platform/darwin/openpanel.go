@@ -89,6 +89,13 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 		}
 		return
 	}
+	// _Block_copy the completion before runModal: the nested event loop
+	// drains autorelease pools which can free the WebKit-provided block.
+	// _Block_copy promotes a stack block to the heap (or increments the
+	// refcount of a heap block). _Block_release after invocation balances it.
+	safe := objc.Block(completion).Copy()
+	defer safe.Release()
+
 	// NSOpenPanel has no public init; openPanel returns a configured instance.
 	panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
 	panel.Send(setCanChooseFilesSel, true)
@@ -101,12 +108,12 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	panel.Send(setDirectoryURLSel, home)
 
 	// NSModalResponseOK = 1. Run the panel modally; on OK, forward the selected
-	// URLs (NSArray<NSURL>) to WebKit's completion block via NSInvocation.
+	// URLs (NSArray<NSURL>) to WebKit's completion block.
 	result := panel.Send(runModalSel)
 	if result != 0 {
-		invokeBlock(completion, panel.Send(URLsSel))
+		invokeBlock(objc.ID(safe), panel.Send(URLsSel))
 	} else {
-		invokeBlock(completion, objc.ID(0))
+		invokeBlock(objc.ID(safe), objc.ID(0))
 	}
 }
 
