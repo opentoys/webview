@@ -86,8 +86,6 @@ var (
 	nsOpenPanelClass       objc.Class
 	nsFileManagerClass     objc.Class
 	nsArrayClass           objc.Class
-	nsMethodSignatureClass objc.Class
-	nsInvocationClass      objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -147,10 +145,6 @@ var (
 	fileURLWithPathSel              objc.SEL
 	arrayWithObjectsCountSel        objc.SEL
 	URLsSel                         objc.SEL
-	signatureWithObjCTypesSel       objc.SEL
-	invocationWithMethodSignatureSel objc.SEL
-	setTargetSel                    objc.SEL
-	setArgumentAtIndexSel           objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -189,8 +183,6 @@ func init() {
 	nsOpenPanelClass = objc.GetClass("NSOpenPanel")
 	nsFileManagerClass = objc.GetClass("NSFileManager")
 	nsArrayClass = objc.GetClass("NSArray")
-	nsMethodSignatureClass = objc.GetClass("NSMethodSignature")
-	nsInvocationClass = objc.GetClass("NSInvocation")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -247,10 +239,6 @@ func init() {
 	fileURLWithPathSel = objc.RegisterName("fileURLWithPath:")
 	arrayWithObjectsCountSel = objc.RegisterName("arrayWithObjects:count:")
 	URLsSel = objc.RegisterName("URLs")
-	signatureWithObjCTypesSel = objc.RegisterName("signatureWithObjCTypes:")
-	invocationWithMethodSignatureSel = objc.RegisterName("invocationWithMethodSignature:")
-	setTargetSel = objc.RegisterName("setTarget:")
-	setArgumentAtIndexSel = objc.RegisterName("setArgument:atIndex:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).

@@ -16,16 +16,17 @@ type OpenPanelParams struct {
 	AllowsDirectories       bool
 }
 
-// invokeBlock calls a WebKit-provided completion block via NSInvocation.
-// This is the correct way to call an ObjC block from outside the ObjC runtime
-// (matches the webview_go reference). setArgument:atIndex:2 is the first user
-// argument (index 0 = self, index 1 = _cmd).
+// callBlockASM calls an ObjC block's invoke function pointer directly.
+// Reads invoke at offset 16 of the block struct and calls (block, arg).
+// Defined in call_block_amd64.s — avoids go vet unsafe.Pointer warnings
+// and bypasses purego's RegisterFunc variadic ABI issues.
+func callBlockASM(block, arg uintptr)
+
+// invokeBlock calls a WebKit-provided completion block. Uses assembly to call
+// the invoke pointer directly with the correct calling convention, matching
+// how blocks are called in ObjC runtime.
 func invokeBlock(block objc.ID, arg objc.ID) {
-	sig := objc.ID(nsMethodSignatureClass).Send(signatureWithObjCTypesSel, nsString("v@?@"))
-	inv := objc.ID(nsInvocationClass).Send(invocationWithMethodSignatureSel, sig)
-	inv.Send(setTargetSel, block)
-	inv.Send(setArgumentAtIndexSel, unsafe.Pointer(&arg), 2)
-	inv.Send(objc.RegisterName("invoke"))
+	callBlockASM(uintptr(block), uintptr(arg))
 }
 
 // runOpenPanel is the WKUIDelegate runOpenPanelWithParameters:initiatedByFrame:
