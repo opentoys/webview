@@ -285,10 +285,6 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 	p.controller = controller
 	controller.GetCoreWebView2(&p.webview)
 
-	// Set initial visibility and bounds.
-	controller.PutIsVisible(true)
-	p.resizeWidget()
-
 	// Register message handler.
 	var tok eventToken
 	p.webview.AddWebMessageReceived(p.msgReceivedHandler, &tok)
@@ -311,6 +307,10 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 
 	// Mark ready and apply pending state.
 	p.ready.Store(1)
+
+	// Set initial visibility and bounds (must be after ready.Store).
+	controller.PutIsVisible(true)
+	p.resizeWidget()
 
 	p.mu.Lock()
 	html := p.pendingHTML
