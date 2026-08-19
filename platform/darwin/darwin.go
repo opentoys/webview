@@ -83,6 +83,9 @@ var (
 	nsMenuItemClass        objc.Class
 	wkDataStoreClass       objc.Class
 	wkOpenPanelParamsClass objc.Class
+	nsOpenPanelClass       objc.Class
+	nsFileManagerClass     objc.Class
+	nsArrayClass           objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -129,6 +132,18 @@ var (
 	nonPersistentDataStoreSel       objc.SEL
 	defaultDataStoreSel             objc.SEL
 	allowsMultipleSelectionSel      objc.SEL
+	openPanelSel                    objc.SEL
+	setCanChooseFilesSel            objc.SEL
+	setCanChooseDirectoriesSel      objc.SEL
+	setAllowsMultipleSelectionSel   objc.SEL
+	setDirectoryURLSel              objc.SEL
+	setAllowedFileTypesSel          objc.SEL
+	runModalSel                     objc.SEL
+	defaultManagerSel               objc.SEL
+	homeDirectoryForCurrentUserSel  objc.SEL
+	fileURLWithPathSel              objc.SEL
+	arrayWithObjectsCountSel        objc.SEL
+	URLsSel                         objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -164,6 +179,9 @@ func init() {
 	nsMenuItemClass = objc.GetClass("NSMenuItem")
 	wkDataStoreClass = objc.GetClass("WKWebsiteDataStore")
 	wkOpenPanelParamsClass = objc.GetClass("WKOpenPanelParameters")
+	nsOpenPanelClass = objc.GetClass("NSOpenPanel")
+	nsFileManagerClass = objc.GetClass("NSFileManager")
+	nsArrayClass = objc.GetClass("NSArray")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -207,6 +225,18 @@ func init() {
 	nonPersistentDataStoreSel = objc.RegisterName("nonPersistentDataStore")
 	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
 	allowsMultipleSelectionSel = objc.RegisterName("allowsMultipleSelection")
+	openPanelSel = objc.RegisterName("openPanel")
+	setCanChooseFilesSel = objc.RegisterName("setCanChooseFiles:")
+	setCanChooseDirectoriesSel = objc.RegisterName("setCanChooseDirectories:")
+	setAllowsMultipleSelectionSel = objc.RegisterName("setAllowsMultipleSelection:")
+	setDirectoryURLSel = objc.RegisterName("setDirectoryURL:")
+	setAllowedFileTypesSel = objc.RegisterName("setAllowedFileTypes:")
+	runModalSel = objc.RegisterName("runModal")
+	defaultManagerSel = objc.RegisterName("defaultManager")
+	homeDirectoryForCurrentUserSel = objc.RegisterName("homeDirectoryForCurrentUser")
+	fileURLWithPathSel = objc.RegisterName("fileURLWithPath:")
+	arrayWithObjectsCountSel = objc.RegisterName("arrayWithObjects:count:")
+	URLsSel = objc.RegisterName("URLs")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -324,6 +354,9 @@ func init() {
 					// Default: return the default text.
 					callBlock(completion, nsString(def))
 				}},
+			// <input type=file> → native NSOpenPanel (see openpanel.go).
+			{Cmd: objc.RegisterName("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:"),
+				Fn: runOpenPanel},
 		},
 	)
 	if err != nil {
@@ -446,6 +479,11 @@ type Platform struct {
 	// DialogFunc is called by the WKUIDelegate for JS alert/confirm/prompt.
 	// Called on the host thread (same thread as MessageFunc).
 	DialogFunc func(kind DialogKind, message, defaultInput string) (string, bool)
+	// OpenPanelFunc overrides the native NSOpenPanel sheet for <input type=file>.
+	// When set, WebKit does not show the default panel; the app must call
+	// callback with the absolute paths the user chose, or (nil,false) to
+	// cancel. callback is async and safe from any goroutine.
+	OpenPanelFunc func(params openPanelParams, callback func(paths []string, ok bool))
 
 	// Debug enables web-developer tooling where the platform supports it.
 	// On macOS a right-click inspector depends on Safari's Develop service,
