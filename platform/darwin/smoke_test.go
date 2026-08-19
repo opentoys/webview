@@ -225,3 +225,58 @@ func TestEditMenuInstalled(t *testing.T) {
 		t.Fatal("Edit menu: no item mapping Cmd-C to copy:")
 	}
 }
+
+// TestIncognito: the webview config must use a non-persistent (in-memory)
+// data store. WKWebsiteDataStore exposes isPersistent; non-persistent stores
+// report false.
+func TestIncognito(t *testing.T) {
+	p := New()
+	p.Incognito = true
+	errCh := make(chan error, 1)
+	go func() { errCh <- p.Run() }()
+	time.Sleep(500 * time.Millisecond)
+	p.mu.Lock()
+	wv := p.webview
+	p.mu.Unlock()
+	if wv == 0 {
+		t.Fatal("webview not created")
+	}
+	var persistent bool
+	mainThread(func() {
+		cfg := objc.ID(wv).Send(objc.RegisterName("configuration"))
+		store := objc.ID(cfg).Send(objc.RegisterName("websiteDataStore"))
+		persistent = objc.ID(store).Send(objc.RegisterName("isPersistent")) != 0
+	})
+	p.Close()
+	<-errCh
+	if persistent {
+		t.Fatal("incognito webview used a persistent data store")
+	}
+}
+
+// TestDataDir: a DataDir must produce a persistent data store (WebKit honors
+// WKWebsiteDataStoreConfiguration.websiteDataStoreDirectoryURL).
+func TestDataDir(t *testing.T) {
+	p := New()
+	p.DataDir = t.TempDir()
+	errCh := make(chan error, 1)
+	go func() { errCh <- p.Run() }()
+	time.Sleep(500 * time.Millisecond)
+	p.mu.Lock()
+	wv := p.webview
+	p.mu.Unlock()
+	if wv == 0 {
+		t.Fatal("webview not created")
+	}
+	var persistent bool
+	mainThread(func() {
+		cfg := objc.ID(wv).Send(objc.RegisterName("configuration"))
+		store := objc.ID(cfg).Send(objc.RegisterName("websiteDataStore"))
+		persistent = objc.ID(store).Send(objc.RegisterName("isPersistent")) != 0
+	})
+	p.Close()
+	<-errCh
+	if !persistent {
+		t.Fatal("DataDir webview did not use a persistent data store")
+	}
+}

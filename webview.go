@@ -15,7 +15,17 @@ type Platform interface {
 	Dialog(kind DialogKind, message, defaultInput string) (string, bool)
 }
 
-type Options struct{ Debug bool }
+// Options configures the webview. Field semantics are per-platform; each
+// platform backend implements what it can.
+type Options struct {
+	Debug bool
+	// Incognito makes the webview use a non-persistent (in-memory) data store:
+	// no cookies, cache, or localStorage written to disk.
+	Incognito bool
+	// DataDir sets the persistent website data store directory (cookies, cache,
+	// localStorage). Empty = platform default. Ignored when Incognito is set.
+	DataDir string
+}
 
 type W struct {
 	p      Platform

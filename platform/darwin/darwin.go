@@ -81,6 +81,8 @@ var (
 	wkWebViewClass         objc.Class
 	nsMenuClass            objc.Class
 	nsMenuItemClass        objc.Class
+	wkDataStoreClass       objc.Class
+	wkDataStoreConfigClass objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -122,6 +124,11 @@ var (
 	setSubmenuSel                   objc.SEL
 	setMainMenuSel                  objc.SEL
 	addItemSel                      objc.SEL
+	setWebsiteDataStoreSel          objc.SEL
+	nonPersistentDataStoreSel       objc.SEL
+	setDataStoreDirectoryURLSel     objc.SEL
+	initWithConfigSel               objc.SEL
+	defaultDataStoreSel             objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -155,6 +162,8 @@ func init() {
 	wkWebViewClass = objc.GetClass("WKWebView")
 	nsMenuClass = objc.GetClass("NSMenu")
 	nsMenuItemClass = objc.GetClass("NSMenuItem")
+	wkDataStoreClass = objc.GetClass("WKWebsiteDataStore")
+	wkDataStoreConfigClass = objc.GetClass("WKWebsiteDataStoreConfiguration")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -193,6 +202,11 @@ func init() {
 	addItemSel = objc.RegisterName("addItem:")
 	setSubmenuSel = objc.RegisterName("setSubmenu:")
 	setMainMenuSel = objc.RegisterName("setMainMenu:")
+	setWebsiteDataStoreSel = objc.RegisterName("setWebsiteDataStore:")
+	nonPersistentDataStoreSel = objc.RegisterName("nonPersistentDataStore")
+	setDataStoreDirectoryURLSel = objc.RegisterName("setDataStoreDirectoryURL:")
+	initWithConfigSel = objc.RegisterName("initWithConfiguration:")
+	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -431,6 +445,13 @@ type Platform struct {
 	// Called on the host thread (same thread as MessageFunc).
 	DialogFunc func(kind DialogKind, message, defaultInput string) (string, bool)
 
+	// Incognito makes the webview use a non-persistent (in-memory) website data
+	// store: no cookies/cache/localStorage written to disk.
+	Incognito bool
+	// DataDir sets the persistent website data store directory (cookies, cache,
+	// localStorage). Empty = WebKit default. Ignored when Incognito is set.
+	DataDir string
+
 	mu     sync.Mutex
 	closed bool
 	// pendingTitle is set by SetTitle before the window exists and applied in
@@ -545,6 +566,34 @@ func setupMainMenu() {
 	app.Send(setMainMenuSel, menu)
 }
 
+// setupDataStore returns the WKWebsiteDataStore for the platform: a non-
+// persistent (in-memory, incognito) store when Incognito is set, else the
+// default persistent store or a persistent store rooted at DataDir. Runs on
+// the host thread from setup().
+func (p *Platform) setupDataStore() objc.ID {
+	if p.Incognito {
+		return objc.ID(wkDataStoreClass).Send(nonPersistentDataStoreSel)
+	}
+	if p.DataDir != "" {
+		// Custom persistent store directory. WKWebsiteDataStore has no public
+		// initializer (init/new are NS_UNAVAILABLE), so a directory-based store
+		// requires the private "_initWithConfiguration:". Guard with
+		// respondsToSelector: and fall back to the default store if absent.
+		conf := objc.ID(wkDataStoreConfigClass).Send(allocSel)
+		conf = conf.Send(initSel)
+		dir := nsString(p.DataDir)
+		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, dir)
+		conf.Send(setDataStoreDirectoryURLSel, nsURL)
+		const privInit = "_initWithConfiguration:"
+		if objc.ID(wkDataStoreClass).Send(objc.RegisterName("respondsToSelector:"), objc.RegisterName(privInit)) != 0 {
+			return objc.ID(wkDataStoreClass).Send(objc.RegisterName(privInit), conf)
+		}
+		// Private API unavailable on this OS: fall back to the default store.
+		return objc.ID(wkDataStoreClass).Send(defaultDataStoreSel)
+	}
+	return objc.ID(wkDataStoreClass).Send(defaultDataStoreSel)
+}
+
 // setup creates the NSWindow and WKWebView, then shows them. Runs on the host
 // thread (called via mainThread from Run).
 func (p *Platform) setup() error {
@@ -586,6 +635,8 @@ func (p *Platform) setup() error {
 	config := objc.ID(wkWebViewConfigClass).Send(allocSel)
 	config = config.Send(initSel)
 	config.Send(setUserContentControllerSel, ucc)
+	// Website data store: incognito (non-persistent), custom dir, or default.
+	config.Send(setWebsiteDataStoreSel, p.setupDataStore())
 	wv := objc.ID(wkWebViewClass).Send(allocSel)
 	if wv == 0 {
 		return errNoWebView

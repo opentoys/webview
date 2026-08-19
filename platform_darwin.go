@@ -28,6 +28,8 @@ const (
 // is eval'd back into the webview on the host thread (non-blocking).
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()
+	p.Incognito = opts.Incognito
+	p.DataDir = opts.DataDir
 	p.BoundFuncs = w.bridge.funcNames
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
