@@ -409,6 +409,9 @@ type Platform struct {
 	// pendingHTML is set by SetHTML before the webview exists and loaded in
 	// setup(), so HTML set before Run() is not silently dropped.
 	pendingHTML string
+	// pendingURL is set by Navigate before the webview exists and loaded in
+	// setup(), so a navigation set before Run() is not silently dropped.
+	pendingURL string
 	// runDone is closed by Close() to signal Run() to return.
 	runDone chan struct{}
 }
@@ -527,6 +530,20 @@ func (p *Platform) setup() error {
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
 		wv.Send(loadHTMLStringSel, str, objc.ID(0))
 	}
+
+	// Apply a URL set before Run() (the webview now exists). Tighter priority
+	// than pending HTML: a pending HTML page wins, then pending URL (and any
+	// WKUserScript still fires for the empty document loadRequest starts with).
+	p.mu.Lock()
+	url := p.pendingURL
+	p.pendingURL = ""
+	p.mu.Unlock()
+	if url != "" {
+		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, url)
+		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, str)
+		req := objc.ID(nsURLRequestClass).Send(requestWithURLSel, nsURL)
+		wv.Send(loadRequestSel, req)
+	}
 	return nil
 }
 
@@ -552,13 +569,17 @@ func (p *Platform) SetSize(width, height int, hint SizeHint) {
 }
 
 func (p *Platform) Navigate(url string) error {
-	mainThread(func() {
-		p.mu.Lock()
-		wv := p.webview
+	p.mu.Lock()
+	wv := p.webview
+	if wv == 0 {
+		// No webview yet (called before Run): remember the URL and load it
+		// once setup() creates the webview.
+		p.pendingURL = url
 		p.mu.Unlock()
-		if wv == 0 {
-			return
-		}
+		return nil
+	}
+	p.mu.Unlock()
+	mainThread(func() {
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, url)
 		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, str)
 		req := objc.ID(nsURLRequestClass).Send(requestWithURLSel, nsURL)
