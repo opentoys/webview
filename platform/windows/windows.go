@@ -200,8 +200,10 @@ func (p *Platform) setup() error {
 	pDataDir := utf16PtrFromStr(dataDir)
 	pDataDirUPtr := uintptr(unsafe.Pointer(pDataDir))
 
+	fmt.Fprintf(os.Stderr, "webview: calling createEnv dataDir=%q\n", dataDir)
 	r = p.createEnv(0, pDataDirUPtr, 0, p.envCompletedHandler)
 	runtime.KeepAlive(pDataDir)
+	fmt.Fprintf(os.Stderr, "webview: createEnv returned 0x%X\n", r)
 	if r != S_OK {
 		pCoUninitialize.Call()
 		return fmt.Errorf("webview: CreateEnvironmentWithOptions failed: 0x%X", r)
@@ -223,7 +225,7 @@ func (p *Platform) resizeWidget() {
 		uintptr(rc.Right-rc.Left), uintptr(rc.Bottom-rc.Top),
 		SWP_NOZORDER,
 	)
-	if p.controller != nil && p.ready.Load() != 0 {
+	if p.controller != nil {
 		p.controller.PutBounds(RECT{
 			Right:  rc.Right - rc.Left,
 			Bottom: rc.Bottom - rc.Top,
@@ -270,6 +272,7 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 // --- COM callback implementations ---
 
 func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Environment) uintptr {
+	fmt.Fprintf(os.Stderr, "webview: InvokeEnvCompleted error=0x%X env=%p\n", errorCode, env)
 	if errorCode != S_OK || env == nil {
 		return 0
 	}
@@ -279,11 +282,13 @@ func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Envir
 }
 
 func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCoreWebView2Controller) uintptr {
+	fmt.Fprintf(os.Stderr, "webview: InvokeControllerCompleted error=0x%X ctrl=%p\n", errorCode, controller)
 	if errorCode != S_OK || controller == nil {
 		return 0
 	}
 	p.controller = controller
 	controller.GetCoreWebView2(&p.webview)
+	fmt.Fprintf(os.Stderr, "webview: webview=%p\n", p.webview)
 
 	// Register message handler.
 	var tok eventToken
@@ -318,8 +323,10 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 	p.mu.Unlock()
 
 	if html != "" {
+		fmt.Fprintf(os.Stderr, "webview: NavigateToString html=%q\n", html)
 		p.webview.NavigateToString(html)
 	} else if url != "" {
+		fmt.Fprintf(os.Stderr, "webview: Navigate url=%q\n", url)
 		p.webview.Navigate(url)
 	}
 
