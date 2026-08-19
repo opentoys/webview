@@ -36,6 +36,7 @@ type Options struct {
 // OpenPanelParams describes the <input type=file> that triggered the picker.
 type OpenPanelParams struct {
 	AllowsMultipleSelection bool
+	AllowsDirectories       bool
 }
 
 // OpenPanelFunc replaces the native file picker for <input type=file>. The

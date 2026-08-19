@@ -55,6 +55,7 @@ func buildPlatform(opts Options, w *W) Platform {
 			p.OpenPanelFunc = func(params darwin.OpenPanelParams, cb func([]string, bool)) {
 				fn(OpenPanelParams{
 					AllowsMultipleSelection: params.AllowsMultipleSelection,
+					AllowsDirectories:       params.AllowsDirectories,
 				}, cb)
 			}
 		} else {

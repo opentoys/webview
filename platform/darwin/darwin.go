@@ -86,6 +86,8 @@ var (
 	nsOpenPanelClass       objc.Class
 	nsFileManagerClass     objc.Class
 	nsArrayClass           objc.Class
+	nsMethodSignatureClass objc.Class
+	nsInvocationClass      objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -132,6 +134,7 @@ var (
 	nonPersistentDataStoreSel       objc.SEL
 	defaultDataStoreSel             objc.SEL
 	allowsMultipleSelectionSel      objc.SEL
+	allowsDirectoriesSel            objc.SEL
 	openPanelSel                    objc.SEL
 	setCanChooseFilesSel            objc.SEL
 	setCanChooseDirectoriesSel      objc.SEL
@@ -144,6 +147,10 @@ var (
 	fileURLWithPathSel              objc.SEL
 	arrayWithObjectsCountSel        objc.SEL
 	URLsSel                         objc.SEL
+	signatureWithObjCTypesSel       objc.SEL
+	invocationWithMethodSignatureSel objc.SEL
+	setTargetSel                    objc.SEL
+	setArgumentAtIndexSel           objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -182,6 +189,8 @@ func init() {
 	nsOpenPanelClass = objc.GetClass("NSOpenPanel")
 	nsFileManagerClass = objc.GetClass("NSFileManager")
 	nsArrayClass = objc.GetClass("NSArray")
+	nsMethodSignatureClass = objc.GetClass("NSMethodSignature")
+	nsInvocationClass = objc.GetClass("NSInvocation")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -225,6 +234,7 @@ func init() {
 	nonPersistentDataStoreSel = objc.RegisterName("nonPersistentDataStore")
 	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
 	allowsMultipleSelectionSel = objc.RegisterName("allowsMultipleSelection")
+	allowsDirectoriesSel = objc.RegisterName("allowsDirectories")
 	openPanelSel = objc.RegisterName("openPanel")
 	setCanChooseFilesSel = objc.RegisterName("setCanChooseFiles:")
 	setCanChooseDirectoriesSel = objc.RegisterName("setCanChooseDirectories:")
@@ -237,6 +247,10 @@ func init() {
 	fileURLWithPathSel = objc.RegisterName("fileURLWithPath:")
 	arrayWithObjectsCountSel = objc.RegisterName("arrayWithObjects:count:")
 	URLsSel = objc.RegisterName("URLs")
+	signatureWithObjCTypesSel = objc.RegisterName("signatureWithObjCTypes:")
+	invocationWithMethodSignatureSel = objc.RegisterName("invocationWithMethodSignature:")
+	setTargetSel = objc.RegisterName("setTarget:")
+	setArgumentAtIndexSel = objc.RegisterName("setArgument:atIndex:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).

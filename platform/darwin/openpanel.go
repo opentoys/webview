@@ -13,6 +13,19 @@ import (
 // OpenPanelParams is the info a runOpenPanelWithParameters: handler receives.
 type OpenPanelParams struct {
 	AllowsMultipleSelection bool
+	AllowsDirectories       bool
+}
+
+// invokeBlock calls a WebKit-provided completion block via NSInvocation.
+// This is the correct way to call an ObjC block from outside the ObjC runtime
+// (matches the webview_go reference). setArgument:atIndex:2 is the first user
+// argument (index 0 = self, index 1 = _cmd).
+func invokeBlock(block objc.ID, arg objc.ID) {
+	sig := objc.ID(nsMethodSignatureClass).Send(signatureWithObjCTypesSel, nsString("v@?@"))
+	inv := objc.ID(nsInvocationClass).Send(invocationWithMethodSignatureSel, sig)
+	inv.Send(setTargetSel, block)
+	inv.Send(setArgumentAtIndexSel, unsafe.Pointer(&arg), 2)
+	inv.Send(objc.RegisterName("invoke"))
 }
 
 // runOpenPanel is the WKUIDelegate runOpenPanelWithParameters:initiatedByFrame:
@@ -26,19 +39,23 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 		return
 	}
 	allowsMulti := objc.ID(paramsObj).Send(allowsMultipleSelectionSel) != 0
-	// Recover from any panic in the panel path (e.g. purego ABI mismatch) and
-	// still call WebKit's completion with nil, preventing the "completion handler
-	// was not called" crash.
+	allowsDirs := objc.ID(paramsObj).Send(allowsDirectoriesSel) != 0
+	// Recover from any panic in the panel path and still call WebKit's
+	// completion with nil, preventing the "completion handler was not called"
+	// crash.
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Fprintf(os.Stderr, "openpanel: panic in showOpenPanel: %v\n", r)
 				if completion != 0 {
-					callBlock(completion, objc.ID(0))
+					invokeBlock(completion, objc.ID(0))
 				}
 			}
 		}()
-		p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: allowsMulti}, objc.Block(completion))
+		p.showOpenPanel(OpenPanelParams{
+			AllowsMultipleSelection: allowsMulti,
+			AllowsDirectories:       allowsDirs,
+		}, completion)
 	}()
 }
 
@@ -50,10 +67,8 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 // reference approach). runModal pumps a nested event loop on the host thread,
 // so it works under the manual host loop; the page is frozen while the panel
 // is up, which is the standard modal-dialog behavior. WebKit's completion
-// block is invoked directly with panel.URLs on return — no Go-side block
-// round-trip, which purego's block cache cannot serve for AppKit-invoked
-// blocks (AppKit copies them to a different address than the stored key).
-func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.Block) {
+// block is invoked via NSInvocation with panel.URLs on return.
+func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	if p.OpenPanelFunc != nil {
 		// The handler may call cb synchronously (host thread) or from another
 		// goroutine. Block until cb fires so the delegate method can call the
@@ -69,14 +84,14 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.Block) 
 		})
 		<-done
 		if completion != 0 {
-			callBlock(objc.ID(completion), openPanelResult(paths, ok))
+			invokeBlock(completion, openPanelResult(paths, ok))
 		}
 		return
 	}
 	// NSOpenPanel has no public init; openPanel returns a configured instance.
 	panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
 	panel.Send(setCanChooseFilesSel, true)
-	panel.Send(setCanChooseDirectoriesSel, false)
+	panel.Send(setCanChooseDirectoriesSel, params.AllowsDirectories)
 	panel.Send(setAllowsMultipleSelectionSel, params.AllowsMultipleSelection)
 	panel.Send(setAllowedFileTypesSel, objc.ID(0)) // nil = all files
 	// Default to the user's home directory (homeDirectoryForCurrentUser → NSURL).
@@ -85,12 +100,12 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.Block) 
 	panel.Send(setDirectoryURLSel, home)
 
 	// NSModalResponseOK = 1. Run the panel modally; on OK, forward the selected
-	// URLs (NSArray<NSURL>) straight to WebKit's completion block.
+	// URLs (NSArray<NSURL>) to WebKit's completion block via NSInvocation.
 	result := panel.Send(runModalSel)
 	if result != 0 {
-		callBlock(objc.ID(completion), panel.Send(URLsSel))
+		invokeBlock(completion, panel.Send(URLsSel))
 	} else {
-		callBlock(objc.ID(completion), objc.ID(0))
+		invokeBlock(completion, objc.ID(0))
 	}
 }
 
@@ -116,16 +131,4 @@ func openPanelResult(paths []string, ok bool) objc.ID {
 		return 0
 	}
 	return pathURLs(paths)
-}
-
-// completeOpenPanel invokes the WKOpenPanel completion block. ok=false → nil
-// (cancel: WebKit emits no FileList, input stays empty). callBlock matches the
-// dialog completion path (WebKit hands raw blocks that are not in purego's
-// block cache, so Block.Invoke would panic).
-//
-// MUST be called on the host thread — WebKit asserts the completion handler is
-// invoked before the delegate method returns. showOpenPanel already ensures this
-// (done-channel blocks the host thread until the handler calls its callback).
-func completeOpenPanel(completion objc.Block, paths []string, ok bool) {
-	callBlock(objc.ID(completion), openPanelResult(paths, ok))
 }
