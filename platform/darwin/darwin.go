@@ -79,6 +79,8 @@ var (
 	wkUCCClass             objc.Class
 	wkWebViewConfigClass   objc.Class
 	wkWebViewClass         objc.Class
+	nsMenuClass            objc.Class
+	nsMenuItemClass        objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -112,6 +114,14 @@ var (
 	dateWithTimeIntervalSinceNowSel objc.SEL
 	nextEventMatchingMaskSel        objc.SEL
 	sendEventSel                    objc.SEL
+	windowWillCloseSel              objc.SEL
+	initWithTitleSel                objc.SEL
+	initWithTitleOnlySel            objc.SEL
+	autoreleaseSel                  objc.SEL
+	separatorItemSel                objc.SEL
+	setSubmenuSel                   objc.SEL
+	setMainMenuSel                  objc.SEL
+	addItemSel                      objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -143,6 +153,8 @@ func init() {
 	wkUCCClass = objc.GetClass("WKUserContentController")
 	wkWebViewConfigClass = objc.GetClass("WKWebViewConfiguration")
 	wkWebViewClass = objc.GetClass("WKWebView")
+	nsMenuClass = objc.GetClass("NSMenu")
+	nsMenuItemClass = objc.GetClass("NSMenuItem")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -173,11 +185,28 @@ func init() {
 	dateWithTimeIntervalSinceNowSel = objc.RegisterName("dateWithTimeIntervalSinceNow:")
 	nextEventMatchingMaskSel = objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:")
 	sendEventSel = objc.RegisterName("sendEvent:")
+	windowWillCloseSel = objc.RegisterName("windowWillClose:")
+	initWithTitleSel = objc.RegisterName("initWithTitle:action:keyEquivalent:")
+	initWithTitleOnlySel = objc.RegisterName("initWithTitle:")
+	autoreleaseSel = objc.RegisterName("autorelease")
+	separatorItemSel = objc.RegisterName("separatorItem")
+	addItemSel = objc.RegisterName("addItem:")
+	setSubmenuSel = objc.RegisterName("setSubmenu:")
+	setMainMenuSel = objc.RegisterName("setMainMenu:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
 	windowShouldClose := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
 		return true
+	}
+	// windowWillClose: signals Close() semantics when the user closes the window
+	// via the titlebar button. Runs on the host thread (delegate callbacks are
+	// delivered there), so call signalExit, not Close() (which would deadlock on
+	// mainThread).
+	windowWillClose := func(id objc.ID, cmd objc.SEL, window objc.ID) {
+		if p := activePlatform; p != nil {
+			p.signalExit()
+		}
 	}
 	// applicationShouldTerminateAfterLastWindowClosed: keeps the app alive after
 	// the last window closes so Run() only returns via Close().
@@ -192,6 +221,7 @@ func init() {
 		nil,
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("windowShouldClose:"), Fn: windowShouldClose},
+			{Cmd: objc.RegisterName("windowWillClose:"), Fn: windowWillClose},
 			{Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"), Fn: terminateAfterLastWindowClosed},
 		},
 	)
@@ -450,6 +480,71 @@ func (p *Platform) Close() error {
 	return nil
 }
 
+// signalExit makes Run() return without closing the window. Callable from the
+// host thread (windowWillClose:) or any other thread (Close()). Uses a non-
+// blocking channel send so it is safe on the host thread where Close()'s
+// mainThread orderOut would deadlock.
+func (p *Platform) signalExit() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+	select {
+	case p.runDone <- struct{}{}:
+	default:
+	}
+}
+
+// setupMainMenu installs a minimal main menu bar with an App menu and an Edit
+// menu. Without a nib, a bare AppKit app has no menu, so Cmd-C/Cmd-V key
+// equivalents (routed to the first responder via the main menu's Edit items)
+// silently do nothing. Follows the reference webview_go implementation
+// (webview.h: 2317-2348): each Edit item carries a real key equivalent
+// ("x"/"c"/"v"/"a") so the responder chain resolves cut:/copy:/paste:/selectAll:.
+// Runs on the host thread from setup().
+func setupMainMenu() {
+	menu := objc.ID(nsMenuClass).Send(allocSel)
+	menu = menu.Send(initSel)
+
+	// Application menu.
+	appItem := objc.ID(nsMenuItemClass).Send(allocSel)
+	appItem = appItem.Send(initWithTitleSel, nsString(""), 0, nsString(""))
+	appMenu := objc.ID(nsMenuClass).Send(allocSel)
+	appMenu = appMenu.Send(initWithTitleOnlySel, nsString(""))
+	appMenu.Send(autoreleaseSel)
+	appItem.Send(setSubmenuSel, appMenu)
+	menu.Send(addItemSel, appItem)
+
+	// Edit menu: Cut/Copy/Paste/Select All with Cmd shortcuts.
+	editItem := objc.ID(nsMenuItemClass).Send(allocSel)
+	editItem = editItem.Send(initWithTitleSel, nsString("Edit"), 0, nsString(""))
+	editMenu := objc.ID(nsMenuClass).Send(allocSel)
+	editMenu = editMenu.Send(initWithTitleOnlySel, nsString("Edit"))
+	editMenu.Send(autoreleaseSel)
+	editItem.Send(setSubmenuSel, editMenu)
+	menu.Send(addItemSel, editItem)
+
+	for _, e := range []struct{ title, action, key string }{
+		{"Cut", "cut:", "x"},
+		{"Copy", "copy:", "c"},
+		{"Paste", "paste:", "v"},
+	} {
+		item := objc.ID(nsMenuItemClass).Send(allocSel)
+		item = item.Send(initWithTitleSel, nsString(e.title), objc.RegisterName(e.action), nsString(e.key))
+		editMenu.Send(addItemSel, item)
+	}
+	sep := objc.ID(nsMenuItemClass).Send(separatorItemSel)
+	editMenu.Send(addItemSel, sep)
+	selectAll := objc.ID(nsMenuItemClass).Send(allocSel)
+	selectAll = selectAll.Send(initWithTitleSel, nsString("Select All"), objc.RegisterName("selectAll:"), nsString("a"))
+	editMenu.Send(addItemSel, selectAll)
+
+	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
+	app.Send(setMainMenuSel, menu)
+}
+
 // setup creates the NSWindow and WKWebView, then shows them. Runs on the host
 // thread (called via mainThread from Run).
 func (p *Platform) setup() error {
@@ -509,6 +604,9 @@ func (p *Platform) setup() error {
 	w.Send(setContentViewSel, wv)
 	w.Send(centerSel)
 	w.Send(makeKeyAndOrderFrontSel, 0)
+	// Cmd-C/Cmd-V need an Edit menu (key equivalents route via the main menu).
+	// Bare AppKit apps without a nib have no menu, so install one once.
+	setupMainMenu()
 
 	// Apply a title set before Run().
 	p.mu.Lock()
