@@ -4,16 +4,6 @@ package webview
 
 import win "github.com/opentoys/webview/platform/windows"
 
-// Type aliases forward the platform package's types so callers don't need
-// to import platform/windows directly.
-type DialogKind = win.DialogKind
-
-const (
-	DialogAlert   = win.DialogAlert
-	DialogConfirm = win.DialogConfirm
-	DialogPrompt  = win.DialogPrompt
-)
-
 type SizeHint = win.SizeHint
 
 const (
@@ -22,11 +12,6 @@ const (
 	SizeMax   = win.SizeMax
 	SizeFixed = win.SizeFixed
 )
-
-type W struct {
-	p      Platform
-	bridge *bridge
-}
 
 // buildPlatform creates the platform and wires the message handler to the
 // bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply

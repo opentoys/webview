@@ -25,6 +25,13 @@ type Options struct {
 // W is defined per-platform:
 //   - platform_darwin.go: includes dialog/openPanel/download handler fields
 //   - platform_windows.go / platform_other.go: minimal struct
+//
+// W is the top-level webview handle. Darwin includes handler fields for
+// dialog, file-panel, and download overrides.
+type W struct {
+	p      Platform
+	bridge *bridge
+}
 
 func New(opts Options) (*W, error) {
 	w := &W{bridge: newBridge()}
