@@ -12,40 +12,70 @@ type iCoreWebView2 struct {
 	vtbl *iCoreWebView2Vtbl
 }
 
+// Vtable layout verified against WebView2 SDK WebView2.h ICoreWebView2Vtbl.
+// Indices 0-29 match the original spec. CapturePreview(30) and Reload(31)
+// were missing from the original implementation; PostWebMessageAsJson(32)
+// comes before PostWebMessageAsString(33); add_WebMessageReceived is at 34.
 type iCoreWebView2Vtbl struct {
 	_IUnknownVtbl
-	GetSettings                            ComProc
-	GetSource                              ComProc
-	Navigate                               ComProc
-	NavigateToString                       ComProc
-	AddNavigationStarting                  ComProc
-	RemoveNavigationStarting               ComProc
-	AddContentLoading                      ComProc
-	RemoveContentLoading                   ComProc
-	AddSourceChanged                       ComProc
-	RemoveSourceChanged                    ComProc
-	AddHistoryChanged                      ComProc
-	RemoveHistoryChanged                   ComProc
-	AddNavigationCompleted                 ComProc
-	RemoveNavigationCompleted              ComProc
-	AddFrameNavigationStarting             ComProc
-	RemoveFrameNavigationStarting          ComProc
-	AddFrameNavigationCompleted            ComProc
-	RemoveFrameNavigationCompleted         ComProc
-	AddScriptDialogOpening                 ComProc
-	RemoveScriptDialogOpening              ComProc
-	AddPermissionRequested                 ComProc
-	RemovePermissionRequested              ComProc
-	AddProcessFailed                       ComProc
-	RemoveProcessFailed                    ComProc
-	AddScriptToExecuteOnDocumentCreated    ComProc
-	RemoveScriptToExecuteOnDocumentCreated ComProc
-	ExecuteScript                          ComProc
-	AddWebMessageReceived                  ComProc
-	RemoveWebMessageReceived               ComProc
-	PostWebMessageAsString                 ComProc
-	PostWebMessageAsJSON                   ComProc
-	_                                      [30]ComProc // padding for remaining slots
+	GetSettings                            ComProc // 3
+	GetSource                              ComProc // 4
+	Navigate                               ComProc // 5
+	NavigateToString                       ComProc // 6
+	AddNavigationStarting                  ComProc // 7
+	RemoveNavigationStarting               ComProc // 8
+	AddContentLoading                      ComProc // 9
+	RemoveContentLoading                   ComProc // 10
+	AddSourceChanged                       ComProc // 11
+	RemoveSourceChanged                    ComProc // 12
+	AddHistoryChanged                      ComProc // 13
+	RemoveHistoryChanged                   ComProc // 14
+	AddNavigationCompleted                 ComProc // 15
+	RemoveNavigationCompleted              ComProc // 16
+	AddFrameNavigationStarting             ComProc // 17
+	RemoveFrameNavigationStarting          ComProc // 18
+	AddFrameNavigationCompleted            ComProc // 19
+	RemoveFrameNavigationCompleted         ComProc // 20
+	AddScriptDialogOpening                 ComProc // 21
+	RemoveScriptDialogOpening              ComProc // 22
+	AddPermissionRequested                 ComProc // 23
+	RemovePermissionRequested              ComProc // 24
+	AddProcessFailed                       ComProc // 25
+	RemoveProcessFailed                    ComProc // 26
+	AddScriptToExecuteOnDocumentCreated    ComProc // 27
+	RemoveScriptToExecuteOnDocumentCreated ComProc // 28
+	ExecuteScript                          ComProc // 29
+	CapturePreview                         ComProc // 30
+	Reload                                 ComProc // 31
+	PostWebMessageAsJSON                   ComProc // 32
+	PostWebMessageAsString                 ComProc // 33
+	AddWebMessageReceived                  ComProc // 34
+	RemoveWebMessageReceived               ComProc // 35
+	CallDevToolsProtocolMethod             ComProc // 36
+	GetBrowserProcessId                    ComProc // 37
+	GetCanGoBack                           ComProc // 38
+	GetCanGoForward                        ComProc // 39
+	GoBack                                 ComProc // 40
+	GoForward                              ComProc // 41
+	GetDevToolsProtocolEventReceiver       ComProc // 42
+	Stop                                   ComProc // 43
+	AddNewWindowRequested                  ComProc // 44
+	RemoveNewWindowRequested               ComProc // 45
+	AddDocumentTitleChanged                ComProc // 46
+	RemoveDocumentTitleChanged             ComProc // 47
+	GetDocumentTitle                       ComProc // 48
+	AddHostObjectToScript                  ComProc // 49
+	RemoveHostObjectFromScript             ComProc // 50
+	OpenDevToolsWindow                     ComProc // 51
+	AddContainsFullScreenElementChanged    ComProc // 52
+	RemoveContainsFullScreenElementChanged ComProc // 53
+	GetContainsFullScreenElement           ComProc // 54
+	AddWebResourceRequested                ComProc // 55
+	RemoveWebResourceRequested             ComProc // 56
+	AddWebResourceRequestedFilter          ComProc // 57
+	RemoveWebResourceRequestedFilter       ComProc // 58
+	AddWindowCloseRequested                ComProc // 59
+	RemoveWindowCloseRequested             ComProc // 60
 }
 
 func (w *iCoreWebView2) Navigate(url string) uintptr {
@@ -95,6 +125,18 @@ func (w *iCoreWebView2) AddWebMessageReceived(
 	outToken *eventToken,
 ) uintptr {
 	r, _, _ := w.vtbl.AddWebMessageReceived.Call(
+		uintptr(unsafe.Pointer(w)),
+		uintptr(unsafe.Pointer(handler)),
+		uintptr(unsafe.Pointer(outToken)),
+	)
+	return r
+}
+
+func (w *iCoreWebView2) AddNavigationCompleted(
+	handler *iCoreWebView2NavigationCompletedEventHandler,
+	outToken *eventToken,
+) uintptr {
+	r, _, _ := w.vtbl.AddNavigationCompleted.Call(
 		uintptr(unsafe.Pointer(w)),
 		uintptr(unsafe.Pointer(handler)),
 		uintptr(unsafe.Pointer(outToken)),

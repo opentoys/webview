@@ -40,6 +40,7 @@ const (
 	WS_OVERLAPPEDWINDOW = 0x00CF0000
 	WS_VISIBLE          = 0x10000000
 	WS_CHILD            = 0x40000000
+	WS_CLIPCHILDREN     = 0x02000000
 	CW_USEDEFAULT       = 0x80000000
 )
 
@@ -61,6 +62,8 @@ const (
 
 // SetWindowPos flags.
 const (
+	SWP_NOSIZE     = 0x0001
+	SWP_NOMOVE     = 0x0002
 	SWP_NOZORDER   = 0x0004
 	SWP_NOACTIVATE = 0x0010
 )

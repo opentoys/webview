@@ -20,6 +20,7 @@ func main() {
 	count := 0
 	if err := w.Bind("increment", func() int {
 		count++
+		fmt.Println(count)
 		return count
 	}); err != nil {
 		panic(err)

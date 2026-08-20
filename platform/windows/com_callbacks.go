@@ -2,7 +2,10 @@
 
 package windows
 
-import "unsafe"
+import (
+	"syscall"
+	"unsafe"
+)
 
 // --- Environment completed handler ---
 
@@ -162,6 +165,57 @@ func permissionRequestedInvoke(this *iCoreWebView2PermissionRequestedEventHandle
 func newPermissionRequestedHandler(impl permissionRequestedImpl) *iCoreWebView2PermissionRequestedEventHandler {
 	return &iCoreWebView2PermissionRequestedEventHandler{
 		vtbl: &permissionRequestedVtblSingleton,
+		impl: impl,
+	}
+}
+
+// --- Navigation completed handler ---
+
+type iCoreWebView2NavigationCompletedEventHandler struct {
+	vtbl *iCoreWebView2NavigationCompletedEventHandlerVtbl
+	impl navigationCompletedImpl
+}
+
+type iCoreWebView2NavigationCompletedEventHandlerVtbl struct {
+	_IUnknownVtbl
+	Invoke ComProc
+}
+
+type navigationCompletedImpl interface {
+	InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess uintptr) uintptr
+}
+
+var navigationCompletedVtblSingleton = iCoreWebView2NavigationCompletedEventHandlerVtbl{
+	_IUnknownVtbl: _IUnknownVtbl{
+		QueryInterface: NewComProc(navigationCompletedQueryInterface),
+		AddRef:         NewComProc(comAddRef),
+		Release:        NewComProc(comRelease),
+	},
+	Invoke: NewComProc(navigationCompletedInvoke),
+}
+
+func navigationCompletedQueryInterface(this *iCoreWebView2NavigationCompletedEventHandler, iid *GUID, out **uintptr) uintptr {
+	if out != nil {
+		*out = (*uintptr)(unsafe.Pointer(this))
+	}
+	comAddRef((*_IUnknown)(unsafe.Pointer(this)))
+	return S_OK
+}
+
+func navigationCompletedInvoke(this *iCoreWebView2NavigationCompletedEventHandler, sender *iCoreWebView2, args uintptr) uintptr {
+	// args is ICoreWebView2NavigationCompletedEventArgs*.
+	// Its vtable: IUnknown(3) + get_IsSuccess = index 3.
+	// Read the vtable pointer from args, then call the function at offset 3.
+	vtblPtr := *(*uintptr)(unsafe.Pointer(args))
+	getIsSuccess := *(*uintptr)(unsafe.Pointer(vtblPtr + 3*unsafe.Sizeof(uintptr(0))))
+	var isSuccess uintptr
+	syscall.Syscall(getIsSuccess, 2, args, uintptr(unsafe.Pointer(&isSuccess)), 0)
+	return this.impl.InvokeNavigationCompleted(sender, isSuccess)
+}
+
+func newNavigationCompletedHandler(impl navigationCompletedImpl) *iCoreWebView2NavigationCompletedEventHandler {
+	return &iCoreWebView2NavigationCompletedEventHandler{
+		vtbl: &navigationCompletedVtblSingleton,
 		impl: impl,
 	}
 }

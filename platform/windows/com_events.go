@@ -13,15 +13,17 @@ type iCoreWebView2WebMessageReceivedEventArgs struct {
 	vtbl *iCoreWebView2WebMessageReceivedEventArgsVtbl
 }
 
+// Vtable layout verified against WebView2 SDK WebView2.h.
 type iCoreWebView2WebMessageReceivedEventArgsVtbl struct {
 	_IUnknownVtbl
-	GetSource               ComProc
-	GetWebMessageAsString   ComProc
+	GetSource               ComProc // 3: get_Source
+	GetWebMessageAsJson     ComProc // 4: get_WebMessageAsJson
+	TryGetWebMessageAsString ComProc // 5: TryGetWebMessageAsString
 }
 
 func (a *iCoreWebView2WebMessageReceivedEventArgs) GetWebMessageAsString() string {
 	var pwstr *uint16
-	a.vtbl.GetWebMessageAsString.Call(
+	a.vtbl.TryGetWebMessageAsString.Call(
 		uintptr(unsafe.Pointer(a)),
 		uintptr(unsafe.Pointer(&pwstr)),
 	)
