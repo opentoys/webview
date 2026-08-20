@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/opentoys/webview/platform/windows/assets"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,43 +24,84 @@ type WebView2CreateEnvironmentWithOptions func(
 ) uintptr
 
 // loadWebView2Loader loads CreateCoreWebView2EnvironmentWithOptions from
-// WebView2Loader.dll. Searches: exe directory, PATH, then embedded fallback.
+// WebView2Loader.dll.
+//
+// Search order:
+//  1. X_WEBVIEW2LOADER_DLL env var (explicit path)
+//  2. Embedded DLL (assets.Webview2Loader) → extracted to temp
+//  3. System DLL (PATH / exe directory)
 func loadWebView2Loader() (WebView2CreateEnvironmentWithOptions, error) {
-	// Try system DLL first (searches PATH, exe dir).
+	// 1. Env var override.
+	if p := os.Getenv("X_WEBVIEW2LOADER_DLL"); p != "" {
+		if fn, err := loadDLL(p); err == nil {
+			return fn, nil
+		}
+	}
+
+	// 2. Embedded DLL (architecture-specific, extracted to temp).
+	if len(assets.Webview2Loader) > 0 {
+		if fn, err := extractAndLoad(assets.Webview2Loader); err == nil {
+			return fn, nil
+		}
+	}
+
+	// 3. System DLL (searches PATH, exe dir).
 	dll := syscall.NewLazyDLL("WebView2Loader.dll")
 	if err := dll.Load(); err == nil {
-		proc := dll.NewProc("CreateCoreWebView2EnvironmentWithOptions")
-		return makeLoaderFunc(proc), nil
+		return makeLoaderFunc(dll.NewProc("CreateCoreWebView2EnvironmentWithOptions")), nil
 	}
 
-	// Try exe directory.
+	// 4. Explicit exe-directory search.
+	if dir := exeDir(); dir != "" {
+		dllPath := filepath.Join(dir, "WebView2Loader.dll")
+		if _, err := os.Stat(dllPath); err == nil {
+			if fn, err := loadDLL(dllPath); err == nil {
+				return fn, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("webview: WebView2Loader.dll not found; install the WebView2 Runtime, place WebView2Loader.dll next to the executable, or set X_WEBVIEW2LOADER_DLL")
+}
+
+// extractAndLoad writes embedded DLL bytes to a temp file and loads it.
+// The filename includes a hash to avoid stale DLLs across versions.
+func extractAndLoad(data []byte) (WebView2CreateEnvironmentWithOptions, error) {
+	h := sha256.Sum256(data)
+	name := fmt.Sprintf("webview2loader_%x.dll", h[:8])
+	tmp := filepath.Join(os.TempDir(), name)
+
+	// Reuse existing file if hash matches.
+	if existing, err := os.ReadFile(tmp); err == nil {
+		eh := sha256.Sum256(existing)
+		if eh == h {
+			return loadDLL(tmp)
+		}
+	}
+
+	if err := os.WriteFile(tmp, data, 0755); err != nil {
+		return nil, err
+	}
+	return loadDLL(tmp)
+}
+
+// loadDLL loads a DLL from a given path and returns the loader function.
+func loadDLL(path string) (WebView2CreateEnvironmentWithOptions, error) {
+	dll := syscall.NewLazyDLL(path)
+	if err := dll.Load(); err != nil {
+		return nil, err
+	}
+	return makeLoaderFunc(dll.NewProc("CreateCoreWebView2EnvironmentWithOptions")), nil
+}
+
+// exeDir returns the directory of the current executable, or "" on error.
+func exeDir() string {
 	var buf [windows.MAX_PATH]uint16
 	n, err := windows.GetModuleFileName(0, &buf[0], uint32(len(buf)))
-	if err == nil && n > 0 {
-		dir := filepath.Dir(windows.UTF16ToString(buf[:n]))
-		dllPath := filepath.Join(dir, "WebView2Loader.dll")
-		if _, statErr := os.Stat(dllPath); statErr == nil {
-			dll2 := syscall.NewLazyDLL(dllPath)
-			if loadErr := dll2.Load(); loadErr == nil {
-				proc := dll2.NewProc("CreateCoreWebView2EnvironmentWithOptions")
-				return makeLoaderFunc(proc), nil
-			}
-		}
+	if err != nil || n == 0 {
+		return ""
 	}
-
-	// Try embedded DLL (written to temp).
-	if len(embeddedLoaderDLL) > 0 {
-		tmp := filepath.Join(os.TempDir(), "webview2loader.dll")
-		if err := os.WriteFile(tmp, embeddedLoaderDLL, 0755); err == nil {
-			dll3 := syscall.NewLazyDLL(tmp)
-			if loadErr := dll3.Load(); loadErr == nil {
-				proc := dll3.NewProc("CreateCoreWebView2EnvironmentWithOptions")
-				return makeLoaderFunc(proc), nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("webview: WebView2Loader.dll not found; install the WebView2 Runtime or place WebView2Loader.dll next to the executable")
+	return filepath.Dir(windows.UTF16ToString(buf[:n]))
 }
 
 func makeLoaderFunc(proc *syscall.LazyProc) WebView2CreateEnvironmentWithOptions {
