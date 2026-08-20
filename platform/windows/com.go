@@ -59,17 +59,6 @@ type _IUnknownVtbl struct {
 	Release        ComProc
 }
 
-// Known COM GUIDs for WebView2.
-var (
-	IIDICoreWebView2CreateEnvironmentCompletedHandler, _ = NewGUID("4E19640C-8A27-4C64-9837-0C3C3A635570")
-	IIDICoreWebView2CreateControllerCompletedHandler, _  = NewGUID("6C4819F3-C9B7-4496-81C0-1C68057E1C1A")
-	IIDICoreWebView2WebMessageReceivedEventHandler, _   = NewGUID("57213F19-00E7-4F37-9A21-47D0B47BBA51")
-	IIDICoreWebView2PermissionRequestedEventHandler, _   = NewGUID("15E1C6A3-C72A-4DF3-91D7-D097FBEC6BFD")
-	ICoreWebView2EnvironmentIID, _                       = NewGUID("B96D755E-0319-4E92-A296-23436F46A1FC")
-	ICoreWebView2ControllerIID, _                        = NewGUID("4D00C0D1-9434-4EB6-8078-818BE798743C")
-	ICoreWebView2IID, _                                  = NewGUID("76ECEACB-0462-4D93-AC27-2CDFF26E526A")
-)
-
 // utf16PtrFromStr converts a Go string to a *uint16 for Windows APIs.
 // Caller MUST call runtime.KeepAlive(p) after the syscall to prevent GC.
 func utf16PtrFromStr(s string) *uint16 {
@@ -81,7 +70,4 @@ func utf16PtrFromStr(s string) *uint16 {
 const S_OK = 0
 
 // COINIT values for CoInitializeEx.
-const (
-	COINIT_APARTMENTTHREADED = 0x2
-	COINIT_MULTITHREADED     = 0x0
-)
+const COINIT_APARTMENTTHREADED = 0x2

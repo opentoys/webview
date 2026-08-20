@@ -45,24 +45,18 @@ const (
 )
 
 // ShowWindow commands.
-const (
-	SW_SHOW = 5
-	SW_HIDE = 0
-)
+const SW_SHOW = 5
 
 // Window messages.
 const (
 	WM_SIZE    = 0x0005
 	WM_CLOSE   = 0x0010
 	WM_DESTROY = 0x0002
-	WM_QUIT    = 0x0012
-	WM_MOVE    = 0x0003
 	WM_APP     = 0x8000
 )
 
 // SetWindowPos flags.
 const (
-	SWP_NOSIZE     = 0x0001
 	SWP_NOMOVE     = 0x0002
 	SWP_NOZORDER   = 0x0004
 	SWP_NOACTIVATE = 0x0010

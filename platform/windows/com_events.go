@@ -35,6 +35,25 @@ func (a *iCoreWebView2WebMessageReceivedEventArgs) GetWebMessageAsString() strin
 	return s
 }
 
+// iCoreWebView2NavigationCompletedEventArgs wraps the event args COM interface.
+type iCoreWebView2NavigationCompletedEventArgs struct {
+	vtbl *iCoreWebView2NavigationCompletedEventArgsVtbl
+}
+
+type iCoreWebView2NavigationCompletedEventArgsVtbl struct {
+	_IUnknownVtbl
+	GetIsSuccess ComProc // 3: get_IsSuccess
+}
+
+func (a *iCoreWebView2NavigationCompletedEventArgs) GetIsSuccess() bool {
+	var val uintptr
+	a.vtbl.GetIsSuccess.Call(
+		uintptr(unsafe.Pointer(a)),
+		uintptr(unsafe.Pointer(&val)),
+	)
+	return val != 0
+}
+
 // iCoreWebView2PermissionRequestedEventHandler COM callback.
 type iCoreWebView2PermissionRequestedEventHandler struct {
 	vtbl *iCoreWebView2PermissionRequestedEventHandlerVtbl

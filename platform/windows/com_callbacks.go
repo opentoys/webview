@@ -2,10 +2,7 @@
 
 package windows
 
-import (
-	"syscall"
-	"unsafe"
-)
+import "unsafe"
 
 // --- Environment completed handler ---
 
@@ -182,7 +179,7 @@ type iCoreWebView2NavigationCompletedEventHandlerVtbl struct {
 }
 
 type navigationCompletedImpl interface {
-	InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess uintptr) uintptr
+	InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess bool) uintptr
 }
 
 var navigationCompletedVtblSingleton = iCoreWebView2NavigationCompletedEventHandlerVtbl{
@@ -202,15 +199,8 @@ func navigationCompletedQueryInterface(this *iCoreWebView2NavigationCompletedEve
 	return S_OK
 }
 
-func navigationCompletedInvoke(this *iCoreWebView2NavigationCompletedEventHandler, sender *iCoreWebView2, args uintptr) uintptr {
-	// args is ICoreWebView2NavigationCompletedEventArgs*.
-	// Its vtable: IUnknown(3) + get_IsSuccess = index 3.
-	// Read the vtable pointer from args, then call the function at offset 3.
-	vtblPtr := *(*uintptr)(unsafe.Pointer(args))
-	getIsSuccess := *(*uintptr)(unsafe.Pointer(vtblPtr + 3*unsafe.Sizeof(uintptr(0))))
-	var isSuccess uintptr
-	syscall.Syscall(getIsSuccess, 2, args, uintptr(unsafe.Pointer(&isSuccess)), 0)
-	return this.impl.InvokeNavigationCompleted(sender, isSuccess)
+func navigationCompletedInvoke(this *iCoreWebView2NavigationCompletedEventHandler, sender *iCoreWebView2, args *iCoreWebView2NavigationCompletedEventArgs) uintptr {
+	return this.impl.InvokeNavigationCompleted(sender, args.GetIsSuccess())
 }
 
 func newNavigationCompletedHandler(impl navigationCompletedImpl) *iCoreWebView2NavigationCompletedEventHandler {
