@@ -56,7 +56,6 @@ func loadWebView2Loader() (opt WebView2CreateEnvironmentWithOptions, e error) {
 
 	// 4. Temp directory
 	dllPath, e = writedll()
-	fmt.Println(dllPath, e)
 	if e == nil {
 		return loadDLL(dllPath)
 	}
