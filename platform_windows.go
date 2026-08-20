@@ -35,39 +35,5 @@ func buildPlatform(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
-	p.DialogFunc = func(kind DialogKind, message, defaultInput string) (string, bool) {
-		if w.dialog != nil {
-			return w.dialog(kind, message, defaultInput)
-		}
-		switch kind {
-		case DialogConfirm:
-			return "", false
-		default:
-			return defaultInput, true
-		}
-	}
-	// openPanelSet pushes W's handler into the platform.
-	w.openPanelSet = func(fn OpenPanelFunc) {
-		if fn != nil {
-			p.OpenPanelFunc = func(params win.OpenPanelParams, cb func([]string, bool)) {
-				fn(OpenPanelParams{
-					AllowsMultipleSelection: params.AllowsMultipleSelection,
-					AllowsDirectories:       params.AllowsDirectories,
-				}, cb)
-			}
-		} else {
-			p.OpenPanelFunc = nil
-		}
-	}
-	// downloadSet pushes W's handler into the platform.
-	w.downloadSet = func(fn DownloadFunc) {
-		if fn != nil {
-			p.DownloadFunc = func(name string, cb func(string)) {
-				fn(name, cb)
-			}
-		} else {
-			p.DownloadFunc = nil
-		}
-	}
 	return p
 }

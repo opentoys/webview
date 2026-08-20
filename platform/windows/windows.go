@@ -33,12 +33,6 @@ const (
 	SizeFixed
 )
 
-// OpenPanelParams describes a file-open dialog trigger.
-type OpenPanelParams struct {
-	AllowsMultipleSelection bool
-	AllowsDirectories       bool
-}
-
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
 	// COM state (set during async init, read after ready==1).
@@ -52,11 +46,8 @@ type Platform struct {
 	wndProc    uintptr
 
 	// Callback wiring.
-	MessageFunc   func(string)
-	BoundFuncs    func() []string
-	DialogFunc    func(kind DialogKind, message, defaultInput string) (string, bool)
-	OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
-	DownloadFunc  func(suggestedFilename string, callback func(savePath string))
+	MessageFunc func(string)
+	BoundFuncs  func() []string
 
 	// Options.
 	Debug     bool
@@ -489,9 +480,7 @@ func (p *Platform) EvalHost(js string) {
 }
 
 func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
-	if p.DialogFunc != nil {
-		return p.DialogFunc(kind, message, defaultInput)
-	}
+	// WebView2 handles dialogs natively via chrome.webview.postMessage.
 	switch kind {
 	case DialogConfirm:
 		return "", false
