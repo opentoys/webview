@@ -25,6 +25,11 @@ const (
 
 var errUnsupported = errors.New("webview: unsupported platform")
 
+type W struct {
+	p      Platform
+	bridge *bridge
+}
+
 func buildPlatform(opts Options, w *W) Platform {
 	panic("webview: unsupported platform; only darwin and windows are implemented")
 }

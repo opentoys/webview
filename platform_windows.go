@@ -23,6 +23,11 @@ const (
 	SizeFixed = win.SizeFixed
 )
 
+type W struct {
+	p      Platform
+	bridge *bridge
+}
+
 // buildPlatform creates the platform and wires the message handler to the
 // bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply
 // is eval'd back into the webview on the host thread (non-blocking).

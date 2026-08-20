@@ -23,10 +23,60 @@ const (
 	SizeFixed = darwin.SizeFixed
 )
 
-// buildPlatform creates the platform and wires the message handler to the
-// bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply
-// is eval'd back into the webview on the host thread (non-blocking).
+// OpenPanelParams describes the <input type=file> that triggered the picker.
+type OpenPanelParams struct {
+	AllowsMultipleSelection bool
+	AllowsDirectories       bool
+}
+
+// OpenPanelFunc replaces the native file picker for <input type=file>.
+type OpenPanelFunc func(params OpenPanelParams, callback func(paths []string, ok bool))
+
+// DownloadFunc replaces the native save panel for file downloads.
+type DownloadFunc func(suggestedFilename string, callback func(savePath string))
+
+// W is the top-level webview handle. Darwin includes handler fields for
+// dialog, file-panel, and download overrides.
+type W struct {
+	p         Platform
+	bridge    *bridge
+	dialog    func(kind DialogKind, message, defaultInput string) (string, bool)
+	openPanel OpenPanelFunc
+	openPanelSet func(OpenPanelFunc)
+	download     DownloadFunc
+	downloadSet  func(DownloadFunc)
+}
+
+// SetDialogHandler overrides the default JS dialog handler.
+func (w *W) SetDialogHandler(h func(kind DialogKind, message, defaultInput string) (string, bool)) {
+	w.dialog = h
+}
+
+// SetOpenPanelHandler replaces the native file picker for <input type=file>.
+func (w *W) SetOpenPanelHandler(h OpenPanelFunc) {
+	w.openPanel = h
+	if w.openPanelSet != nil {
+		w.openPanelSet(h)
+	}
+}
+
+// SetDownloadHandler replaces the native save panel for file downloads.
+func (w *W) SetDownloadHandler(h DownloadFunc) {
+	w.download = h
+	if w.downloadSet != nil {
+		w.downloadSet(h)
+	}
+}
+
 func buildPlatform(opts Options, w *W) Platform {
+	w.dialog = func(kind DialogKind, message, defaultInput string) (string, bool) {
+		switch kind {
+		case DialogConfirm:
+			return "", false
+		default:
+			return defaultInput, true
+		}
+	}
 	p := darwin.New()
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
@@ -34,8 +84,6 @@ func buildPlatform(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
-	// DialogFunc routes WKUIDelegate calls to W's dialog handler.
-	// Runs on the host thread (same as MessageFunc).
 	p.DialogFunc = func(kind DialogKind, message, defaultInput string) (string, bool) {
 		if w.dialog != nil {
 			return w.dialog(kind, message, defaultInput)
@@ -47,9 +95,6 @@ func buildPlatform(opts Options, w *W) Platform {
 			return defaultInput, true
 		}
 	}
-	// openPanelSet pushes W's handler into the platform. When nil (no
-	// SetOpenPanelHandler called), p.OpenPanelFunc stays nil and showOpenPanel
-	// runs the native NSOpenPanel — which is the correct default.
 	w.openPanelSet = func(fn OpenPanelFunc) {
 		if fn != nil {
 			p.OpenPanelFunc = func(params darwin.OpenPanelParams, cb func([]string, bool)) {
@@ -62,9 +107,6 @@ func buildPlatform(opts Options, w *W) Platform {
 			p.OpenPanelFunc = nil
 		}
 	}
-	// downloadSet pushes W's handler into the platform. When nil (no
-	// SetDownloadHandler called), p.DownloadFunc stays nil and showSavePanel
-	// runs the native NSSavePanel — which is the correct default.
 	w.downloadSet = func(fn DownloadFunc) {
 		if fn != nil {
 			p.DownloadFunc = func(suggestedFilename string, cb func(string)) {
