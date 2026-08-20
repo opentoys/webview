@@ -369,7 +369,7 @@ func (p *Platform) InvokePermissionRequested(sender *iCoreWebView2, args uintptr
 
 // InvokeNavigationCompleted is called after each page navigation finishes.
 // It injects the bootstrap JS so bound functions are available on the page.
-func (p *Platform) InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess uintptr) uintptr {
+func (p *Platform) InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess bool) uintptr {
 	// Inject the bootstrap JS after each navigation.
 	var names []string
 	if p.BoundFuncs != nil {

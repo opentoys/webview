@@ -37,7 +37,7 @@ func main() {
 		style="font-size:1.2em;padding:0.5em 1em">+1</button>
 	<hr>
 	<h2>File Input Test</h2>
-	<input type="file" id="fileInput" multiple>
+	<input type="file" id="fileInput" accept=".txt,text/plain" multiple>
 	<p id="fileInfo"></p>
 	<script>
 	document.getElementById('fileInput').addEventListener('change', function(e) {
