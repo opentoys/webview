@@ -13,9 +13,9 @@ const (
 	SizeFixed = win.SizeFixed
 )
 
-type SchemeRequest = win.SchemeRequest
-type SchemeResponse = win.SchemeResponse
-type SchemeHandler = win.SchemeHandler
+type ResourceRequest = win.ResourceRequest
+type ResourceResponse = win.ResourceResponse
+type ResourceHandler = win.ResourceHandler
 
 // buildPlatform creates the platform and wires the message handler to the
 // bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply

@@ -4,9 +4,11 @@ package windows
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -18,7 +20,7 @@ import (
 type DialogKind int
 
 const (
-	DialogAlert   DialogKind = iota
+	DialogAlert DialogKind = iota
 	DialogConfirm
 	DialogPrompt
 )
@@ -27,28 +29,28 @@ const (
 type SizeHint int
 
 const (
-	SizeNone  SizeHint = iota
+	SizeNone SizeHint = iota
 	SizeMin
 	SizeMax
 	SizeFixed
 )
 
-// SchemeRequest matches the webview package's SchemeRequest.
-type SchemeRequest struct {
+// ResourceRequest matches the webview package's ResourceRequest.
+type ResourceRequest struct {
 	URL     string
 	Method  string
 	Headers map[string]string
 }
 
-// SchemeResponse matches the webview package's SchemeResponse.
-type SchemeResponse struct {
+// ResourceResponse matches the webview package's ResourceResponse.
+type ResourceResponse struct {
 	StatusCode int
 	Headers    map[string]string
 	Body       []byte
 }
 
-// SchemeHandler matches the webview package's SchemeHandler.
-type SchemeHandler func(req SchemeRequest, respond func(SchemeResponse))
+// ResourceHandler matches the webview package's ResourceHandler.
+type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
@@ -77,6 +79,11 @@ type Platform struct {
 	msgReceivedHandler   *iCoreWebView2WebMessageReceivedEventHandler
 	permRequestedHandler *iCoreWebView2PermissionRequestedEventHandler
 	navCompletedHandler  *iCoreWebView2NavigationCompletedEventHandler
+	webResourceHandler   *iCoreWebView2WebResourceRequestedEventHandler
+	webResourceToken     eventToken
+
+	// Resource interception.
+	schemeHandlers map[string]ResourceHandler
 
 	// Loader.
 	createEnv WebView2CreateEnvironmentWithOptions
@@ -97,8 +104,9 @@ type Platform struct {
 // New creates a Platform instance.
 func New() *Platform {
 	return &Platform{
-		runDone:    make(chan struct{}),
-		pendingURL: "about:blank",
+		runDone:        make(chan struct{}),
+		pendingURL:     "about:blank",
+		schemeHandlers: make(map[string]ResourceHandler),
 	}
 }
 
@@ -333,6 +341,17 @@ func (p *Platform) initWebView() {
 	p.webview.PutAreDevToolsEnabled(p.Debug)
 	p.webview.PutIsStatusBarEnabled(false)
 
+	// Register WebResourceRequested for intercepted schemes.
+	if len(p.schemeHandlers) > 0 {
+		p.webResourceHandler = newWebResourceRequestedHandler(p)
+		p.webview.AddWebResourceRequested(p.webResourceHandler, &p.webResourceToken)
+		for scheme := range p.schemeHandlers {
+			// Filter: *://<scheme>.localhost/*
+			filter := fmt.Sprintf("*://%s.localhost/*", scheme)
+			p.webview.AddWebResourceRequestedFilter(filter, webResourceContextAll)
+		}
+	}
+
 	// Set bounds and visibility (reference order: resize → visible → show).
 	p.resizeWidget()
 	p.controller.PutIsVisible(true)
@@ -368,7 +387,7 @@ func (p *Platform) navigatePending() {
 	if html != "" {
 		p.webview.NavigateToString(html)
 	} else if url != "" {
-		p.webview.Navigate(url)
+		p.webview.Navigate(p.rewriteSchemeURL(url))
 	}
 }
 
@@ -459,7 +478,7 @@ func (p *Platform) Navigate(url string) error {
 		p.pendingHTML = ""
 		return nil
 	}
-	p.webview.Navigate(url)
+	p.webview.Navigate(p.rewriteSchemeURL(url))
 	return nil
 }
 
@@ -481,6 +500,93 @@ func (p *Platform) Eval(js string) error {
 	}
 	p.webview.ExecuteScript(js, 0)
 	return nil
+}
+
+// rewriteSchemeURL converts scheme://host/path to http://scheme.localhost/path
+// for registered schemes, so WebResourceRequested can intercept them.
+func (p *Platform) rewriteSchemeURL(rawURL string) string {
+	for scheme := range p.schemeHandlers {
+		if strings.HasPrefix(rawURL, scheme+"://") {
+			u, err := url.Parse(rawURL)
+			if err != nil {
+				return rawURL
+			}
+			return fmt.Sprintf("http://%s.localhost/%s", scheme, strings.TrimPrefix(u.Path, "/"))
+		}
+	}
+	return rawURL
+}
+
+// InvokeWebResourceRequested handles WebResourceRequested events from WebView2.
+// Extracts the scheme from the URL, looks up the handler, and dispatches.
+func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCoreWebView2WebResourceRequestedEventArgs) uintptr {
+	req := args.GetRequest()
+	if req == nil {
+		return 0
+	}
+
+	uri := req.GetUri()
+	if uri == "" {
+		return 0
+	}
+
+	// Parse scheme from URL: http://app.localhost/path → "app"
+	scheme := ""
+	u, err := url.Parse(uri)
+	if err == nil {
+		host := u.Hostname()
+		if idx := strings.Index(host, "."); idx > 0 {
+			scheme = host[:idx]
+		}
+	}
+	handler, ok := p.schemeHandlers[scheme]
+	if !ok {
+		return 0
+	}
+
+	method := req.GetMethod()
+	if method == "" {
+		method = "GET"
+	}
+	headers := req.GetHeaders()
+
+	sr := ResourceRequest{
+		URL:     uri,
+		Method:  method,
+		Headers: headers,
+	}
+
+	var gotResponse bool
+	var syncResp *ResourceResponse
+	handler(sr, func(resp *ResourceResponse) {
+		if gotResponse {
+			// Async response: dispatch to UI thread.
+			p.dispatch.push(func() {
+				p.applyResponse(resp)
+			})
+			pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
+			return
+		}
+		// Synchronous response: store and apply after handler returns.
+		gotResponse = true
+		syncResp = resp
+	})
+
+	if gotResponse && syncResp != nil {
+		p.applyResponse(syncResp)
+	}
+
+	return 0
+}
+
+// applyResponse delivers the resource response to the webview by injecting
+// the HTML body directly. Called on the UI thread.
+func (p *Platform) applyResponse(resp *ResourceResponse) {
+	if p.webview == nil || resp == nil || len(resp.Body) == 0 {
+		return
+	}
+	html := string(resp.Body)
+	p.webview.NavigateToString(html)
 }
 
 // EvalHost evaluates JS from any goroutine by dispatching to the COM thread.
@@ -506,6 +612,10 @@ func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string
 	}
 }
 
-// RegisterScheme is a stub; custom URL schemes are not yet implemented for
-// Windows/WebView2.
-func (p *Platform) RegisterScheme(scheme string, handler SchemeHandler) {}
+// InterceptResource registers a resource handler for the given URL scheme.
+// Must be called before Run(). scheme is the URL scheme without "://"
+// (e.g. "app"). On Windows, URLs like app://path are rewritten to
+// http://app.localhost/path and intercepted via WebResourceRequested.
+func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
+	p.schemeHandlers[scheme] = handler
+}

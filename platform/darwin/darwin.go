@@ -35,23 +35,24 @@ const (
 	SizeFixed
 )
 
-// SchemeRequest describes an incoming custom-scheme request.
-type SchemeRequest struct {
+// ResourceRequest describes an incoming resource request.
+type ResourceRequest struct {
 	URL     string
 	Method  string
 	Headers map[string]string
 }
 
-// SchemeResponse is returned via callback to fulfill a custom-scheme request.
-type SchemeResponse struct {
+// ResourceResponse is returned via callback to fulfill a resource request.
+type ResourceResponse struct {
 	StatusCode int
 	Headers    map[string]string
 	Body       []byte
 }
 
-// SchemeHandler handles requests for a registered custom URL scheme.
+// ResourceHandler handles intercepted resource requests.
 // respond must be called exactly once from any goroutine.
-type SchemeHandler func(req SchemeRequest, respond func(SchemeResponse))
+// Pass nil to respond to skip interception (not supported on all platforms).
+type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
@@ -107,7 +108,7 @@ var scriptHandler objc.ID
 
 // schemeHandlerInstances maps scheme name → Go handler. Written once per
 // scheme in setup(), read from ObjC callbacks on the host thread.
-var schemeHandlerInstances = map[string]SchemeHandler{}
+var schemeHandlerInstances = map[string]ResourceHandler{}
 
 // schemeTaskStore holds WKURLSchemeTask objects by numeric ID, preventing GC
 // before the async Go handler calls back.
@@ -640,12 +641,12 @@ func init() {
 		// Store task to prevent GC; get numeric ID for the closure.
 		taskID := activeSchemeTasks.put(task)
 
-		sr := SchemeRequest{
+		sr := ResourceRequest{
 			URL:     urlGo,
 			Method:  methodGo,
 			Headers: headersGo,
 		}
-		handler(sr, func(resp SchemeResponse) {
+		handler(sr, func(resp *ResourceResponse) {
 			// This callback may be called from any goroutine.
 			// Dispatch to the host thread.
 			mainThread(func() {
@@ -654,7 +655,12 @@ func init() {
 					return // task was cancelled
 				}
 				activeSchemeTasks.delete(taskID)
-				respondToSchemeTask(t, resp, nsURL)
+				if resp == nil {
+					// Handler chose not to respond; send404.
+					respondToSchemeTask(t, ResourceResponse{StatusCode: 404}, nsURL)
+				} else {
+					respondToSchemeTask(t, *resp, nsURL)
+				}
 			})
 		})
 	}
@@ -804,16 +810,16 @@ type Platform struct {
 	pendingURL string
 	// runDone is closed by Close() to signal Run() to return.
 	runDone chan struct{}
-	// schemeHandlers stores registered custom URL scheme handlers, keyed by
-	// scheme name (without "://"). Populated before Run() via RegisterScheme,
+	// schemeHandlers stores registered resource handlers, keyed by scheme
+	// name (without "://"). Populated before Run() via InterceptResource,
 	// wired to WKWebViewConfiguration in setup().
-	schemeHandlers map[string]SchemeHandler
+	schemeHandlers map[string]ResourceHandler
 }
 
 func New() *Platform {
 	return &Platform{
 		runDone:        make(chan struct{}),
-		schemeHandlers: make(map[string]SchemeHandler),
+		schemeHandlers: make(map[string]ResourceHandler),
 	}
 }
 
@@ -855,9 +861,10 @@ func (p *Platform) Close() error {
 	return nil
 }
 
-// RegisterScheme registers a custom URL scheme handler. Must be called before
-// Run(). scheme is the URL scheme without "://" (e.g. "app").
-func (p *Platform) RegisterScheme(scheme string, handler SchemeHandler) {
+// InterceptResource registers a resource handler for the given URL scheme.
+// Must be called before Run(). scheme is the URL scheme without "://"
+// (e.g. "app").
+func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
 	p.schemeHandlers[scheme] = handler
 }
 
@@ -1182,9 +1189,9 @@ func looksLikeHTML(body []byte) bool {
 	return strings.HasPrefix(s, "<!doctype") || strings.HasPrefix(s, "<html") || strings.HasPrefix(s, "<head")
 }
 
-// respondToSchemeTask sends a SchemeResponse to a WKURLSchemeTask. Must be
+// respondToSchemeTask sends a ResourceResponse to a WKURLSchemeTask. Must be
 // called on the host thread.
-func respondToSchemeTask(task objc.ID, resp SchemeResponse, reqURL objc.ID) {
+func respondToSchemeTask(task objc.ID, resp ResourceResponse, reqURL objc.ID) {
 	if resp.StatusCode == 0 {
 		resp.StatusCode = 200
 	}
