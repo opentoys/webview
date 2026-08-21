@@ -18,13 +18,6 @@ var (
 	errNoWebView = errors.New("darwin: failed to alloc WKWebView")
 )
 
-type DialogKind int
-
-const (
-	DialogAlert DialogKind = iota
-	DialogConfirm
-	DialogPrompt
-)
 
 type SizeHint int
 
@@ -176,6 +169,8 @@ var (
 	nsHTTPURLResponseClass objc.Class
 	nsDataClass            objc.Class
 	nsDictionaryClass      objc.Class
+	nsAlertClass           objc.Class
+	nsTextFieldClass       objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -261,6 +256,15 @@ var (
 	dictionaryWithObjectsForKeysCountSel objc.SEL
 	retainSel                           objc.SEL
 	releaseSel                          objc.SEL
+	setMessageTextSel                   objc.SEL
+	setInformativeTextSel               objc.SEL
+	addButtonWithTitleSel               objc.SEL
+	alertRunModalSel                    objc.SEL
+	setAccessoryViewSel                 objc.SEL
+	nsTextFieldSel                      objc.SEL
+	stringValueSel                      objc.SEL
+	setInitialFirstResponderSel         objc.SEL
+	windowSel                           objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -306,6 +310,8 @@ func init() {
 	nsHTTPURLResponseClass = objc.GetClass("NSHTTPURLResponse")
 	nsDataClass = objc.GetClass("NSData")
 	nsDictionaryClass = objc.GetClass("NSDictionary")
+	nsAlertClass        = objc.GetClass("NSAlert")
+	nsTextFieldClass    = objc.GetClass("NSTextField")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -388,6 +394,15 @@ func init() {
 	initWithURLStatusCodeHTTPVersionHeaderFieldsSel = objc.RegisterName("initWithURL:statusCode:HTTPVersion:headerFields:")
 	dataWithBytesLengthSel = objc.RegisterName("dataWithBytes:length:")
 	dictionaryWithObjectsForKeysCountSel = objc.RegisterName("dictionaryWithObjects:forKeys:count:")
+	setMessageTextSel      = objc.RegisterName("setMessageText:")
+	setInformativeTextSel  = objc.RegisterName("setInformativeText:")
+	addButtonWithTitleSel  = objc.RegisterName("addButtonWithTitle:")
+	alertRunModalSel       = objc.RegisterName("runModal")
+	setAccessoryViewSel    = objc.RegisterName("setAccessoryView:")
+	nsTextFieldSel         = objc.RegisterName("textFieldWithString:")
+	stringValueSel         = objc.RegisterName("stringValue")
+	setInitialFirstResponderSel = objc.RegisterName("setInitialFirstResponder:")
+	windowSel              = objc.RegisterName("window")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -460,50 +475,64 @@ func init() {
 		[]*objc.Protocol{objc.GetProtocol("WKUIDelegate")},
 		nil,
 		[]objc.MethodDef{
-			// Alert: completion block takes no args.
+			// Alert: native NSAlert with OK button.
 			{Cmd: objc.RegisterName("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:"),
 				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, msg objc.ID, frame objc.ID, completion objc.ID) {
-					text := goString(msg)
-					dp := activePlatform
-					if dp != nil && dp.DialogFunc != nil {
-						dp.DialogFunc(DialogAlert, text, "")
-					}
-					callBlock(completion)
-				}},
-			// Confirm: completion block takes BOOL → pass true for OK.
-			{Cmd: objc.RegisterName("webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:"),
-				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, msg objc.ID, frame objc.ID, completion objc.ID) {
-					text := goString(msg)
-					ok := false
-					dp := activePlatform
-					if dp != nil && dp.DialogFunc != nil {
-						_, ok = dp.DialogFunc(DialogConfirm, text, "")
-					}
-					// BOOL as int64: on arm64 BOOL = signed char; purego
-					// marshals Go int64 → C signed char via encodeType.
-					var confirm int64
-					if ok {
-						confirm = 1
-					}
-					callBlock(completion, confirm)
-				}},
-			// Prompt: completion block takes NSString (or nil for cancel).
-			{Cmd: objc.RegisterName("webView:runJavaScriptPromptWithPrompt:defaultText:initiatedByFrame:completionHandler:"),
-				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, prompt objc.ID, defaultText objc.ID, frame objc.ID, completion objc.ID) {
-					text := goString(prompt)
-					def := goString(defaultText)
-					dp := activePlatform
-					if dp != nil && dp.DialogFunc != nil {
-						result, ok := dp.DialogFunc(DialogPrompt, text, def)
-						if ok {
-							callBlock(completion, nsString(result))
-						} else {
-							callBlock(completion, objc.ID(0))
-						}
+					safe := objc.Block(completion).Copy()
+					if safe == 0 {
+						callBlock(completion)
 						return
 					}
-					// Default: return the default text.
-					callBlock(completion, nsString(def))
+					defer safe.Release()
+					alert := objc.ID(nsAlertClass).Send(allocSel).Send(initSel)
+					alert.Send(setMessageTextSel, nsString(goString(msg)))
+					alert.Send(addButtonWithTitleSel, nsString("OK"))
+					alert.Send(alertRunModalSel)
+					callBlock(objc.ID(safe))
+				}},
+			// Confirm: native NSAlert with OK/Cancel buttons.
+			{Cmd: objc.RegisterName("webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:"),
+				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, msg objc.ID, frame objc.ID, completion objc.ID) {
+					safe := objc.Block(completion).Copy()
+					if safe == 0 {
+						callBlock(completion, int64(0))
+						return
+					}
+					defer safe.Release()
+					alert := objc.ID(nsAlertClass).Send(allocSel).Send(initSel)
+					alert.Send(setMessageTextSel, nsString(goString(msg)))
+					alert.Send(addButtonWithTitleSel, nsString("OK"))
+					alert.Send(addButtonWithTitleSel, nsString("Cancel"))
+					var confirm int64
+					if alert.Send(alertRunModalSel) == 1000 {
+						confirm = 1
+					}
+					callBlock(objc.ID(safe), confirm)
+				}},
+			// Prompt: native NSAlert with text field + OK/Cancel.
+			{Cmd: objc.RegisterName("webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:"),
+				Fn: func(id objc.ID, sel objc.SEL, webView objc.ID, prompt objc.ID, defaultText objc.ID, frame objc.ID, completion objc.ID) {
+					def := goString(defaultText)
+					safe := objc.Block(completion).Copy()
+					if safe == 0 {
+						callBlock(completion, nsString(def))
+						return
+					}
+					defer safe.Release()
+					alert := objc.ID(nsAlertClass).Send(allocSel).Send(initSel)
+					alert.Send(setMessageTextSel, nsString(goString(prompt)))
+					alert.Send(addButtonWithTitleSel, nsString("OK"))
+					alert.Send(addButtonWithTitleSel, nsString("Cancel"))
+					tf := objc.ID(nsTextFieldClass).Send(allocSel).Send(initWithFrameOnlySel, rect(0, 0, 300, 24))
+					tf.Send(objc.RegisterName("setStringValue:"), nsString(def))
+					alert.Send(setAccessoryViewSel, tf)
+					alert.Send(windowSel).Send(setInitialFirstResponderSel, tf)
+					r := alert.Send(alertRunModalSel)
+					if r == 1000 {
+						callBlock(objc.ID(safe), tf.Send(stringValueSel))
+					} else {
+						callBlock(objc.ID(safe), objc.ID(0))
+					}
 				}},
 			// <input type=file> → native NSOpenPanel (see openpanel.go).
 			{Cmd: objc.RegisterName("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:"),
@@ -774,9 +803,6 @@ type Platform struct {
 	// BoundFuncs returns the JS-visible func names; the bootstrap script
 	// defines window.<name> stubs from it at page start.
 	BoundFuncs func() []string
-	// DialogFunc is called by the WKUIDelegate for JS alert/confirm/prompt.
-	// Called on the host thread (same thread as MessageFunc).
-	DialogFunc func(kind DialogKind, message, defaultInput string) (string, bool)
 	// OpenPanelFunc overrides the native NSOpenPanel sheet for <input type=file>.
 	// When set, WebKit does not show the default panel; the app must call
 	// callback with the absolute paths the user chose, or (nil,false) to
@@ -1342,8 +1368,4 @@ func (p *Platform) EvalHost(js string) {
 func (p *Platform) Eval(js string) error {
 	p.evalJS(js)
 	return nil
-}
-
-func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
-	return defaultInput, false
 }

@@ -16,15 +16,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// DialogKind matches the webview package's DialogKind.
-type DialogKind int
-
-const (
-	DialogAlert DialogKind = iota
-	DialogConfirm
-	DialogPrompt
-)
-
 // SizeHint matches the webview package's SizeHint.
 type SizeHint int
 
@@ -624,16 +615,6 @@ func (p *Platform) EvalHost(js string) {
 		}
 	})
 	pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
-}
-
-func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string, bool) {
-	// WebView2 handles dialogs natively via chrome.webview.postMessage.
-	switch kind {
-	case DialogConfirm:
-		return "", false
-	default:
-		return defaultInput, true
-	}
 }
 
 // InterceptResource registers a resource handler for the given URL scheme.

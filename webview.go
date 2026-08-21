@@ -1,6 +1,6 @@
 package webview
 
-// DialogKind, SizeHint and their constants are defined per-platform in
+// SizeHint and its constants are defined per-platform in
 // platform_darwin.go / platform_other.go to avoid importing platform/darwin
 // in the common file (which would break linux/windows cross-compile).
 
