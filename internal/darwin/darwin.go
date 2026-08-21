@@ -158,6 +158,7 @@ var (
 	nsDictionaryClass      objc.Class
 	nsAlertClass           objc.Class
 	nsTextFieldClass       objc.Class
+	nsErrorClass           objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -252,6 +253,8 @@ var (
 	stringValueSel                      objc.SEL
 	setInitialFirstResponderSel         objc.SEL
 	windowSel                           objc.SEL
+	errorWithDomainSel                  objc.SEL // [NSError errorWithDomain:code:userInfo:]
+	didFailWithErrorSel                 objc.SEL // [task didFailWithError:]
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -299,6 +302,7 @@ func init() {
 	nsDictionaryClass = objc.GetClass("NSDictionary")
 	nsAlertClass        = objc.GetClass("NSAlert")
 	nsTextFieldClass    = objc.GetClass("NSTextField")
+	nsErrorClass        = objc.GetClass("NSError")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -390,6 +394,8 @@ func init() {
 	stringValueSel         = objc.RegisterName("stringValue")
 	setInitialFirstResponderSel = objc.RegisterName("setInitialFirstResponder:")
 	windowSel              = objc.RegisterName("window")
+	errorWithDomainSel     = objc.RegisterName("errorWithDomain:code:userInfo:")
+	didFailWithErrorSel    = objc.RegisterName("didFailWithError:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -662,21 +668,42 @@ func init() {
 			Method:  methodGo,
 			Headers: headersGo,
 		}
+
+		// failTask sends didFailWithError: to the task on the host thread.
+		failTask := func() {
+			mainThread(func() {
+				t, ok := activeSchemeTasks.get(taskID)
+				if !ok {
+					return
+				}
+				activeSchemeTasks.delete(taskID)
+				nsErr := objc.ID(nsErrorClass).Send(errorWithDomainSel,
+					nsString("NSURLErrorDomain"), int64(-1100), objc.ID(0))
+				t.Send(didFailWithErrorSel, nsErr)
+			})
+		}
+
+		// Recover from handler panics — ObjC callbacks cannot unwind through C.
+		defer func() {
+			if r := recover(); r != nil {
+				failTask()
+			}
+		}()
+
 		handler(sr, func(resp *ResourceResponse) {
 			// This callback may be called from any goroutine.
 			// Dispatch to the host thread.
+			if resp == nil {
+				failTask()
+				return
+			}
 			mainThread(func() {
 				t, ok := activeSchemeTasks.get(taskID)
 				if !ok {
 					return // task was cancelled
 				}
 				activeSchemeTasks.delete(taskID)
-				if resp == nil {
-					// Handler chose not to respond; send404.
-					respondToSchemeTask(t, ResourceResponse{StatusCode: 404}, nsURL)
-				} else {
-					respondToSchemeTask(t, *resp, nsURL)
-				}
+				respondToSchemeTask(t, *resp, nsURL)
 			})
 		})
 	}

@@ -325,8 +325,8 @@ func (p *Platform) initWebView() {
 		p.webResourceHandler = newWebResourceRequestedHandler(p)
 		p.webview.AddWebResourceRequested(p.webResourceHandler, &p.webResourceToken)
 		for scheme := range p.schemeHandlers {
-			// Filter: *://<scheme>.localhost/*
-			filter := fmt.Sprintf("*://%s.localhost/*", scheme)
+			// Filter: https://<scheme>.localhost/*
+			filter := fmt.Sprintf("https://%s.localhost/*", scheme)
 			p.webview.AddWebResourceRequestedFilter(filter, webResourceContextAll)
 		}
 	}
@@ -481,8 +481,10 @@ func (p *Platform) Eval(js string) error {
 	return nil
 }
 
-// rewriteSchemeURL converts scheme://host/path to http://scheme.localhost/path
+// rewriteSchemeURL converts scheme://host/path to https://scheme.localhost/path
 // for registered schemes, so WebResourceRequested can intercept them.
+// The https vhost gives a secure context (localStorage, crypto.subtle, etc.)
+// without opening a TCP port.
 func (p *Platform) rewriteSchemeURL(rawURL string) string {
 	for scheme := range p.schemeHandlers {
 		if strings.HasPrefix(rawURL, scheme+"://") {
@@ -490,7 +492,14 @@ func (p *Platform) rewriteSchemeURL(rawURL string) string {
 			if err != nil {
 				return rawURL
 			}
-			return fmt.Sprintf("http://%s.localhost/%s", scheme, strings.TrimPrefix(u.Path, "/"))
+			out := fmt.Sprintf("https://%s.localhost/%s", scheme, strings.TrimPrefix(u.Path, "/"))
+			if u.RawQuery != "" {
+				out += "?" + u.RawQuery
+			}
+			if u.Fragment != "" {
+				out += "#" + u.Fragment
+			}
+			return out
 		}
 	}
 	return rawURL
@@ -509,7 +518,7 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		return 0
 	}
 
-	// Parse scheme from URL: http://app.localhost/path → "app"
+	// Parse scheme from URL: https://app.localhost/path → "app"
 	scheme := ""
 	u, err := url.Parse(uri)
 	if err == nil {
@@ -575,10 +584,12 @@ func (p *Platform) applyResponse(args *iCoreWebView2WebResourceRequestedEventArg
 		deferral.Complete()
 		return
 	}
+	defer stream.vtbl.Release.Call(uintptr(unsafe.Pointer(stream)))
 
 	webResp := p.env.CreateWebResourceResponse(
 		"OK", resp.StatusCode, "", stream,
 	)
+	defer webResp.vtbl.Release.Call(uintptr(unsafe.Pointer(webResp)))
 
 	if len(resp.Headers) > 0 {
 		var parts []string
@@ -608,7 +619,8 @@ func (p *Platform) EvalHost(js string) {
 // InterceptResource registers a resource handler for the given URL scheme.
 // Must be called before Run(). scheme is the URL scheme without "://"
 // (e.g. "app"). On Windows, URLs like app://path are rewritten to
-// http://app.localhost/path and intercepted via WebResourceRequested.
+// https://app.localhost/path (secure context) and intercepted via
+// WebResourceRequested.
 func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
 	p.schemeHandlers[scheme] = handler
 }
