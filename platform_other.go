@@ -2,32 +2,24 @@
 
 package webview
 
-import "errors"
+import (
+	"errors"
 
-// Mirror the darwin package's type/const definitions so the common file
-// (webview.go) compiles without importing platform/darwin.
-type SizeHint int
-
-const (
-	SizeNone SizeHint = iota
-	SizeMin
-	SizeMax
-	SizeFixed
+	"github.com/opentoys/webview/internal/types"
 )
 
-type ResourceRequest struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-}
+type SizeHint = types.SizeHint
 
-type ResourceResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	Body       []byte
-}
+const (
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
+)
 
-type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
 
 var errUnsupported = errors.New("webview: unsupported platform")
 

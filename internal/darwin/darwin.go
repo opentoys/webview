@@ -11,6 +11,7 @@ import (
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/types"
 )
 
 var (
@@ -19,33 +20,19 @@ var (
 )
 
 
-type SizeHint int
+// Re-export shared types from internal/types.
+type SizeHint = types.SizeHint
 
 const (
-	SizeNone SizeHint = iota
-	SizeMin
-	SizeMax
-	SizeFixed
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
 )
 
-// ResourceRequest describes an incoming resource request.
-type ResourceRequest struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-}
-
-// ResourceResponse is returned via callback to fulfill a resource request.
-type ResourceResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	Body       []byte
-}
-
-// ResourceHandler handles intercepted resource requests.
-// respond must be called exactly once from any goroutine.
-// Pass nil to respond to skip interception (not supported on all platforms).
-type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
 
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0

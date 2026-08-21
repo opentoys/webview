@@ -13,35 +13,23 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/opentoys/webview/internal/types"
 	"golang.org/x/sys/windows"
 )
 
-// SizeHint matches the webview package's SizeHint.
-type SizeHint int
+// Re-export shared types from internal/types.
+type SizeHint = types.SizeHint
 
 const (
-	SizeNone SizeHint = iota
-	SizeMin
-	SizeMax
-	SizeFixed
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
 )
 
-// ResourceRequest matches the webview package's ResourceRequest.
-type ResourceRequest struct {
-	URL     string
-	Method  string
-	Headers map[string]string
-}
-
-// ResourceResponse matches the webview package's ResourceResponse.
-type ResourceResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	Body       []byte
-}
-
-// ResourceHandler matches the webview package's ResourceHandler.
-type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {

@@ -2,20 +2,23 @@
 
 package webview
 
-import "github.com/opentoys/webview/platform/darwin"
-
-type SizeHint = darwin.SizeHint
-
-const (
-	SizeNone  = darwin.SizeNone
-	SizeMin   = darwin.SizeMin
-	SizeMax   = darwin.SizeMax
-	SizeFixed = darwin.SizeFixed
+import (
+	"github.com/opentoys/webview/internal/darwin"
+	"github.com/opentoys/webview/internal/types"
 )
 
-type ResourceRequest = darwin.ResourceRequest
-type ResourceResponse = darwin.ResourceResponse
-type ResourceHandler = darwin.ResourceHandler
+type SizeHint = types.SizeHint
+
+const (
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
+)
+
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
 
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()

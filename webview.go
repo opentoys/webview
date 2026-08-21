@@ -1,8 +1,7 @@
 package webview
 
-// SizeHint and its constants are defined per-platform in
-// platform_darwin.go / platform_other.go to avoid importing platform/darwin
-// in the common file (which would break linux/windows cross-compile).
+// SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
+// from internal/types, re-exported per-platform in platform_*.go files.
 
 type Platform interface {
 	Run() error
@@ -14,9 +13,6 @@ type Platform interface {
 	Eval(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
 }
-
-// ResourceRequest, ResourceResponse, ResourceHandler are defined per-platform in
-// platform_darwin.go / platform_other.go (same pattern as SizeHint/DialogKind).
 
 // Options configures the webview. Field semantics are per-platform; each
 // platform backend implements what it can.

@@ -2,20 +2,23 @@
 
 package webview
 
-import win "github.com/opentoys/webview/platform/windows"
-
-type SizeHint = win.SizeHint
-
-const (
-	SizeNone  = win.SizeNone
-	SizeMin   = win.SizeMin
-	SizeMax   = win.SizeMax
-	SizeFixed = win.SizeFixed
+import (
+	"github.com/opentoys/webview/internal/types"
+	win "github.com/opentoys/webview/internal/windows"
 )
 
-type ResourceRequest = win.ResourceRequest
-type ResourceResponse = win.ResourceResponse
-type ResourceHandler = win.ResourceHandler
+type SizeHint = types.SizeHint
+
+const (
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
+)
+
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
 
 // buildPlatform creates the platform and wires the message handler to the
 // bridge: JS postMessages are parsed, bound Go funcs run, and the JSON reply

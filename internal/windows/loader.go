@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/opentoys/webview/platform/windows/assets"
+	"github.com/opentoys/webview/internal/windows/assets"
 	"golang.org/x/sys/windows"
 )
 
