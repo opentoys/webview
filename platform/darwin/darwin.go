@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -49,8 +48,10 @@ const (
 // NSBackingStoreBuffered = 2.
 const backingBuffered = 2
 
-// NSEventMaskAny = NSUIntegerMax.
-const eventMaskAny = ^uint(0)
+// NSAutoresizingMaskOptions: NSViewWidthSizable|NSViewMaxXMargin|
+// NSViewHeightSizable|NSViewMaxYMargin = 2|4|16|32 = 54. Keeps the Web
+// Inspector pane (a sibling view) from pushing the webview out of bounds.
+const webviewAutoresizingMask = 54
 
 // windowDelegateClass is registered once at package init; re-registering the
 // same name panics.
@@ -70,6 +71,14 @@ var uiDelegateClass objc.Class
 // per-download delegate instances are created in didBecomeDownload:.
 var downloadDelegateClass objc.Class
 
+// commandHandlerClass receives performSelectorOnMainThread: calls for
+// cross-thread dispatch to the host thread. Registered once at package init.
+var commandHandlerClass objc.Class
+
+// commandChan carries closures from any goroutine to be executed on the host
+// thread (via performSelectorOnMainThread:YES).
+var commandChan = make(chan func(), 64)
+
 // scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
 // does not retain its handler, so it must outlive the UCC or messages stop.
 var scriptHandler objc.ID
@@ -80,8 +89,8 @@ var (
 	nsURLClass             objc.Class
 	nsURLRequestClass      objc.Class
 	nsWindowClass          objc.Class
+	nsViewClass            objc.Class
 	nsAppClass             objc.Class
-	nsDateClass            objc.Class
 	nsAutoreleasePoolClass objc.Class
 	wkUCCClass             objc.Class
 	wkWebViewConfigClass   objc.Class
@@ -96,6 +105,7 @@ var (
 	nsSavePanelClass       objc.Class
 	nsWorkspaceClass       objc.Class
 	wkDownloadClass        objc.Class
+	nsUserDefaultsClass    objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -103,7 +113,6 @@ var (
 	allocSel                        objc.SEL
 	initSel                         objc.SEL
 	newSel                          objc.SEL
-	drainSel                        objc.SEL
 	UTF8StringSel                   objc.SEL
 	stringWithUTF8Sel               objc.SEL
 	bodySel                         objc.SEL
@@ -122,14 +131,13 @@ var (
 	addScriptMessageHandlerSel      objc.SEL
 	setUserContentControllerSel     objc.SEL
 	initWithFrameSel                objc.SEL
+	initWithFrameOnlySel            objc.SEL
 	setUIDelegateSel                objc.SEL
 	sharedApplicationSel            objc.SEL
 	setActivationPolicySel          objc.SEL
 	activateIgnoringOtherAppsSel    objc.SEL
 	finishLaunchingSel              objc.SEL
-	dateWithTimeIntervalSinceNowSel objc.SEL
-	nextEventMatchingMaskSel        objc.SEL
-	sendEventSel                    objc.SEL
+	performSelectorOnMainThreadWithObjectWaitUntilDoneSel objc.SEL
 	windowWillCloseSel              objc.SEL
 	initWithTitleSel                objc.SEL
 	initWithTitleOnlySel            objc.SEL
@@ -162,6 +170,15 @@ var (
 	activateFileViewerSel           objc.SEL
 	savePanelSel                    objc.SEL
 	panelURLSel                     objc.SEL
+	preferencesSel                  objc.SEL
+	setValueForKeySel               objc.SEL
+	numberWithBoolSel               objc.SEL
+	standardUserDefaultsSel         objc.SEL
+	setBoolForKeySel                objc.SEL
+	setInspectableSel               objc.SEL
+	addSubviewSel                   objc.SEL
+	setAutoresizesSubviewsSel       objc.SEL
+	setAutoresizingMaskSel          objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -187,8 +204,8 @@ func init() {
 	nsURLClass = objc.GetClass("NSURL")
 	nsURLRequestClass = objc.GetClass("NSURLRequest")
 	nsWindowClass = objc.GetClass("NSWindow")
+	nsViewClass = objc.GetClass("NSView")
 	nsAppClass = objc.GetClass("NSApplication")
-	nsDateClass = objc.GetClass("NSDate")
 	nsAutoreleasePoolClass = objc.GetClass("NSAutoreleasePool")
 	wkUCCClass = objc.GetClass("WKUserContentController")
 	wkWebViewConfigClass = objc.GetClass("WKWebViewConfiguration")
@@ -203,11 +220,11 @@ func init() {
 	nsSavePanelClass = objc.GetClass("NSSavePanel")
 	nsWorkspaceClass = objc.GetClass("NSWorkspace")
 	wkDownloadClass = objc.GetClass("WKDownload")
+	nsUserDefaultsClass = objc.GetClass("NSUserDefaults")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
 	newSel = objc.RegisterName("new")
-	drainSel = objc.RegisterName("drain")
 	UTF8StringSel = objc.RegisterName("UTF8String")
 	stringWithUTF8Sel = objc.RegisterName("stringWithUTF8String:")
 	bodySel = objc.RegisterName("body")
@@ -226,14 +243,13 @@ func init() {
 	addScriptMessageHandlerSel = objc.RegisterName("addScriptMessageHandler:name:")
 	setUserContentControllerSel = objc.RegisterName("setUserContentController:")
 	initWithFrameSel = objc.RegisterName("initWithFrame:configuration:")
+	initWithFrameOnlySel = objc.RegisterName("initWithFrame:")
 	setUIDelegateSel = objc.RegisterName("setUIDelegate:")
 	sharedApplicationSel = objc.RegisterName("sharedApplication")
 	setActivationPolicySel = objc.RegisterName("setActivationPolicy:")
 	activateIgnoringOtherAppsSel = objc.RegisterName("activateIgnoringOtherApps:")
 	finishLaunchingSel = objc.RegisterName("finishLaunching")
-	dateWithTimeIntervalSinceNowSel = objc.RegisterName("dateWithTimeIntervalSinceNow:")
-	nextEventMatchingMaskSel = objc.RegisterName("nextEventMatchingMask:untilDate:inMode:dequeue:")
-	sendEventSel = objc.RegisterName("sendEvent:")
+	performSelectorOnMainThreadWithObjectWaitUntilDoneSel = objc.RegisterName("performSelectorOnMainThread:withObject:waitUntilDone:")
 	windowWillCloseSel = objc.RegisterName("windowWillClose:")
 	initWithTitleSel = objc.RegisterName("initWithTitle:action:keyEquivalent:")
 	initWithTitleOnlySel = objc.RegisterName("initWithTitle:")
@@ -266,6 +282,15 @@ func init() {
 	activateFileViewerSel = objc.RegisterName("activateFileViewerSelectingURLs:")
 	savePanelSel = objc.RegisterName("savePanel")
 	panelURLSel = objc.RegisterName("URL")
+	preferencesSel = objc.RegisterName("preferences")
+	setValueForKeySel = objc.RegisterName("setValue:forKey:")
+	numberWithBoolSel = objc.RegisterName("numberWithBool:")
+	standardUserDefaultsSel = objc.RegisterName("standardUserDefaults")
+	setBoolForKeySel = objc.RegisterName("setBool:forKey:")
+	setInspectableSel = objc.RegisterName("setInspectable:")
+	addSubviewSel = objc.RegisterName("addSubview:")
+	setAutoresizesSubviewsSel = objc.RegisterName("setAutoresizesSubviews:")
+	setAutoresizingMaskSel = objc.RegisterName("setAutoresizingMask:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -459,19 +484,36 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	// Command handler: receives performSelectorOnMainThread: calls for
+	// cross-thread dispatch. The ObjC method reads a function from the
+	// command channel and executes it on the host thread.
+	commandHandlerClass, err = objc.RegisterClass(
+		"GoWebviewCommandHandler",
+		objc.GetClass("NSObject"),
+		nil,
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("runCommand:"), Fn: func(id objc.ID, cmd objc.SEL, obj objc.ID) {
+				if fn := <-commandChan; fn != nil {
+					fn()
+				}
+			}},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // AppKit work is thread-affine: the NSApplication adopts whichever thread first
 // creates it, and all windows/views must be created on that same thread. The Go
-// runtime can migrate goroutines between OS threads, and `go test` runs tests
-// on arbitrary goroutines, so all AppKit calls go through a single dedicated
-// host thread running a manual event loop.
+// runtime can migrate goroutines between OS threads, so all AppKit calls go
+// through a single dedicated host thread running [NSApp run]. Cross-thread
+// commands are dispatched via performSelectorOnMainThread:withObject:waitUntilDone:.
 var (
 	hostOnce  sync.Once
 	hostReady chan struct{} // closed once the host loop is running
-	// hostCmdPtr is set under hostOnce before the host loop starts, so
-	// mainThread reads it after Run() has finished starting the host.
-	hostCmdPtr atomic.Pointer[chan func()]
 )
 
 // startAppHost launches the single AppKit host thread if not already running,
@@ -479,25 +521,16 @@ var (
 func startAppHost() {
 	hostOnce.Do(func() {
 		hostReady = make(chan struct{})
-		cmd := make(chan func(), 64)
-		hostCmdPtr.Store(&cmd)
 		go hostLoop()
 	})
 	<-hostReady
 }
 
-// hostCmd returns the command channel, or nil before the host has started.
-func hostCmd() chan func() {
-	if p := hostCmdPtr.Load(); p != nil {
-		return *p
-	}
-	return nil
-}
-
 // hostLoop runs on one pinned OS thread for the life of the process: it owns
-// the NSApplication and pumps its event loop, running queued commands in
-// between. This replaces [NSApp run], which would need [NSApp terminate:] to
-// exit — and terminate: exits the whole process, breaking multi-window use.
+// the NSApplication and pumps its event loop via [NSApp run], which processes
+// all events, timers, and the main dispatch queue. Cross-thread commands arrive
+// via performSelectorOnMainThread: (which [NSApp run] dispatches from the run
+// loop) and are read from the commandChan.
 func hostLoop() {
 	runtime.LockOSThread()
 	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
@@ -509,59 +542,32 @@ func hostLoop() {
 	// Complete app launch (menu/activation setup) as a nib-less program must.
 	app.Send(finishLaunchingSel)
 	close(hostReady)
-
-	// nsdefaultMode is the non-blocking select on the loop's event poll.
-	nsdefaultMode := objc.ID(nsStringClass).Send(stringWithUTF8Sel, "kCFRunLoopDefaultMode")
-	// This manual loop never runs [NSApp run], so AppKit never drains its own
-	// autorelease pool. Each iteration allocates autoreleased objects (the
-	// poll's NSDate, any dequeued events), so drain a pool every iteration to
-	// avoid unbounded memory growth.
-	poolClass := objc.ID(nsAutoreleasePoolClass)
-	pool := poolClass.Send(newSel)
-	cmd := hostCmd()
-	for {
-		// Run queued Go commands before blocking on events.
-		select {
-		case fn := <-cmd:
-			fn()
-		default:
-			// Poll with a short timeout so commands are served promptly without a
-			// 100% CPU busy loop.
-			until := objc.ID(nsDateClass).Send(dateWithTimeIntervalSinceNowSel, 0.05)
-			event := app.Send(
-				nextEventMatchingMaskSel,
-				eventMaskAny, until, nsdefaultMode, true,
-			)
-			if event != 0 {
-				app.Send(sendEventSel, event)
-			}
-		}
-		// Drain the previous iteration's pool and start a fresh one.
-		pool.Send(drainSel)
-		pool = poolClass.Send(newSel)
-	}
+	// Pump the run loop. [NSApp run] processes all events and dispatches
+	// performSelectorOnMainThread: calls (which read from commandChan and
+	// execute the queued Go functions).
+	app.Send(objc.RegisterName("run"))
 }
 
 // mainThread runs fn on the AppKit host thread, blocking until it completes.
 // Before the host has started (no window exists yet) it is a no-op, which makes
 // SetTitle/SetHTML/Navigate/Eval safe to call before Run().
 func mainThread(fn func()) {
-	cmd := hostCmd()
-	if cmd == nil {
+	select {
+	case <-hostReady:
+	default:
 		return
 	}
-	done := make(chan struct{})
-	cmd <- func() {
-		fn()
-		close(done)
-	}
-	<-done
+	commandChan <- fn
+	objc.ID(commandHandlerClass).Send(allocSel).Send(
+		performSelectorOnMainThreadWithObjectWaitUntilDoneSel,
+		objc.RegisterName("runCommand:"),
+		0, true)
 }
 
 type Platform struct {
-	window     objc.ID
-	webview    objc.ID
-	delegate   objc.ID
+	window           objc.ID
+	webview          objc.ID
+	delegate         objc.ID
 	uiDelegate       objc.ID // WKUIDelegate instance; kept alive for the webview.
 	downloadDelegate objc.ID // WKNavigationDelegate+WKDownloadDelegate instance.
 	// ucc keeps the WKUserContentController alive; the handler instance lives
@@ -587,10 +593,8 @@ type Platform struct {
 	// or "" to cancel. callback is async and safe from any goroutine.
 	DownloadFunc func(suggestedFilename string, callback func(savePath string))
 
-	// Debug enables web-developer tooling where the platform supports it.
-	// On macOS a right-click inspector depends on Safari's Develop service,
-	// which is not reachable from a manual run loop, so macOS Debug currently
-	// only affects page load. Windows/Linux backends may wire it differently.
+	// Debug enables WebKit Inspector (right-click → Inspect Element) on macOS
+	// and dev tools on Windows. Set via Options.Debug.
 	Debug bool
 	// Incognito makes the webview use a non-persistent (in-memory) website data
 	// store: no cookies/cache/localStorage written to disk.
@@ -637,27 +641,39 @@ func (p *Platform) Close() error {
 	}
 	p.closed = true
 	close(p.runDone)
-	window := p.window
 	p.mu.Unlock()
 
 	// Hide the window so a closed platform doesn't linger on screen while the
-	// next window in the same process is running.
-	if window != 0 {
-		mainThread(func() { window.Send(orderOutSel, 0) })
-	}
+	// next window in the same process is running. Read window under lock; the
+	// command handler reads it again to guard against the window being
+	// destroyed between scheduling and execution.
+	mainThread(func() {
+		p.mu.Lock()
+		w := p.window
+		p.window = 0
+		p.webview = 0
+		p.mu.Unlock()
+		if w != 0 {
+			w.Send(orderOutSel, 0)
+		}
+	})
 	return nil
 }
 
 // signalExit makes Run() return without closing the window. Callable from the
 // host thread (windowWillClose:) or any other thread (Close()). Uses a non-
 // blocking channel send so it is safe on the host thread where Close()'s
-// mainThread orderOut would deadlock.
+// mainThread orderOut would deadlock. Sets closed=true so a subsequent Close()
+// does not try to orderOut: a window that is already being destroyed.
 func (p *Platform) signalExit() {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return
 	}
+	p.closed = true
+	p.window = 0
+	p.webview = 0
 	p.mu.Unlock()
 	select {
 	case p.runDone <- struct{}{}:
@@ -768,11 +784,23 @@ func (p *Platform) setup() error {
 	config.Send(setUserContentControllerSel, ucc)
 	// Website data store: incognito (non-persistent), custom dir, or default.
 	config.Send(setWebsiteDataStoreSel, p.setupDataStore())
+	// Enable WebKit Inspector (right-click → Inspect Element) when Debug is set.
+	if p.Debug {
+		prefs := config.Send(preferencesSel)
+		yesNum := objc.ID(objc.GetClass("NSNumber")).Send(numberWithBoolSel, true)
+		// Private preference that exposes the "Inspect Element" context menu item.
+		prefs.Send(setValueForKeySel, yesNum, nsString("developerExtrasEnabled"))
+	}
 	wv := objc.ID(wkWebViewClass).Send(allocSel)
 	if wv == 0 {
 		return errNoWebView
 	}
 	wv = wv.Send(initWithFrameSel, rect(0, 0, 800, 600), config)
+	// macOS 13.3+ disables inspection by default; explicitly enable it.
+	// https://webkit.org/blog/13936/enabling-the-inspection-of-web-content-in-apps/
+	if p.Debug {
+		wv.Send(setInspectableSel, true)
+	}
 	p.mu.Lock()
 	p.webview = wv
 	p.mu.Unlock()
@@ -790,9 +818,22 @@ func (p *Platform) setup() error {
 	p.downloadDelegate = dlDelegate
 	wv.Send(setNavigationDelegateSel, dlDelegate)
 
-	w.Send(setContentViewSel, wv)
+	// Wrap the webview in a container NSView so the Web Inspector pane can be
+	// added as a sibling (matches reference cocoa_webkit.hh set_up_widget).
+	widget := objc.ID(nsViewClass).Send(allocSel)
+	if widget == 0 {
+		return errors.New("darwin: failed to alloc NSView")
+	}
+	widget = widget.Send(initWithFrameOnlySel, rect(0, 0, 800, 600))
+	widget.Send(setAutoresizesSubviewsSel, true)
+	wv.Send(setAutoresizingMaskSel, webviewAutoresizingMask)
+	widget.Send(addSubviewSel, wv)
+
+	w.Send(setContentViewSel, widget)
 	w.Send(centerSel)
 	w.Send(makeKeyAndOrderFrontSel, 0)
+	// Make webview first responder so it receives keyboard/mouse events.
+	w.Send(objc.RegisterName("makeFirstResponder:"), wv)
 	// Cmd-C/Cmd-V need an Edit menu (key equivalents route via the main menu).
 	// Bare AppKit apps without a nib have no menu, so install one once.
 	setupMainMenu()
@@ -962,15 +1003,30 @@ func (p *Platform) evalOnHost(js string) {
 	wv.Send(evaluateJSSel, str, objc.ID(0))
 }
 
-// EvalHost queues js to run on the host thread without blocking, so it is safe
-// from any thread including a MessageFunc callback on the host thread (where
-// mainThread would deadlock).
+// EvalHost queues js to run on the host thread without blocking. Safe from any
+// goroutine including host-thread callbacks (e.g. MessageFunc). Uses a
+// non-blocking channel send + performSelectorOnMainThread:NO: if called from
+// the host thread, the ObjC selector fires after the current callback returns;
+// if from another thread, it fires on the next run loop iteration.
 func (p *Platform) EvalHost(js string) {
-	cmd := hostCmd()
-	if cmd == nil {
+	select {
+	case <-hostReady:
+	default:
 		return
 	}
-	cmd <- func() { p.evalOnHost(js) }
+	select {
+	case commandChan <- func() { p.evalOnHost(js) }:
+		// Command queued; trigger the ObjC selector to read and execute it.
+		objc.ID(commandHandlerClass).Send(allocSel).Send(
+			performSelectorOnMainThreadWithObjectWaitUntilDoneSel,
+			objc.RegisterName("runCommand:"),
+			0, false)
+	default:
+		// Channel full (unlikely) — run directly. Safe when called from the
+		// host thread (MessageFunc callback). On other threads this is a race,
+		// but channel-full implies 64+ pending evals, which is a bug anyway.
+		p.evalOnHost(js)
+	}
 }
 
 func (p *Platform) Eval(js string) error {

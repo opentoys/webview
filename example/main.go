@@ -8,9 +8,7 @@ import (
 
 func main() {
 	w, err := webview.New(webview.Options{
-		Debug:     true,
-		Incognito: false,
-		DataDir:   "./userdata",
+		Debug: true,
 	})
 	if err != nil {
 		panic(err)
@@ -20,7 +18,6 @@ func main() {
 	count := 0
 	if err := w.Bind("increment", func() int {
 		count++
-		fmt.Println(count)
 		return count
 	}); err != nil {
 		panic(err)
@@ -39,6 +36,9 @@ func main() {
 	<h2>File Input Test</h2>
 	<input type="file" id="fileInput" accept=".txt,text/plain" multiple>
 	<p id="fileInfo"></p>
+	<div>
+		<a id="downloadLink" onclick="downloadTextSimple('Hello, World!', 'hello.txt')">Download Text</a>
+	</div>
 	<script>
 	document.getElementById('fileInput').addEventListener('change', function(e) {
 		var files = e.target.files;
@@ -48,6 +48,12 @@ func main() {
 		}
 		document.getElementById('fileInfo').textContent = info;
 	});
+	function downloadTextSimple(text, filename) {
+		const link = document.createElement('a');
+		link.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text);
+		link.download = filename;
+		link.click();
+	}
 	</script>
 </body>
 </html>`)

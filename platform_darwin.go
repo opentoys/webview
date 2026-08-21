@@ -15,6 +15,7 @@ const (
 
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()
+	p.Debug = opts.Debug
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
 	p.BoundFuncs = w.bridge.funcNames
