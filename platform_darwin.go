@@ -13,9 +13,9 @@ const (
 	SizeFixed = darwin.SizeFixed
 )
 
-type SchemeRequest = darwin.SchemeRequest
-type SchemeResponse = darwin.SchemeResponse
-type SchemeHandler = darwin.SchemeHandler
+type ResourceRequest = darwin.ResourceRequest
+type ResourceResponse = darwin.ResourceResponse
+type ResourceHandler = darwin.ResourceHandler
 
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()

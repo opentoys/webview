@@ -15,19 +15,19 @@ const (
 	SizeFixed
 )
 
-type SchemeRequest struct {
+type ResourceRequest struct {
 	URL     string
 	Method  string
 	Headers map[string]string
 }
 
-type SchemeResponse struct {
+type ResourceResponse struct {
 	StatusCode int
 	Headers    map[string]string
 	Body       []byte
 }
 
-type SchemeHandler func(req SchemeRequest, respond func(SchemeResponse))
+type ResourceHandler func(req ResourceRequest, respond func(ResourceResponse))
 
 var errUnsupported = errors.New("webview: unsupported platform")
 
