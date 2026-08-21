@@ -33,6 +33,23 @@ const (
 	SizeFixed
 )
 
+// SchemeRequest matches the webview package's SchemeRequest.
+type SchemeRequest struct {
+	URL     string
+	Method  string
+	Headers map[string]string
+}
+
+// SchemeResponse matches the webview package's SchemeResponse.
+type SchemeResponse struct {
+	StatusCode int
+	Headers    map[string]string
+	Body       []byte
+}
+
+// SchemeHandler matches the webview package's SchemeHandler.
+type SchemeHandler func(req SchemeRequest, respond func(SchemeResponse))
+
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
 	// COM state (set during async init, read after ready==1).
@@ -488,3 +505,7 @@ func (p *Platform) Dialog(kind DialogKind, message, defaultInput string) (string
 		return defaultInput, true
 	}
 }
+
+// RegisterScheme is a stub; custom URL schemes are not yet implemented for
+// Windows/WebView2.
+func (p *Platform) RegisterScheme(scheme string, handler SchemeHandler) {}

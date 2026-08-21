@@ -12,7 +12,11 @@ type Platform interface {
 	Navigate(url string) error
 	SetHTML(html string) error
 	Eval(js string) error
+	RegisterScheme(scheme string, handler SchemeHandler)
 }
+
+// SchemeRequest, SchemeResponse, SchemeHandler are defined per-platform in
+// platform_darwin.go / platform_other.go (same pattern as SizeHint/DialogKind).
 
 // Options configures the webview. Field semantics are per-platform; each
 // platform backend implements what it can.
@@ -53,4 +57,8 @@ func (w *W) Eval(js string) error      { return w.p.Eval(js) }
 
 func (w *W) Bind(name string, fn any) error {
 	return w.bridge.Bind(name, fn)
+}
+
+func (w *W) RegisterScheme(scheme string, handler SchemeHandler) {
+	w.p.RegisterScheme(scheme, handler)
 }

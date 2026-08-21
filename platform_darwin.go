@@ -13,6 +13,10 @@ const (
 	SizeFixed = darwin.SizeFixed
 )
 
+type SchemeRequest = darwin.SchemeRequest
+type SchemeResponse = darwin.SchemeResponse
+type SchemeHandler = darwin.SchemeHandler
+
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()
 	p.Debug = opts.Debug

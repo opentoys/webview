@@ -35,6 +35,24 @@ const (
 	SizeFixed
 )
 
+// SchemeRequest describes an incoming custom-scheme request.
+type SchemeRequest struct {
+	URL     string
+	Method  string
+	Headers map[string]string
+}
+
+// SchemeResponse is returned via callback to fulfill a custom-scheme request.
+type SchemeResponse struct {
+	StatusCode int
+	Headers    map[string]string
+	Body       []byte
+}
+
+// SchemeHandler handles requests for a registered custom URL scheme.
+// respond must be called exactly once from any goroutine.
+type SchemeHandler func(req SchemeRequest, respond func(SchemeResponse))
+
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
 
@@ -75,6 +93,10 @@ var downloadDelegateClass objc.Class
 // cross-thread dispatch to the host thread. Registered once at package init.
 var commandHandlerClass objc.Class
 
+// schemeHandlerClass implements WKURLSchemeHandler for custom URL schemes.
+// Registered once at package init; one instance per scheme.
+var schemeHandlerClass objc.Class
+
 // commandChan carries closures from any goroutine to be executed on the host
 // thread (via performSelectorOnMainThread:YES).
 var commandChan = make(chan func(), 64)
@@ -82,6 +104,50 @@ var commandChan = make(chan func(), 64)
 // scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
 // does not retain its handler, so it must outlive the UCC or messages stop.
 var scriptHandler objc.ID
+
+// schemeHandlerInstances maps scheme name → Go handler. Written once per
+// scheme in setup(), read from ObjC callbacks on the host thread.
+var schemeHandlerInstances = map[string]SchemeHandler{}
+
+// schemeTaskStore holds WKURLSchemeTask objects by numeric ID, preventing GC
+// before the async Go handler calls back.
+type schemeTaskStore struct {
+	mu   sync.Mutex
+	m    map[uintptr]objc.ID
+	next uintptr
+}
+
+func (s *schemeTaskStore) put(task objc.ID) uintptr {
+	// Retain the task so it stays alive for the async callback. WebKit may
+	// release its reference after stopURLSchemeTask: fires.
+	task.Send(retainSel)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	s.m[s.next] = task
+	return s.next
+}
+
+func (s *schemeTaskStore) get(id uintptr) (objc.ID, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.m[id]
+	return t, ok
+}
+
+func (s *schemeTaskStore) delete(id uintptr) {
+	s.mu.Lock()
+	t, ok := s.m[id]
+	if ok {
+		delete(s.m, id)
+	}
+	s.mu.Unlock()
+	if ok && t != 0 {
+		t.Send(releaseSel)
+	}
+}
+
+var activeSchemeTasks = &schemeTaskStore{m: map[uintptr]objc.ID{}}
 
 // Cached ObjC classes (avoids repeated hash-table lookups in GetClass).
 var (
@@ -106,6 +172,9 @@ var (
 	nsWorkspaceClass       objc.Class
 	wkDownloadClass        objc.Class
 	nsUserDefaultsClass    objc.Class
+	nsHTTPURLResponseClass objc.Class
+	nsDataClass            objc.Class
+	nsDictionaryClass      objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -179,6 +248,18 @@ var (
 	addSubviewSel                   objc.SEL
 	setAutoresizesSubviewsSel       objc.SEL
 	setAutoresizingMaskSel          objc.SEL
+	setURLSchemeHandlerForURLSchemeSel objc.SEL
+	schemeRequestSel                objc.SEL // [task request]
+	HTTPMethodSel                   objc.SEL // [request HTTPMethod]
+	allHTTPHeaderFieldsSel          objc.SEL // [request allHTTPHeaderFields]
+	didReceiveResponseSel           objc.SEL // [task didReceiveResponse:]
+	didReceiveDataSel               objc.SEL // [task didReceiveData:]
+	schemeFinishSel                 objc.SEL // [task didFinish]
+	initWithURLStatusCodeHTTPVersionHeaderFieldsSel objc.SEL
+	dataWithBytesLengthSel          objc.SEL
+	dictionaryWithObjectsForKeysCountSel objc.SEL
+	retainSel                           objc.SEL
+	releaseSel                          objc.SEL
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -221,6 +302,9 @@ func init() {
 	nsWorkspaceClass = objc.GetClass("NSWorkspace")
 	wkDownloadClass = objc.GetClass("WKDownload")
 	nsUserDefaultsClass = objc.GetClass("NSUserDefaults")
+	nsHTTPURLResponseClass = objc.GetClass("NSHTTPURLResponse")
+	nsDataClass = objc.GetClass("NSData")
+	nsDictionaryClass = objc.GetClass("NSDictionary")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -254,6 +338,8 @@ func init() {
 	initWithTitleSel = objc.RegisterName("initWithTitle:action:keyEquivalent:")
 	initWithTitleOnlySel = objc.RegisterName("initWithTitle:")
 	autoreleaseSel = objc.RegisterName("autorelease")
+	retainSel = objc.RegisterName("retain")
+	releaseSel = objc.RegisterName("release")
 	separatorItemSel = objc.RegisterName("separatorItem")
 	addItemSel = objc.RegisterName("addItem:")
 	setSubmenuSel = objc.RegisterName("setSubmenu:")
@@ -291,6 +377,16 @@ func init() {
 	addSubviewSel = objc.RegisterName("addSubview:")
 	setAutoresizesSubviewsSel = objc.RegisterName("setAutoresizesSubviews:")
 	setAutoresizingMaskSel = objc.RegisterName("setAutoresizingMask:")
+	setURLSchemeHandlerForURLSchemeSel = objc.RegisterName("setURLSchemeHandler:forURLScheme:")
+	schemeRequestSel = objc.RegisterName("request")
+	HTTPMethodSel = objc.RegisterName("HTTPMethod")
+	allHTTPHeaderFieldsSel = objc.RegisterName("allHTTPHeaderFields")
+	didReceiveResponseSel = objc.RegisterName("didReceiveResponse:")
+	didReceiveDataSel = objc.RegisterName("didReceiveData:")
+	schemeFinishSel = objc.RegisterName("didFinish")
+	initWithURLStatusCodeHTTPVersionHeaderFieldsSel = objc.RegisterName("initWithURL:statusCode:HTTPVersion:headerFields:")
+	dataWithBytesLengthSel = objc.RegisterName("dataWithBytes:length:")
+	dictionaryWithObjectsForKeysCountSel = objc.RegisterName("dictionaryWithObjects:forKeys:count:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -504,6 +600,98 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	// WKURLSchemeHandler: intercepts custom-scheme URL loads.
+	startSchemeTask := func(id objc.ID, cmd objc.SEL, webView objc.ID, task objc.ID) {
+		// Get the request URL.
+		req := objc.ID(task).Send(schemeRequestSel)
+		if req == 0 {
+			return
+		}
+		nsURL := objc.ID(req).Send(panelURLSel) // "URL" selector
+		if nsURL == 0 {
+			return
+		}
+		urlStr := objc.ID(nsURL).Send(objc.RegisterName("absoluteString"))
+		urlGo := goString(urlStr)
+
+		// Extract scheme.
+		scheme := ""
+		if idx := strings.Index(urlGo, "://"); idx > 0 {
+			scheme = urlGo[:idx]
+		}
+		handler, ok := schemeHandlerInstances[scheme]
+		if !ok {
+			return
+		}
+
+		// Get HTTP method.
+		methodGo := "GET"
+		if m := objc.ID(req).Send(HTTPMethodSel); m != 0 {
+			methodGo = goString(m)
+		}
+
+		// Get headers (may be nil).
+		headersGo := map[string]string{}
+		if hdrs := objc.ID(req).Send(allHTTPHeaderFieldsSel); hdrs != 0 {
+			headersGo = goMapFromNSDictionary(hdrs)
+		}
+
+		// Store task to prevent GC; get numeric ID for the closure.
+		taskID := activeSchemeTasks.put(task)
+
+		sr := SchemeRequest{
+			URL:     urlGo,
+			Method:  methodGo,
+			Headers: headersGo,
+		}
+		handler(sr, func(resp SchemeResponse) {
+			// This callback may be called from any goroutine.
+			// Dispatch to the host thread.
+			mainThread(func() {
+				t, ok := activeSchemeTasks.get(taskID)
+				if !ok {
+					return // task was cancelled
+				}
+				activeSchemeTasks.delete(taskID)
+				respondToSchemeTask(t, resp, nsURL)
+			})
+		})
+	}
+
+	stopSchemeTask := func(id objc.ID, cmd objc.SEL, webView objc.ID, task objc.ID) {
+		// Find and remove the task by iterating (task ID not available here).
+		// WKURLSchemeTask identity: compare by pointer value.
+		activeSchemeTasks.mu.Lock()
+		var foundKey uintptr
+		for k, v := range activeSchemeTasks.m {
+			if v == task {
+				foundKey = k
+				break
+			}
+		}
+		if foundKey != 0 {
+			delete(activeSchemeTasks.m, foundKey)
+		}
+		activeSchemeTasks.mu.Unlock()
+		if foundKey != 0 {
+			task.Send(releaseSel)
+		}
+	}
+
+	schemeHandlerClass, err = objc.RegisterClass(
+		"GoWebviewSchemeHandler",
+		objc.GetClass("NSObject"),
+		[]*objc.Protocol{objc.GetProtocol("WKURLSchemeHandler")},
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("webView:startURLSchemeTask:"), Fn: startSchemeTask},
+			{Cmd: objc.RegisterName("webView:stopURLSchemeTask:"), Fn: stopSchemeTask},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // AppKit work is thread-affine: the NSApplication adopts whichever thread first
@@ -616,10 +804,17 @@ type Platform struct {
 	pendingURL string
 	// runDone is closed by Close() to signal Run() to return.
 	runDone chan struct{}
+	// schemeHandlers stores registered custom URL scheme handlers, keyed by
+	// scheme name (without "://"). Populated before Run() via RegisterScheme,
+	// wired to WKWebViewConfiguration in setup().
+	schemeHandlers map[string]SchemeHandler
 }
 
 func New() *Platform {
-	return &Platform{runDone: make(chan struct{})}
+	return &Platform{
+		runDone:        make(chan struct{}),
+		schemeHandlers: make(map[string]SchemeHandler),
+	}
 }
 
 func (p *Platform) Run() error {
@@ -658,6 +853,12 @@ func (p *Platform) Close() error {
 		}
 	})
 	return nil
+}
+
+// RegisterScheme registers a custom URL scheme handler. Must be called before
+// Run(). scheme is the URL scheme without "://" (e.g. "app").
+func (p *Platform) RegisterScheme(scheme string, handler SchemeHandler) {
+	p.schemeHandlers[scheme] = handler
 }
 
 // signalExit makes Run() return without closing the window. Callable from the
@@ -784,6 +985,15 @@ func (p *Platform) setup() error {
 	config.Send(setUserContentControllerSel, ucc)
 	// Website data store: incognito (non-persistent), custom dir, or default.
 	config.Send(setWebsiteDataStoreSel, p.setupDataStore())
+	// Register custom URL scheme handlers on the configuration.
+	// Must happen before WKWebView is created.
+	for scheme, handler := range p.schemeHandlers {
+		schemeHandlerInstances[scheme] = handler
+		inst := objc.ID(schemeHandlerClass).Send(allocSel)
+		inst = inst.Send(initSel)
+		config.Send(setURLSchemeHandlerForURLSchemeSel, inst, nsString(scheme))
+	}
+
 	// Enable WebKit Inspector (right-click → Inspect Element) when Debug is set.
 	if p.Debug {
 		prefs := config.Send(preferencesSel)
@@ -963,6 +1173,99 @@ func prependBootstrap(html string) string {
 		}
 	}
 	return html
+}
+
+// looksLikeHTML returns true if body starts with common HTML markers.
+func looksLikeHTML(body []byte) bool {
+	s := strings.TrimSpace(string(body))
+	s = strings.ToLower(s)
+	return strings.HasPrefix(s, "<!doctype") || strings.HasPrefix(s, "<html") || strings.HasPrefix(s, "<head")
+}
+
+// respondToSchemeTask sends a SchemeResponse to a WKURLSchemeTask. Must be
+// called on the host thread.
+func respondToSchemeTask(task objc.ID, resp SchemeResponse, reqURL objc.ID) {
+	if resp.StatusCode == 0 {
+		resp.StatusCode = 200
+	}
+
+	// Inject bootstrap JS into HTML responses so Bind works on custom schemes.
+	ct := resp.Headers["Content-Type"]
+	if ct == "" {
+		ct = resp.Headers["content-type"]
+	}
+	if strings.HasPrefix(ct, "text/html") || (ct == "" && len(resp.Body) > 0 && looksLikeHTML(resp.Body)) {
+		resp.Body = []byte(prependBootstrap(string(resp.Body)))
+	}
+
+	// Build header NSDictionary.
+	var hdrDict objc.ID
+	if len(resp.Headers) > 0 {
+		hdrDict = nsDictionary(resp.Headers)
+	}
+
+	// Create NSHTTPURLResponse.
+	httpResp := objc.ID(nsHTTPURLResponseClass).Send(allocSel)
+	httpResp = httpResp.Send(initWithURLStatusCodeHTTPVersionHeaderFieldsSel,
+		reqURL, uintptr(resp.StatusCode), nsString("HTTP/1.1"), hdrDict)
+	if httpResp != 0 {
+		task.Send(didReceiveResponseSel, httpResp)
+	}
+
+	// Send body data.
+	if len(resp.Body) > 0 {
+		body := resp.Body
+		nsData := objc.ID(nsDataClass).Send(dataWithBytesLengthSel,
+			unsafe.Pointer(&body[0]), uintptr(len(body)))
+		if nsData != 0 {
+			task.Send(didReceiveDataSel, nsData)
+		}
+	}
+
+	// Finish.
+	task.Send(schemeFinishSel)
+}
+
+// nsDictionary creates an NSDictionary from a Go map[string]string.
+func nsDictionary(m map[string]string) objc.ID {
+	if len(m) == 0 {
+		return 0
+	}
+	keys := make([]objc.ID, 0, len(m))
+	vals := make([]objc.ID, 0, len(m))
+	for k, v := range m {
+		keys = append(keys, nsString(k))
+		vals = append(vals, nsString(v))
+	}
+	return objc.ID(nsDictionaryClass).Send(dictionaryWithObjectsForKeysCountSel,
+		unsafe.Pointer(&vals[0]), unsafe.Pointer(&keys[0]), uintptr(len(m)))
+}
+
+// goMapFromNSDictionary converts an NSDictionary (NSString→NSString) to a Go map.
+// Uses objectForKey: with known keys or enumerates via block. Simplified: reads
+// allKeys and iterates.
+func goMapFromNSDictionary(dict objc.ID) map[string]string {
+	out := map[string]string{}
+	if dict == 0 {
+		return out
+	}
+	// allKeys returns NSArray of keys.
+	allKeysSel := objc.RegisterName("allKeys")
+	keys := objc.ID(dict).Send(allKeysSel)
+	if keys == 0 {
+		return out
+	}
+	countSel := objc.RegisterName("count")
+	objectAtIndexSel := objc.RegisterName("objectAtIndex:")
+	n := int(keys.Send(countSel))
+	for i := 0; i < n; i++ {
+		key := objc.ID(keys).Send(objectAtIndexSel, uintptr(i))
+		val := objc.ID(dict).Send(objc.RegisterName("objectForKey:"), key)
+		if key != 0 && val != 0 {
+			out[goString(key)] = goString(val)
+		}
+	}
+	return out
 }
 
 func (p *Platform) SetHTML(html string) error {
