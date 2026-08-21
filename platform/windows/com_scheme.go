@@ -221,9 +221,13 @@ func (d *iCoreWebView2Deferral) Complete() uintptr {
 	return r
 }
 
-// --- IStream (minimal, read-only, for response body) ---
+// --- IStream (real COM IStream via CreateStreamOnHGlobal) ---
 
-type iStreamVtbl struct {
+type iStream struct {
+	vtbl *_IStreamVtbl
+}
+
+type _IStreamVtbl struct {
 	_IUnknownVtbl
 	Read    ComProc // 3
 	Write   ComProc // 4
@@ -238,71 +242,32 @@ type iStreamVtbl struct {
 	Clone   ComProc // 13
 }
 
-type iStream struct {
-	vtbl  *iStreamVtbl
-	data  []byte
-	pos   int
-}
-
-var iStreamVtblSingleton = iStreamVtbl{
-	_IUnknownVtbl: _IUnknownVtbl{
-		QueryInterface: NewComProc(iStreamQueryInterface),
-		AddRef:         NewComProc(comAddRef),
-		Release:        NewComProc(comRelease),
-	},
-	Read:    NewComProc(iStreamRead),
-	Write:   NewComProc(iStreamNotImpl),
-	Seek:    NewComProc(iStreamNotImpl),
-	SetSize: NewComProc(iStreamNotImpl),
-	CopyTo:  NewComProc(iStreamNotImpl),
-	Commit:  NewComProc(iStreamNotImpl),
-	Revert:  NewComProc(iStreamNotImpl),
-	LockRegion:   NewComProc(iStreamNotImpl),
-	UnlockRegion: NewComProc(iStreamNotImpl),
-	Stat:    NewComProc(iStreamNotImpl),
-	Clone:   NewComProc(iStreamNotImpl),
-}
-
-func newIStream(data []byte) *iStream {
-	return &iStream{vtbl: &iStreamVtblSingleton, data: data}
-}
-
-func iStreamQueryInterface(this *iStream, iid *GUID, out **uintptr) uintptr {
-	if out != nil {
-		*out = (*uintptr)(unsafe.Pointer(this))
+// createStreamOnHGlobal creates a real COM IStream backed by global memory.
+func createStreamOnHGlobal(data []byte) *iStream {
+	var stream *iStream
+	r, _, _ := pCreateStreamOnHGlobal.Call(0, 1, uintptr(unsafe.Pointer(&stream)))
+	if r != S_OK || stream == nil {
+		return nil
 	}
-	comAddRef((*_IUnknown)(unsafe.Pointer(this)))
-	return S_OK
-}
-
-// E_NOTIMPL
-const eNotImpl = uintptr(0x80004001)
-
-func iStreamNotImpl(this *iStream) uintptr {
-	return eNotImpl
-}
-
-func iStreamRead(this *iStream, pv uintptr, cb uint32, pcbRead *uint32) uintptr {
-	if pcbRead != nil {
-		*pcbRead = 0
+	if len(data) > 0 {
+		// Write data to the stream.
+		var written uint32
+		stream.vtbl.Write.Call(
+			uintptr(unsafe.Pointer(stream)),
+			uintptr(unsafe.Pointer(&data[0])),
+			uintptr(len(data)),
+			uintptr(unsafe.Pointer(&written)),
+		)
+		// Seek back to the beginning.
+		var li int64
+		stream.vtbl.Seek.Call(
+			uintptr(unsafe.Pointer(stream)),
+			0, // offset
+			0, // STREAM_SEEK_SET
+			uintptr(unsafe.Pointer(&li)),
+		)
 	}
-	avail := len(this.data) - this.pos
-	if avail <= 0 {
-		return S_OK
-	}
-	n := int(cb)
-	if n > avail {
-		n = avail
-	}
-	// Copy data to the COM-provided buffer.
-	// #nosec G103 — pv is a valid pointer from COM.
-	dst := unsafe.Slice((*byte)(unsafe.Pointer(pv)), n)
-	copy(dst, this.data[this.pos:this.pos+n])
-	this.pos += n
-	if pcbRead != nil {
-		*pcbRead = uint32(n)
-	}
-	return S_OK
+	return stream
 }
 
 // --- ICoreWebView2WebResourceRequestedEventHandler (COM callback) ---

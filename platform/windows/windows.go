@@ -556,13 +556,15 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		Headers: headers,
 	}
 
+	deferral := args.GetRequestDeferral()
+
 	var gotResponse bool
 	var syncResp *ResourceResponse
 	handler(sr, func(resp *ResourceResponse) {
 		if gotResponse {
 			// Async response: dispatch to UI thread.
 			p.dispatch.push(func() {
-				p.applyResponse(resp)
+				p.applyResponse(args, deferral, resp)
 			})
 			pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
 			return
@@ -572,21 +574,43 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		syncResp = resp
 	})
 
-	if gotResponse && syncResp != nil {
-		p.applyResponse(syncResp)
+	if gotResponse {
+		p.applyResponse(args, deferral, syncResp)
+	} else {
+		deferral.Complete()
 	}
 
 	return 0
 }
 
-// applyResponse delivers the resource response to the webview by injecting
-// the HTML body directly. Called on the UI thread.
-func (p *Platform) applyResponse(resp *ResourceResponse) {
-	if p.webview == nil || resp == nil || len(resp.Body) == 0 {
+// applyResponse delivers the resource response to the webview via
+// PutResponse + deferral. Called on the UI thread.
+func (p *Platform) applyResponse(args *iCoreWebView2WebResourceRequestedEventArgs, deferral *iCoreWebView2Deferral, resp *ResourceResponse) {
+	if resp == nil || len(resp.Body) == 0 {
+		deferral.Complete()
 		return
 	}
-	html := string(resp.Body)
-	p.webview.NavigateToString(html)
+
+	stream := createStreamOnHGlobal(resp.Body)
+	if stream == nil {
+		deferral.Complete()
+		return
+	}
+
+	webResp := p.env.CreateWebResourceResponse(
+		"OK", resp.StatusCode, "", stream,
+	)
+
+	if len(resp.Headers) > 0 {
+		var parts []string
+		for k, v := range resp.Headers {
+			parts = append(parts, k+": "+v)
+		}
+		webResp.PutHeaders(strings.Join(parts, "\n"))
+	}
+
+	args.PutResponse(webResp)
+	deferral.Complete()
 }
 
 // EvalHost evaluates JS from any goroutine by dispatching to the COM thread.

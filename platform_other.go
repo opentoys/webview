@@ -27,7 +27,7 @@ type ResourceResponse struct {
 	Body       []byte
 }
 
-type ResourceHandler func(req ResourceRequest, respond func(ResourceResponse))
+type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 
 var errUnsupported = errors.New("webview: unsupported platform")
 

@@ -30,9 +30,10 @@ var (
 	pSetFocus           = user32.NewProc("SetFocus")
 	pGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
 	pPostMessageW       = user32.NewProc("PostMessageW")
-	pCoInitializeEx     = ole32.NewProc("CoInitializeEx")
-	pCoUninitialize     = ole32.NewProc("CoUninitialize")
-	pCoTaskMemFree      = ole32.NewProc("CoTaskMemFree")
+	pCoInitializeEx       = ole32.NewProc("CoInitializeEx")
+	pCoUninitialize       = ole32.NewProc("CoUninitialize")
+	pCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
+	pCreateStreamOnHGlobal = ole32.NewProc("CreateStreamOnHGlobal")
 )
 
 // Window styles.
