@@ -31,6 +31,12 @@ func (b *bridge) Bind(name string, fn any) error {
 	return nil
 }
 
+func (b *bridge) Unbind(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.funcs, name)
+}
+
 // funcNames returns the bound names, for bootstrap injection.
 func (b *bridge) funcNames() []string {
 	b.mu.Lock()

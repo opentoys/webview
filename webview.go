@@ -55,6 +55,10 @@ func (w *W) Bind(name string, fn any) error {
 	return w.bridge.Bind(name, fn)
 }
 
+func (w *W) Unbind(name string) {
+	w.bridge.Unbind(name)
+}
+
 func (w *W) InterceptResource(scheme string, handler ResourceHandler) {
 	w.p.InterceptResource(scheme, handler)
 }
