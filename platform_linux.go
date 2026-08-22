@@ -1,10 +1,9 @@
-//go:build !darwin && !windows && !linux
+//go:build linux
 
 package webview
 
 import (
-	"errors"
-
+	"github.com/opentoys/webview/internal/linux"
 	"github.com/opentoys/webview/internal/types"
 )
 
@@ -21,8 +20,14 @@ type ResourceRequest = types.ResourceRequest
 type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
 
-var errUnsupported = errors.New("webview: unsupported platform")
-
 func buildPlatform(opts Options, w *W) Platform {
-	panic("webview: unsupported platform; only darwin and windows are implemented")
+	p := linux.New()
+	p.Debug = opts.Debug
+	p.Incognito = opts.Incognito
+	p.DataDir = opts.DataDir
+	p.BoundFuncs = w.bridge.funcNames
+	p.MessageFunc = func(body string) {
+		w.bridge.HandleMessage(body, p.EvalHost)
+	}
+	return p
 }
