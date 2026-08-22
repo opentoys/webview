@@ -7,9 +7,10 @@
 ## 特性
 
 - **零 CGO** -- 像普通 Go 项目一样交叉编译，无需 C 工具链
-- **macOS** -- WKWebView + AppKit，通过 purego 调用 ObjC 运行时
-- **Windows** -- WebView2，通过纯 COM 互操作 (syscall.SyscallN)
+- **三端支持** -- macOS (WKWebView) / Windows (WebView2) / Linux (WebKitGTK)
 - **完整 JS 桥接** -- 从 JavaScript 调用 Go 函数，通过 Promise 返回结果
+- **自定义 URL Scheme** -- `app://` 等自定义协议，安全上下文，无需开端口
+- **JS 注入** -- `Init(js)` 在每次页面加载前执行 JS
 - **预 Run 缓冲** -- `SetTitle`、`SetHTML`、`Navigate` 可在 `Run()` 前调用
 - **内嵌 WebView2Loader.dll** -- 按架构 (amd64/arm64/x86)，自动解压到临时目录
 - **原生文件选择器** -- macOS 上 `<input type=file>` 映射到 NSOpenPanel
@@ -21,12 +22,27 @@
 |------|------|------|
 | macOS | WKWebView + AppKit (purego) | 可用 |
 | Windows | WebView2 (COM 互操作) | 可用 |
-| Linux | WebKitGTK | 计划中 |
+| Linux | WebKitGTK (purego) | 可用 |
 
 ## 环境要求
 
 - Go 1.24+
-- macOS 10.13+ 或 Windows 10+（需安装 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)）
+- macOS 10.13+
+- Windows 10+（需安装 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)）
+- Linux：需安装 WebKitGTK（见下方安装说明）
+
+### Linux WebKitGTK 安装
+
+```bash
+# Debian / Ubuntu
+apt install libwebkit2gtk-4.1-0
+
+# Fedora
+dnf install webkit2gtk4.1
+
+# Arch
+pacman -S webkit2gtk-4.1
+```
 
 ## 安装
 
@@ -76,8 +92,6 @@ CGO_ENABLED=0 go run ./example
 func New(opts Options) (*W, error)
 ```
 
-创建 webview 窗口，返回句柄 `*W`。
-
 ```go
 w, err := webview.New(webview.Options{
     Debug:     true,     // 启用开发者工具
@@ -97,6 +111,10 @@ w, err := webview.New(webview.Options{
 | `Navigate` | `func (w *W) Navigate(url string) error` | 导航到 URL |
 | `SetHTML` | `func (w *W) SetHTML(html string) error` | 加载 HTML 字符串 |
 | `Eval` | `func (w *W) Eval(js string) error` | 执行 JavaScript |
+| `Init` | `func (w *W) Init(js string) error` | 注入每次页面加载前执行的 JS |
+| `Bind` | `func (w *W) Bind(name string, fn any) error` | 将 Go 函数暴露给 JS |
+| `Unbind` | `func (w *W) Unbind(name string)` | 移除已绑定的 JS 函数 |
+| `InterceptResource` | `func (w *W) InterceptResource(scheme string, handler ResourceHandler)` | 注册自定义 URL scheme 资源拦截 |
 
 ### SizeHint
 
@@ -106,6 +124,19 @@ w, err := webview.New(webview.Options{
 | `SizeMin` | 1 | 最小尺寸 |
 | `SizeMax` | 2 | 最大尺寸 |
 | `SizeFixed` | 3 | 固定尺寸 |
+
+### Init（JS 注入）
+
+```go
+func (w *W) Init(js string) error
+```
+
+注册在每次页面加载前执行的 JavaScript。可多次调用，脚本按注册顺序执行。适合注入 polyfill、全局变量拦截等。
+
+```go
+w.Init(`console.log('page loading...')`)
+w.Init(`window.__APP_VERSION = '1.0.0'`)
+```
 
 ### Bind（JS 桥接）
 
@@ -121,20 +152,8 @@ func (w *W) Bind(name string, fn any) error
 - `func(args...) (T, error)` -- 返回值或错误，错误时 Promise reject
 - `func(args...) error` -- 仅返回错误
 
-**参数类型：** 任何可 JSON 序列化的 Go 类型。JS 参数通过 `encoding/json` 解码。
-
 ```go
-// 无返回
-w.Bind("log", func(msg string) {
-    fmt.Println(msg)
-})
-
-// 返回值
-w.Bind("add", func(a, b int) int {
-    return a + b
-})
-
-// 返回值 + 错误
+w.Bind("add", func(a, b int) int { return a + b })
 w.Bind("readFile", func(path string) (string, error) {
     data, err := os.ReadFile(path)
     return string(data), err
@@ -144,14 +163,55 @@ w.Bind("readFile", func(path string) (string, error) {
 JavaScript 端：
 
 ```javascript
-// 所有绑定函数返回 Promise
-await log("hello from JS");
 const sum = await add(1, 2);
 try {
     const content = await readFile("/etc/hosts");
 } catch (e) {
     console.error(e.message);
 }
+```
+
+### InterceptResource（自定义 URL Scheme）
+
+```go
+func (w *W) InterceptResource(scheme string, handler ResourceHandler)
+```
+
+注册自定义 URL scheme 的资源拦截器。必须在 `Run()` 前调用。
+
+`app://` 等自定义协议在所有平台上都被视为**安全上下文**（`localStorage`、`crypto.subtle`、`getUserMedia` 等均可用），且无需开端口。
+
+```go
+w.InterceptResource("app", func(req webview.ResourceRequest, respond func(*webview.ResourceResponse)) {
+    if strings.Contains(req.URL, "index.html") {
+        respond(&webview.ResourceResponse{
+            StatusCode: 200,
+            Headers:    map[string]string{"Content-Type": "text/html"},
+            Body:       []byte(`<h1>Hello</h1>`),
+        })
+    } else {
+        respond(nil) // 404
+    }
+})
+w.Navigate("app://host/index.html")
+```
+
+**类型定义：**
+
+```go
+type ResourceRequest struct {
+    URL     string
+    Method  string
+    Headers map[string]string
+}
+
+type ResourceResponse struct {
+    StatusCode int
+    Headers    map[string]string
+    Body       []byte
+}
+
+type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 ```
 
 ## JS 桥接协议
@@ -170,13 +230,16 @@ webviewBridge.reject(1, "error")  // 失败
 ```
 
 传输层：
-- macOS: `window.webkit.messageHandlers.webviewBridge.postMessage()`
+- macOS / Linux: `window.webkit.messageHandlers.webviewBridge.postMessage()`
 - Windows: `window.chrome.webview.postMessage()`
 
 ## 构建与运行
 
 ```bash
 # macOS
+CGO_ENABLED=0 go run ./example
+
+# Linux
 CGO_ENABLED=0 go run ./example
 
 # Windows（从 macOS/Linux 交叉编译）
@@ -202,69 +265,7 @@ WebView2 需要 `WebView2Loader.dll` 来引导启动。库会自动处理：
 3. 系统 DLL（搜索 PATH 和可执行文件目录）
 4. 可执行文件目录显式搜索
 
-**内嵌架构：** amd64、arm64、x86。其他架构回退到系统 DLL。
-
 如未安装 WebView2 Runtime，请从 [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) 下载。
-
-## 示例
-
-### 计数器
-
-```go
-package main
-
-import "github.com/opentoys/webview"
-
-func main() {
-	w, _ := webview.New(webview.Options{Debug: true})
-	defer w.Close()
-
-	count := 0
-	w.Bind("increment", func() int {
-		count++
-		return count
-	})
-
-	w.SetTitle("counter")
-	w.SetSize(600, 400, webview.SizeNone)
-	w.SetHTML(`<!doctype html>
-<html><body style="text-align:center;padding-top:2em">
-  <p id="c" style="font-size:2em">0</p>
-  <button onclick="increment().then(n =>
-    document.getElementById('c').textContent = n)">+1</button>
-</body></html>`)
-
-	w.Run()
-}
-```
-
-### 导航到 URL
-
-```go
-package main
-
-import "github.com/opentoys/webview"
-
-func main() {
-	w, _ := webview.New(webview.Options{Debug: true})
-	defer w.Close()
-
-	w.SetTitle("browser")
-	w.SetSize(1024, 768, webview.SizeNone)
-	w.Navigate("https://example.com")
-
-	w.Run()
-}
-```
-
-### 隐身模式 + 自定义数据目录
-
-```go
-w, _ := webview.New(webview.Options{
-    Incognito: true,              // 不持久化存储
-    DataDir:   "./my-app-data",   // 自定义数据目录
-})
-```
 
 ## License
 
