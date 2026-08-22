@@ -4,7 +4,7 @@ package webview
 
 import (
 	"github.com/opentoys/webview/internal/darwin"
-	"github.com/opentoys/webview/internal/types"
+	"github.com/opentoys/webview/types"
 )
 
 type SizeHint = types.SizeHint

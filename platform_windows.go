@@ -3,7 +3,7 @@
 package webview
 
 import (
-	"github.com/opentoys/webview/internal/types"
+	"github.com/opentoys/webview/types"
 	win "github.com/opentoys/webview/internal/windows"
 )
 

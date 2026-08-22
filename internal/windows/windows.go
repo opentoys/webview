@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/opentoys/webview/internal/types"
+	"github.com/opentoys/webview/types"
 )
 
-// Re-export shared types from internal/types.
+// Re-export shared types from types.
 type SizeHint = types.SizeHint
 
 const (

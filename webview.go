@@ -1,7 +1,7 @@
 package webview
 
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
-// from internal/types, re-exported per-platform in platform_*.go files.
+// from types, re-exported per-platform in platform_*.go files.
 
 type Platform interface {
 	Run() error

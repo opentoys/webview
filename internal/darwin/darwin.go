@@ -11,7 +11,7 @@ import (
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
-	"github.com/opentoys/webview/internal/types"
+	"github.com/opentoys/webview/types"
 )
 
 var (
@@ -20,7 +20,7 @@ var (
 )
 
 
-// Re-export shared types from internal/types.
+// Re-export shared types from types.
 type SizeHint = types.SizeHint
 
 const (
