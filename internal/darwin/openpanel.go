@@ -4,19 +4,32 @@ package darwin
 
 import (
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
 
+// acceptMu protects acceptVal, written by the __accept__ bridge callback
+// (main thread) and read by readAcceptAndFilter (main thread).
+var (
+	acceptMu  sync.Mutex
+	acceptVal string
+)
+
+// SetAccept stores the <input accept> value captured by the JS click listener.
+// Called from the __accept__ bridge function.
+func SetAccept(v string) {
+	acceptMu.Lock()
+	acceptVal = v
+	acceptMu.Unlock()
+}
+
 // OpenPanelParams is the info a runOpenPanelWithParameters: handler receives.
 type OpenPanelParams struct {
 	AllowsMultipleSelection bool
 	AllowsDirectories       bool
-	// AllowedFileTypes limits selectable files to these extensions (without
-	// leading dot, e.g. "png", "jpg"). Empty means all files.
-	AllowedFileTypes []string
 }
 
 // invokeBlock calls a WebKit-provided completion block via its invoke function
@@ -34,10 +47,7 @@ func invokeBlock(block objc.ID, arg objc.ID) {
 }
 
 // runOpenPanel is the WKUIDelegate runOpenPanelWithParameters:initiatedByFrame:
-// completionHandler: implementation. Runs on the host thread (delegate
-// callbacks are delivered there, same as dialog/script-message handlers).
-// Building the panel, showing the sheet, and calling completion all happen on
-// the host thread, so activePlatform is current and no lock is needed.
+// completionHandler: implementation.
 func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, frame objc.ID, completion objc.ID) {
 	p := activePlatform
 	if p == nil {
@@ -45,12 +55,7 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 	}
 	allowsMulti := objc.ID(paramsObj).Send(allowsMultipleSelectionSel) != 0
 	allowsDirs := objc.ID(paramsObj).Send(allowsDirectoriesSel) != 0
-	// _Block_copy the completion IMMEDIATELY — before anything else.
-	// WebKit provides a stack block that is only guaranteed alive for the
-	// duration of this delegate callback. runModal pumps a nested event loop
-	// that drains autorelease pools, which can free the original block.
-	// _Block_copy promotes a stack block to the heap (or increments the
-	// refcount of a heap block).
+
 	if completion == 0 {
 		return
 	}
@@ -60,36 +65,22 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 	}
 	defer safe.Release()
 
-	// Recover from any panic in the panel path and still call WebKit's
-	// completion with nil, preventing the "completion handler was not called"
-	// crash.
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				invokeBlock(objc.ID(safe), objc.ID(0))
 			}
 		}()
-		p.showOpenPanel(OpenPanelParams{
+		p.showOpenPanel(webView, OpenPanelParams{
 			AllowsMultipleSelection: allowsMulti,
 			AllowsDirectories:       allowsDirs,
 		}, objc.ID(safe))
 	}()
 }
 
-// showOpenPanel presents the native NSOpenPanel for <input type=file>, or
-// routes to OpenPanelFunc when the app has overridden it. Runs on the host
-// thread (called from runOpenPanel, a WKUIDelegate callback).
-//
-// The default path runs the panel modally with runModal (the webview_go
-// reference approach). runModal pumps a nested event loop on the host thread,
-// so it works under the manual host loop; the page is frozen while the panel
-// is up, which is the standard modal-dialog behavior. WebKit's completion
-// block is invoked via NSInvocation with panel.URLs on return.
-func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
+// showOpenPanel presents the native NSOpenPanel for <input type=file>.
+func (p *Platform) showOpenPanel(wv objc.ID, params OpenPanelParams, completion objc.ID) {
 	if p.OpenPanelFunc != nil {
-		// The handler may call cb synchronously (host thread) or from another
-		// goroutine. Block until cb fires so the delegate method can call the
-		// WebKit completion before returning — WebKit asserts it is called.
 		var (
 			paths []string
 			ok    bool
@@ -105,21 +96,23 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 		}
 		return
 	}
-	// completion is already a heap block (_Block_copy'd in runOpenPanel).
-	// NSOpenPanel has no public init; openPanel returns a configured instance.
+
 	panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
-	configureOpenPanel(panel, true, params.AllowsDirectories, params.AllowsMultipleSelection, params.AllowedFileTypes)
-	// Default to the user's home directory (homeDirectoryForCurrentUser → NSURL).
+	panel.Send(setCanChooseFilesSel, true)
+	panel.Send(setCanChooseDirectoriesSel, params.AllowsDirectories)
+	panel.Send(setAllowsMultipleSelectionSel, params.AllowsMultipleSelection)
+
 	fm := objc.ID(nsFileManagerClass).Send(defaultManagerSel)
 	home := objc.ID(fm).Send(homeDirectoryForCurrentUserSel)
 	panel.Send(setDirectoryURLSel, home)
 
-	// NSModalResponseOK = 1. Run the panel modally; on OK, forward the selected
-	// URLs (NSArray<NSURL>) to WebKit's completion block.
+	// Read <input accept> stored by the __accept__ bridge callback and
+	// apply content-type filter BEFORE showing the panel.
+	readAcceptAndFilter(panel)
+
+	// NSModalResponseOK = 1.
 	result := panel.Send(runModalSel)
 	if result != 0 {
-		// Retain URLs before invoking completion: the panel may be freed
-		// when the autorelease pool drains after runModal.
 		urls := panel.Send(URLsSel)
 		invokeBlock(completion, urls)
 	} else {
@@ -127,38 +120,101 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	}
 }
 
-// configureOpenPanel applies the open-panel settings shared by showOpenPanel
-// and the programmatic dialog API.
-func configureOpenPanel(panel objc.ID, canFiles, canDirs, multiple bool, allowedTypes []string) {
-	panel.Send(setCanChooseFilesSel, canFiles)
-	panel.Send(setCanChooseDirectoriesSel, canDirs)
-	panel.Send(setAllowsMultipleSelectionSel, multiple)
-	types := allowedFileTypes(allowedTypes)
+// readAcceptAndFilter reads the <input accept> value stored by the __accept__
+// bridge callback, builds UTType objects, and sets panel.allowedContentTypes
+// — all BEFORE runModal is called. No JS eval, no NSRunLoop needed.
+func readAcceptAndFilter(panel objc.ID) {
+	if panel.Send(respondsToSelectorSel, setAllowedContentTypesSel) == 0 {
+		return
+	}
+	acceptMu.Lock()
+	accept := acceptVal
+	acceptVal = "" // reset for next time
+	acceptMu.Unlock()
+
+	types := buildUTTypes(parseAccept(accept))
 	if types != 0 {
-		panel.Send(setAllowedFileTypesSel, types)
+		panel.Send(setAllowedContentTypesSel, types)
 	}
 }
 
-// allowedFileTypes builds an NSMutableArray<NSString*> of bare extensions for
-// setAllowedFileTypes:. Returns 0 (nil) when exts is empty (no restriction).
-func allowedFileTypes(exts []string) objc.ID {
-	if len(exts) == 0 {
+// parseAccept splits an HTML accept attribute value into individual entries.
+// E.g. "image/png,.pdf,.jpg" → ["image/png", ".pdf", ".jpg"]
+func parseAccept(accept string) []string {
+	if accept == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(accept, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// buildUTTypes converts accept values to an NSArray<UTType>. Handles MIME
+// types ("image/png"), file extensions (".png"). Returns 0 if empty.
+func buildUTTypes(accepts []string) objc.ID {
+	if len(accepts) == 0 {
 		return 0
 	}
+	utTypeClass := objc.GetClass("UTType")
+	if utTypeClass == 0 {
+		return 0
+	}
+	typeWithMIMESel := objc.RegisterName("typeWithMIMEType:")
+	typeWithExtSel := objc.RegisterName("typeWithFilenameExtension:")
+
+	// Wildcard MIME → global UTType constant.
+	wildcardMap := map[string]objc.ID{
+		"image/*": utTypeGlobal("UTTypeImage"),
+		"video/*": utTypeGlobal("UTTypeMovie"),
+		"audio/*": utTypeGlobal("UTTypeAudio"),
+		"text/*":  utTypeGlobal("UTTypeText"),
+	}
+
 	arr := objc.ID(nsMutableArrayClass).Send(arrayInstanceSel)
-	for _, e := range exts {
-		e = strings.TrimPrefix(e, ".")
-		if e == "" || e == "*" {
-			return 0 // wildcard = no restriction
+	for _, a := range accepts {
+		var ut objc.ID
+		if strings.HasPrefix(a, ".") {
+			ext := strings.TrimPrefix(a, ".")
+			ut = objc.ID(utTypeClass).Send(typeWithExtSel, nsString(ext))
+		} else if id, ok := wildcardMap[a]; ok {
+			ut = id
+		} else if strings.Contains(a, "/") {
+			ut = objc.ID(utTypeClass).Send(typeWithMIMESel, nsString(a))
+		} else {
+			continue
 		}
-		arr.Send(addObjectSel, nsString(e))
+		if ut != 0 {
+			arr.Send(addObjectSel, ut)
+		}
+	}
+	countSel := objc.RegisterName("count")
+	if arr.Send(countSel) == 0 {
+		return 0
 	}
 	return arr
 }
 
+// utTypeGlobal reads a global UTType constant (e.g. "UTTypeImage") from the
+// UniformTypeIdentifiers framework via Dlsym. Returns 0 if the symbol is not found.
+var utTypeFrameworkOnce sync.Once
+
+func utTypeGlobal(name string) objc.ID {
+	utTypeFrameworkOnce.Do(func() {
+		purego.Dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
+	})
+	addr, err := purego.Dlsym(purego.RTLD_DEFAULT, name)
+	if err != nil || addr == 0 {
+		return 0
+	}
+	return *(*objc.ID)(unsafe.Pointer(addr))
+}
+
 // pathURLs builds an NSArray<NSURL> from absolute paths, or 0 (nil) for empty.
-// fileURLWithPath: returns file-system URLs; WebKit converts these into the
-// input's FileList.
 func pathURLs(paths []string) objc.ID {
 	if len(paths) == 0 {
 		return 0
@@ -168,11 +224,11 @@ func pathURLs(paths []string) objc.ID {
 		ids[i] = objc.ID(nsURLClass).Send(fileURLWithPathSel, nsString(p))
 	}
 	return objc.ID(nsArrayClass).Send(arrayWithObjectsCountSel,
-		unsafe.Pointer(&ids[0]), len(ids))
+		unsafe.Pointer(&ids[0]), len(paths))
 }
 
 // openPanelResult builds the NSArray<NSURL> completion value for chosen paths,
-// or 0 (nil) on cancel. Pure; separated so it is unit-testable without a block.
+// or 0 (nil) on cancel.
 func openPanelResult(paths []string, ok bool) objc.ID {
 	if !ok {
 		return 0

@@ -206,9 +206,11 @@ var (
 	defaultDataStoreSel             objc.SEL
 	allowsMultipleSelectionSel      objc.SEL
 	allowsDirectoriesSel            objc.SEL
+	allowedContentTypesSel          objc.SEL
 	openPanelSel                    objc.SEL
 	setCanChooseFilesSel            objc.SEL
 	setCanChooseDirectoriesSel      objc.SEL
+	setAllowedContentTypesSel       objc.SEL
 	setAllowsMultipleSelectionSel   objc.SEL
 	setDirectoryURLSel              objc.SEL
 	setAllowedFileTypesSel          objc.SEL
@@ -246,6 +248,7 @@ var (
 	dictionaryWithObjectsForKeysCountSel objc.SEL
 	retainSel                           objc.SEL
 	releaseSel                          objc.SEL
+	respondsToSelectorSel               objc.SEL
 	setMessageTextSel                   objc.SEL
 	setInformativeTextSel               objc.SEL
 	addButtonWithTitleSel               objc.SEL
@@ -348,6 +351,7 @@ func init() {
 	autoreleaseSel = objc.RegisterName("autorelease")
 	retainSel = objc.RegisterName("retain")
 	releaseSel = objc.RegisterName("release")
+	respondsToSelectorSel = objc.RegisterName("respondsToSelector:")
 	separatorItemSel = objc.RegisterName("separatorItem")
 	addItemSel = objc.RegisterName("addItem:")
 	setSubmenuSel = objc.RegisterName("setSubmenu:")
@@ -357,9 +361,11 @@ func init() {
 	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
 	allowsMultipleSelectionSel = objc.RegisterName("allowsMultipleSelection")
 	allowsDirectoriesSel = objc.RegisterName("allowsDirectories")
+	allowedContentTypesSel = objc.RegisterName("allowedContentTypes")
 	openPanelSel = objc.RegisterName("openPanel")
 	setCanChooseFilesSel = objc.RegisterName("setCanChooseFiles:")
 	setCanChooseDirectoriesSel = objc.RegisterName("setCanChooseDirectories:")
+	setAllowedContentTypesSel = objc.RegisterName("setAllowedContentTypes:")
 	setAllowsMultipleSelectionSel = objc.RegisterName("setAllowsMultipleSelection:")
 	setDirectoryURLSel = objc.RegisterName("setDirectoryURL:")
 	setAllowedFileTypesSel = objc.RegisterName("setAllowedFileTypes:")
@@ -1114,6 +1120,8 @@ func (p *Platform) setup() error {
 	w.Send(makeKeyAndOrderFrontSel, 0)
 	// Make webview first responder so it receives keyboard/mouse events.
 	w.Send(objc.RegisterName("makeFirstResponder:"), wv)
+	// Re-activate app to ensure window gets focus on modern macOS.
+	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(activateIgnoringOtherAppsSel, true)
 	// Cmd-C/Cmd-V need an Edit menu (key equivalents route via the main menu).
 	// Bare AppKit apps without a nib have no menu, so install one once.
 	setupMainMenu()

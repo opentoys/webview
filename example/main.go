@@ -34,7 +34,7 @@ func main() {
 		style="font-size:1.2em;padding:0.5em 1em">+1</button>
 	<hr>
 	<h2>File Input Test</h2>
-	<input type="file" id="fileInput" accept=".txt,text/plain" multiple>
+	<input type="file" id="fileInput" accept="image/*" multiple>
 	<p id="fileInfo"></p>
 	<div>
 		<a id="downloadLink" onclick="downloadTextSimple('Hello, World!', 'hello.txt')">Download Text</a>

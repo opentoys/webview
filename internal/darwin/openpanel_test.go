@@ -65,7 +65,7 @@ func TestOpenPanelFuncRouting(t *testing.T) {
 	waitWindow(t, p)
 
 	mainThread(func() {
-		p.showOpenPanel(OpenPanelParams{AllowsMultipleSelection: true}, objc.ID(0))
+		p.showOpenPanel(objc.ID(0), OpenPanelParams{AllowsMultipleSelection: true}, objc.ID(0))
 	})
 	select {
 	case params := <-called:
