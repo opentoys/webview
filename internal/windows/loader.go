@@ -13,7 +13,6 @@ import (
 	"unsafe"
 
 	"github.com/opentoys/webview/internal/windows/assets"
-	"golang.org/x/sys/windows"
 )
 
 const dll = "WebView2Loader.dll"
@@ -71,14 +70,20 @@ func loadDLL(path string) (WebView2CreateEnvironmentWithOptions, error) {
 	return makeLoaderFunc(dll.NewProc("CreateCoreWebView2EnvironmentWithOptions")), nil
 }
 
+// maxPath is the Windows MAX_PATH constant.
+const maxPath = 260
+
+// pGetModuleFileNameW is resolved lazily from kernel32.dll.
+var pGetModuleFileNameW = kernel32.NewProc("GetModuleFileNameW")
+
 // exeDir returns the directory of the current executable, or "" on error.
 func exeDir() string {
-	var buf [windows.MAX_PATH]uint16
-	n, err := windows.GetModuleFileName(0, &buf[0], uint32(len(buf)))
-	if err != nil || n == 0 {
+	var buf [maxPath]uint16
+	r, _, _ := pGetModuleFileNameW.Call(0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if r == 0 {
 		return ""
 	}
-	return filepath.Dir(windows.UTF16ToString(buf[:n]))
+	return filepath.Dir(syscall.UTF16ToString(buf[:r]))
 }
 
 func makeLoaderFunc(proc *syscall.LazyProc) WebView2CreateEnvironmentWithOptions {

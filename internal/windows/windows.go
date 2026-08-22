@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 
 	"github.com/opentoys/webview/internal/types"
-	"golang.org/x/sys/windows"
 )
 
 // Re-export shared types from internal/types.
@@ -136,12 +136,12 @@ func (p *Platform) setup() error {
 	// Register window class.
 	hInst, _, _ := pGetModuleHandleW.Call(0)
 	className := utf16PtrFromStr("GoWebviewWindow")
-	p.wndProc = windows.NewCallback(p.wndproc)
+	p.wndProc = syscall.NewCallback(p.wndproc)
 
 	wc := WNDCLASSEXW{
 		CbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
 		LpfnWndProc:   p.wndProc,
-		HInstance:     windows.Handle(hInst),
+		HInstance:     hInst,
 		LpszClassName: className,
 	}
 	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))

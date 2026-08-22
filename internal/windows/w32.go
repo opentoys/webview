@@ -4,14 +4,13 @@ package windows
 
 import (
 	"sync"
-
-	"golang.org/x/sys/windows"
+	"syscall"
 )
 
 var (
-	user32   = windows.NewLazySystemDLL("user32.dll")
-	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
-	ole32    = windows.NewLazySystemDLL("ole32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	ole32    = syscall.NewLazyDLL("ole32.dll")
 
 	pRegisterClassExW   = user32.NewProc("RegisterClassExW")
 	pCreateWindowExW    = user32.NewProc("CreateWindowExW")
@@ -70,13 +69,13 @@ type WNDCLASSEXW struct {
 	LpfnWndProc   uintptr
 	CbClsExtra    int32
 	CbWndExtra    int32
-	HInstance     windows.Handle
-	HIcon         windows.Handle
-	HCursor       windows.Handle
-	HbrBackground windows.Handle
+	HInstance     uintptr
+	HIcon         uintptr
+	HCursor       uintptr
+	HbrBackground uintptr
 	LpszMenuName  *uint16
 	LpszClassName *uint16
-	HIconSm       windows.Handle
+	HIconSm       uintptr
 }
 
 // RECT matches the Win32 RECT structure.
@@ -91,7 +90,7 @@ type POINT struct {
 
 // MSG matches the Win32 MSG structure.
 type MSG struct {
-	HWnd    windows.Handle
+	HWnd    uintptr
 	Message uint32
 	WParam  uintptr
 	LParam  uintptr

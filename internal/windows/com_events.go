@@ -4,8 +4,6 @@ package windows
 
 import (
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // iCoreWebView2WebMessageReceivedEventArgs wraps the event args COM interface.
@@ -30,7 +28,7 @@ func (a *iCoreWebView2WebMessageReceivedEventArgs) GetWebMessageAsString() strin
 	if pwstr == nil {
 		return ""
 	}
-	s := windows.UTF16PtrToString(pwstr)
+	s := wideToString(pwstr)
 	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
 	return s
 }

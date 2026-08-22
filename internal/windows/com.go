@@ -5,8 +5,7 @@ package windows
 import (
 	"fmt"
 	"syscall"
-
-	"golang.org/x/sys/windows"
+	"unsafe"
 )
 
 // ComProc stores a COM virtual function pointer.
@@ -20,7 +19,7 @@ func (p ComProc) Call(a ...uintptr) (r1, r2 uintptr, lastErr error) {
 // NewComProc wraps a Go function as a COM-callable callback via
 // windows.NewCallback. The returned pointer is safe to store in vtables.
 func NewComProc(fn interface{}) ComProc {
-	return ComProc(windows.NewCallback(fn))
+	return ComProc(syscall.NewCallback(fn))
 }
 
 // GUID matches the Windows COM GUID layout.
@@ -62,8 +61,25 @@ type _IUnknownVtbl struct {
 // utf16PtrFromStr converts a Go string to a *uint16 for Windows APIs.
 // Caller MUST call runtime.KeepAlive(p) after the syscall to prevent GC.
 func utf16PtrFromStr(s string) *uint16 {
-	p, _ := windows.UTF16PtrFromString(s)
+	p, _ := syscall.UTF16PtrFromString(s)
 	return p
+}
+
+// wideToString converts a COM-allocated *uint16 (NUL-terminated UTF-16) to a
+// Go string. Returns "" for a nil pointer. The caller must CoTaskMemFree the
+// pointer after this call if the COM API allocated it.
+func wideToString(p *uint16) string {
+	if p == nil {
+		return ""
+	}
+	// Find the NUL terminator.
+	n := 0
+	q := p
+	for *q != 0 {
+		n++
+		q = (*uint16)(unsafe.Add(unsafe.Pointer(q), 2))
+	}
+	return syscall.UTF16ToString(unsafe.Slice(p, n))
 }
 
 // S_OK

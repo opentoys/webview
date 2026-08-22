@@ -5,8 +5,6 @@ package windows
 import (
 	"runtime"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // --- ICoreWebView2WebResourceRequestedEventArgs ---
@@ -75,7 +73,7 @@ func (r *iCoreWebView2WebResourceRequest) GetUri() string {
 	if pwstr == nil {
 		return ""
 	}
-	s := windows.UTF16PtrToString(pwstr)
+	s := wideToString(pwstr)
 	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
 	return s
 }
@@ -89,7 +87,7 @@ func (r *iCoreWebView2WebResourceRequest) GetMethod() string {
 	if pwstr == nil {
 		return ""
 	}
-	s := windows.UTF16PtrToString(pwstr)
+	s := wideToString(pwstr)
 	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
 	return s
 }
@@ -199,7 +197,7 @@ func (h *iCoreWebView2HttpRequestHeaders) GetHeader(name string) string {
 	if pwstr == nil {
 		return ""
 	}
-	s := windows.UTF16PtrToString(pwstr)
+	s := wideToString(pwstr)
 	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
 	return s
 }
