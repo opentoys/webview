@@ -3,8 +3,7 @@
 package darwin
 
 import (
-	"fmt"
-	"os"
+	"strings"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -15,25 +14,21 @@ import (
 type OpenPanelParams struct {
 	AllowsMultipleSelection bool
 	AllowsDirectories       bool
+	// AllowedFileTypes limits selectable files to these extensions (without
+	// leading dot, e.g. "png", "jpg"). Empty means all files.
+	AllowedFileTypes []string
 }
 
 // invokeBlock calls a WebKit-provided completion block via its invoke function
-// pointer (purego.SyscallN). Logs diagnostics to stderr.
+// pointer (purego.SyscallN).
 func invokeBlock(block objc.ID, arg objc.ID) {
 	if block == 0 {
 		return
 	}
 	invoke := blockInvoke(uintptr(block))
-	fmt.Fprintf(os.Stderr, "invokeBlock: block=%#x arg=%#x invoke=%#x\n",
-		uintptr(block), uintptr(arg), invoke)
 	if invoke == 0 {
-		fmt.Fprintf(os.Stderr, "invokeBlock: invoke is NULL!\n")
 		return
 	}
-	// Call the block's invoke function directly via SyscallN (fixed-arg C ABI).
-	// This avoids purego.RegisterFunc variadic ABI issues.
-	// The invoke pointer is a C function: void (*)(void *block, void *arg).
-	// purego.SyscallN(fn, a1, a2) puts a1 in rdi, a2 in rsi, calls fn.
 	r, _, _ := purego.SyscallN(invoke, uintptr(block), uintptr(arg))
 	_ = r
 }
@@ -61,7 +56,6 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 	}
 	safe := objc.Block(completion).Copy()
 	if safe == 0 {
-		fmt.Fprintf(os.Stderr, "openpanel: _Block_copy returned nil!\n")
 		return
 	}
 	defer safe.Release()
@@ -72,7 +66,6 @@ func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, 
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "openpanel: panic in showOpenPanel: %v\n", r)
 				invokeBlock(objc.ID(safe), objc.ID(0))
 			}
 		}()
@@ -115,10 +108,7 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	// completion is already a heap block (_Block_copy'd in runOpenPanel).
 	// NSOpenPanel has no public init; openPanel returns a configured instance.
 	panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
-	panel.Send(setCanChooseFilesSel, true)
-	panel.Send(setCanChooseDirectoriesSel, params.AllowsDirectories)
-	panel.Send(setAllowsMultipleSelectionSel, params.AllowsMultipleSelection)
-	panel.Send(setAllowedFileTypesSel, objc.ID(0)) // nil = all files
+	configureOpenPanel(panel, true, params.AllowsDirectories, params.AllowsMultipleSelection, params.AllowedFileTypes)
 	// Default to the user's home directory (homeDirectoryForCurrentUser → NSURL).
 	fm := objc.ID(nsFileManagerClass).Send(defaultManagerSel)
 	home := objc.ID(fm).Send(homeDirectoryForCurrentUserSel)
@@ -135,6 +125,35 @@ func (p *Platform) showOpenPanel(params OpenPanelParams, completion objc.ID) {
 	} else {
 		invokeBlock(completion, objc.ID(0))
 	}
+}
+
+// configureOpenPanel applies the open-panel settings shared by showOpenPanel
+// and the programmatic dialog API.
+func configureOpenPanel(panel objc.ID, canFiles, canDirs, multiple bool, allowedTypes []string) {
+	panel.Send(setCanChooseFilesSel, canFiles)
+	panel.Send(setCanChooseDirectoriesSel, canDirs)
+	panel.Send(setAllowsMultipleSelectionSel, multiple)
+	types := allowedFileTypes(allowedTypes)
+	if types != 0 {
+		panel.Send(setAllowedFileTypesSel, types)
+	}
+}
+
+// allowedFileTypes builds an NSMutableArray<NSString*> of bare extensions for
+// setAllowedFileTypes:. Returns 0 (nil) when exts is empty (no restriction).
+func allowedFileTypes(exts []string) objc.ID {
+	if len(exts) == 0 {
+		return 0
+	}
+	arr := objc.ID(nsMutableArrayClass).Send(arrayInstanceSel)
+	for _, e := range exts {
+		e = strings.TrimPrefix(e, ".")
+		if e == "" || e == "*" {
+			return 0 // wildcard = no restriction
+		}
+		arr.Send(addObjectSel, nsString(e))
+	}
+	return arr
 }
 
 // pathURLs builds an NSArray<NSURL> from absolute paths, or 0 (nil) for empty.

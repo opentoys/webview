@@ -149,6 +149,7 @@ var (
 	nsOpenPanelClass       objc.Class
 	nsFileManagerClass     objc.Class
 	nsArrayClass           objc.Class
+	nsMutableArrayClass    objc.Class
 	nsSavePanelClass       objc.Class
 	nsWorkspaceClass       objc.Class
 	wkDownloadClass        objc.Class
@@ -255,6 +256,9 @@ var (
 	windowSel                           objc.SEL
 	errorWithDomainSel                  objc.SEL // [NSError errorWithDomain:code:userInfo:]
 	didFailWithErrorSel                 objc.SEL // [task didFailWithError:]
+	arrayInstanceSel                    objc.SEL // [NSMutableArray array]
+	addObjectSel                        objc.SEL // [array addObject:]
+	setMessageSel                       objc.SEL // [panel setMessage:]
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -293,6 +297,7 @@ func init() {
 	nsOpenPanelClass = objc.GetClass("NSOpenPanel")
 	nsFileManagerClass = objc.GetClass("NSFileManager")
 	nsArrayClass = objc.GetClass("NSArray")
+	nsMutableArrayClass = objc.GetClass("NSMutableArray")
 	nsSavePanelClass = objc.GetClass("NSSavePanel")
 	nsWorkspaceClass = objc.GetClass("NSWorkspace")
 	wkDownloadClass = objc.GetClass("WKDownload")
@@ -396,6 +401,9 @@ func init() {
 	windowSel              = objc.RegisterName("window")
 	errorWithDomainSel     = objc.RegisterName("errorWithDomain:code:userInfo:")
 	didFailWithErrorSel    = objc.RegisterName("didFailWithError:")
+	arrayInstanceSel       = objc.RegisterName("array")
+	addObjectSel           = objc.RegisterName("addObject:")
+	setMessageSel          = objc.RegisterName("setMessage:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
