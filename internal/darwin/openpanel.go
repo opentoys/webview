@@ -167,13 +167,14 @@ func buildUTTypes(accepts []string) objc.ID {
 	typeWithMIMESel := objc.RegisterName("typeWithMIMEType:")
 	typeWithExtSel := objc.RegisterName("typeWithFilenameExtension:")
 
-	// Wildcard MIME → global UTType constant.
-	wildcardMap := map[string]objc.ID{
-		"image/*": utTypeGlobal("UTTypeImage"),
-		"video/*": utTypeGlobal("UTTypeMovie"),
-		"audio/*": utTypeGlobal("UTTypeAudio"),
-		"text/*":  utTypeGlobal("UTTypeText"),
+	// Wildcard MIME → UTType via typeWithIdentifier:.
+	wildcardUTI := map[string]string{
+		"image/*": "public.image",
+		"video/*": "public.movie",
+		"audio/*": "public.audio",
+		"text/*":  "public.text",
 	}
+	typeWithIdentifierSel := objc.RegisterName("typeWithIdentifier:")
 
 	arr := objc.ID(nsMutableArrayClass).Send(arrayInstanceSel)
 	for _, a := range accepts {
@@ -181,8 +182,8 @@ func buildUTTypes(accepts []string) objc.ID {
 		if strings.HasPrefix(a, ".") {
 			ext := strings.TrimPrefix(a, ".")
 			ut = objc.ID(utTypeClass).Send(typeWithExtSel, nsString(ext))
-		} else if id, ok := wildcardMap[a]; ok {
-			ut = id
+		} else if uti, ok := wildcardUTI[a]; ok {
+			ut = objc.ID(utTypeClass).Send(typeWithIdentifierSel, nsString(uti))
 		} else if strings.Contains(a, "/") {
 			ut = objc.ID(utTypeClass).Send(typeWithMIMESel, nsString(a))
 		} else {
@@ -197,21 +198,6 @@ func buildUTTypes(accepts []string) objc.ID {
 		return 0
 	}
 	return arr
-}
-
-// utTypeGlobal reads a global UTType constant (e.g. "UTTypeImage") from the
-// UniformTypeIdentifiers framework via Dlsym. Returns 0 if the symbol is not found.
-var utTypeFrameworkOnce sync.Once
-
-func utTypeGlobal(name string) objc.ID {
-	utTypeFrameworkOnce.Do(func() {
-		purego.Dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
-	})
-	addr, err := purego.Dlsym(purego.RTLD_DEFAULT, name)
-	if err != nil || addr == 0 {
-		return 0
-	}
-	return *(*objc.ID)(unsafe.Pointer(addr))
 }
 
 // pathURLs builds an NSArray<NSURL> from absolute paths, or 0 (nil) for empty.
