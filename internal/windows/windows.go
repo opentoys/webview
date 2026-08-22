@@ -63,6 +63,9 @@ type Platform struct {
 
 	// Resource interception.
 	schemeHandlers map[string]ResourceHandler
+	// userScriptSrcs accumulates JS sources added via Init() before the
+	// webview is ready. They are injected via AddScriptToExecuteOnDocumentCreated.
+	userScriptSrcs []string
 
 	// Loader.
 	createEnv WebView2CreateEnvironmentWithOptions
@@ -316,6 +319,12 @@ func (p *Platform) initWebView() {
 	js := bootstrapJS(names)
 	p.webview.AddScriptToExecuteOnDocumentCreated(js, 0)
 
+	// Inject any user scripts accumulated before Run().
+	for _, src := range p.userScriptSrcs {
+		p.webview.AddScriptToExecuteOnDocumentCreated(src, 0)
+	}
+	p.userScriptSrcs = nil
+
 	// Configure settings.
 	p.webview.PutAreDevToolsEnabled(p.Debug)
 	p.webview.PutIsStatusBarEnabled(false)
@@ -478,6 +487,18 @@ func (p *Platform) Eval(js string) error {
 		return nil
 	}
 	p.webview.ExecuteScript(js, 0)
+	return nil
+}
+
+// Init registers JS to run at document start for every page load.
+func (p *Platform) Init(js string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.webview != nil {
+		p.webview.AddScriptToExecuteOnDocumentCreated(js, 0)
+	} else {
+		p.userScriptSrcs = append(p.userScriptSrcs, js)
+	}
 	return nil
 }
 

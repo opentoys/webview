@@ -11,6 +11,7 @@ type Platform interface {
 	Navigate(url string) error
 	SetHTML(html string) error
 	Eval(js string) error
+	Init(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
 }
 
@@ -50,6 +51,7 @@ func (w *W) SetSize(width, height int, hint SizeHint) {
 func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
 func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
 func (w *W) Eval(js string) error      { return w.p.Eval(js) }
+func (w *W) Init(js string) error      { return w.p.Init(js) }
 
 func (w *W) Bind(name string, fn any) error {
 	return w.bridge.Bind(name, fn)

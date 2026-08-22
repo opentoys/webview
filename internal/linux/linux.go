@@ -652,6 +652,12 @@ func (p *Platform) EvalHost(js string) {
 	dispatchMain(func() { p.Eval(js) })
 }
 
+// Init injects JavaScript that runs at the start of every new page load.
+func (p *Platform) Init(js string) error {
+	p.pushUserScript(js)
+	return nil
+}
+
 // InterceptResource registers a resource handler for the given URL scheme.
 // Must be called before Run(). scheme is the URL scheme without "://".
 func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {

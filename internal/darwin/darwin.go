@@ -160,6 +160,7 @@ var (
 	nsAlertClass           objc.Class
 	nsTextFieldClass       objc.Class
 	nsErrorClass           objc.Class
+	wkUserScriptClass      objc.Class
 )
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
@@ -259,6 +260,9 @@ var (
 	arrayInstanceSel                    objc.SEL // [NSMutableArray array]
 	addObjectSel                        objc.SEL // [array addObject:]
 	setMessageSel                       objc.SEL // [panel setMessage:]
+	addUserScriptSel                    objc.SEL // [ucc addUserScript:]
+	removeAllUserScriptsSel             objc.SEL // [ucc removeAllUserScripts]
+	initWithSourceInjectionTimeForMainFrameOnlySel objc.SEL // [WKUserScript initWithSource:injectionTime:forMainFrameOnly:]
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -308,6 +312,7 @@ func init() {
 	nsAlertClass        = objc.GetClass("NSAlert")
 	nsTextFieldClass    = objc.GetClass("NSTextField")
 	nsErrorClass        = objc.GetClass("NSError")
+	wkUserScriptClass   = objc.GetClass("WKUserScript")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -404,6 +409,9 @@ func init() {
 	arrayInstanceSel       = objc.RegisterName("array")
 	addObjectSel           = objc.RegisterName("addObject:")
 	setMessageSel          = objc.RegisterName("setMessage:")
+	addUserScriptSel        = objc.RegisterName("addUserScript:")
+	removeAllUserScriptsSel = objc.RegisterName("removeAllUserScripts")
+	initWithSourceInjectionTimeForMainFrameOnlySel = objc.RegisterName("initWithSource:injectionTime:forMainFrameOnly:")
 
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
@@ -862,6 +870,10 @@ type Platform struct {
 	// name (without "://"). Populated before Run() via InterceptResource,
 	// wired to WKWebViewConfiguration in setup().
 	schemeHandlers map[string]ResourceHandler
+	// userScriptSrcs accumulates JS sources added via Init(). They are
+	// injected into WKUserContentController so they run at document start
+	// for every page load.
+	userScriptSrcs []string
 }
 
 func New() *Platform {
@@ -1034,6 +1046,9 @@ func (p *Platform) setup() error {
 	handler = handler.Send(initSel)
 	scriptHandler = handler
 	ucc.Send(addScriptMessageHandlerSel, handler, nsString("webviewBridge"))
+
+	// Inject any user scripts accumulated before Run().
+	p.rebuildScriptsLocked()
 
 	config := objc.ID(wkWebViewConfigClass).Send(allocSel)
 	config = config.Send(initSel)
@@ -1390,4 +1405,42 @@ func (p *Platform) EvalHost(js string) {
 func (p *Platform) Eval(js string) error {
 	p.evalJS(js)
 	return nil
+}
+
+const wkInjectionTimeAtDocumentStart = 0
+
+// Init registers JS to run at document start for every page load.
+func (p *Platform) Init(js string) error {
+	p.mu.Lock()
+	p.userScriptSrcs = append(p.userScriptSrcs, js)
+	if p.ucc != 0 {
+		p.rebuildScriptsLocked()
+	}
+	p.mu.Unlock()
+	return nil
+}
+
+// rebuildScriptsLocked re-injects all user scripts into the UCC.
+// Caller must hold p.mu.
+func (p *Platform) rebuildScriptsLocked() {
+	p.ucc.Send(removeAllUserScriptsSel)
+	for _, src := range p.userScriptSrcs {
+		addWKUserScript(p.ucc, src)
+	}
+}
+
+// addWKUserScript adds a WKUserScript to the given WKUserContentController.
+func addWKUserScript(ucc objc.ID, src string) {
+ s := objc.ID(wkUserScriptClass).Send(allocSel)
+ s = s.Send(initWithSourceInjectionTimeForMainFrameOnlySel, nsString(src), wkInjectionTimeAtDocumentStart, true)
+ ucc.Send(addUserScriptSel, s)
+ s.Send(releaseSel)
+}
+
+// boundFuncNames returns the current bound function names from BoundFuncs.
+func (p *Platform) boundFuncNames() []string {
+ if p.BoundFuncs != nil {
+  return p.BoundFuncs()
+ }
+ return nil
 }
