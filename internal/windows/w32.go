@@ -27,6 +27,7 @@ var (
 	pPostQuitMessage    = user32.NewProc("PostQuitMessage")
 	pGetClientRect      = user32.NewProc("GetClientRect")
 	pSetFocus           = user32.NewProc("SetFocus")
+	pSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	pGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
 	pPostMessageW       = user32.NewProc("PostMessageW")
 	pCreateMenu         = user32.NewProc("CreateMenu")

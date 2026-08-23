@@ -408,6 +408,7 @@ func (p *Platform) initWebView() {
 	// Show the main window and focus.
 	pShowWindow.Call(p.hwnd, SW_SHOW)
 	pUpdateWindow.Call(p.hwnd)
+	pSetForegroundWindow.Call(p.hwnd)
 	pSetFocus.Call(p.hwnd)
 
 	if p.hasCustomMenus {
