@@ -11,14 +11,13 @@ import (
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
-	"github.com/opentoys/webview/types"
+	"github.com/opentoys/webview/internal/types"
 )
 
 var (
 	errNoWindow  = errors.New("darwin: failed to alloc NSWindow")
 	errNoWebView = errors.New("darwin: failed to alloc WKWebView")
 )
-
 
 // Re-export shared types from types.
 type SizeHint = types.SizeHint
@@ -165,107 +164,107 @@ var (
 
 // Cached ObjC selectors (avoids repeated hash-table lookups in RegisterName).
 var (
-	allocSel                        objc.SEL
-	initSel                         objc.SEL
-	newSel                          objc.SEL
-	UTF8StringSel                   objc.SEL
-	stringWithUTF8Sel               objc.SEL
-	bodySel                         objc.SEL
-	setTitleSel                     objc.SEL
-	loadRequestSel                  objc.SEL
-	URLWithStringSel                objc.SEL
-	requestWithURLSel               objc.SEL
-	evaluateJSSel                   objc.SEL
-	loadHTMLStringSel               objc.SEL
-	orderOutSel                     objc.SEL
-	setDelegateSel                  objc.SEL
-	initWithContentRectSel          objc.SEL
-	setContentViewSel               objc.SEL
-	centerSel                       objc.SEL
-	makeKeyAndOrderFrontSel         objc.SEL
-	addScriptMessageHandlerSel      objc.SEL
-	setUserContentControllerSel     objc.SEL
-	initWithFrameSel                objc.SEL
-	initWithFrameOnlySel            objc.SEL
-	setUIDelegateSel                objc.SEL
-	sharedApplicationSel            objc.SEL
-	setActivationPolicySel          objc.SEL
-	activateIgnoringOtherAppsSel    objc.SEL
-	finishLaunchingSel              objc.SEL
+	allocSel                                              objc.SEL
+	initSel                                               objc.SEL
+	newSel                                                objc.SEL
+	UTF8StringSel                                         objc.SEL
+	stringWithUTF8Sel                                     objc.SEL
+	bodySel                                               objc.SEL
+	setTitleSel                                           objc.SEL
+	loadRequestSel                                        objc.SEL
+	URLWithStringSel                                      objc.SEL
+	requestWithURLSel                                     objc.SEL
+	evaluateJSSel                                         objc.SEL
+	loadHTMLStringSel                                     objc.SEL
+	orderOutSel                                           objc.SEL
+	setDelegateSel                                        objc.SEL
+	initWithContentRectSel                                objc.SEL
+	setContentViewSel                                     objc.SEL
+	centerSel                                             objc.SEL
+	makeKeyAndOrderFrontSel                               objc.SEL
+	addScriptMessageHandlerSel                            objc.SEL
+	setUserContentControllerSel                           objc.SEL
+	initWithFrameSel                                      objc.SEL
+	initWithFrameOnlySel                                  objc.SEL
+	setUIDelegateSel                                      objc.SEL
+	sharedApplicationSel                                  objc.SEL
+	setActivationPolicySel                                objc.SEL
+	activateIgnoringOtherAppsSel                          objc.SEL
+	finishLaunchingSel                                    objc.SEL
 	performSelectorOnMainThreadWithObjectWaitUntilDoneSel objc.SEL
-	windowWillCloseSel              objc.SEL
-	initWithTitleSel                objc.SEL
-	initWithTitleOnlySel            objc.SEL
-	autoreleaseSel                  objc.SEL
-	separatorItemSel                objc.SEL
-	setSubmenuSel                   objc.SEL
-	setMainMenuSel                  objc.SEL
-	addItemSel                      objc.SEL
-	setWebsiteDataStoreSel          objc.SEL
-	nonPersistentDataStoreSel       objc.SEL
-	defaultDataStoreSel             objc.SEL
-	allowsMultipleSelectionSel      objc.SEL
-	allowsDirectoriesSel            objc.SEL
-	allowedContentTypesSel          objc.SEL
-	openPanelSel                    objc.SEL
-	setCanChooseFilesSel            objc.SEL
-	setCanChooseDirectoriesSel      objc.SEL
-	setAllowedContentTypesSel       objc.SEL
-	setAllowsMultipleSelectionSel   objc.SEL
-	setDirectoryURLSel              objc.SEL
-	setAllowedFileTypesSel          objc.SEL
-	runModalSel                     objc.SEL
-	defaultManagerSel               objc.SEL
-	homeDirectoryForCurrentUserSel  objc.SEL
-	fileURLWithPathSel              objc.SEL
-	arrayWithObjectsCountSel        objc.SEL
-	URLsSel                         objc.SEL
-	setNavigationDelegateSel        objc.SEL
-	setNameFieldStringValueSel      objc.SEL
-	suggestedFilenameSel            objc.SEL
-	sharedWorkspaceSel              objc.SEL
-	activateFileViewerSel           objc.SEL
-	savePanelSel                    objc.SEL
-	panelURLSel                     objc.SEL
-	preferencesSel                  objc.SEL
-	setValueForKeySel               objc.SEL
-	numberWithBoolSel               objc.SEL
-	standardUserDefaultsSel         objc.SEL
-	setBoolForKeySel                objc.SEL
-	setInspectableSel               objc.SEL
-	addSubviewSel                   objc.SEL
-	setAutoresizesSubviewsSel       objc.SEL
-	setAutoresizingMaskSel          objc.SEL
-	setURLSchemeHandlerForURLSchemeSel objc.SEL
-	schemeRequestSel                objc.SEL // [task request]
-	HTTPMethodSel                   objc.SEL // [request HTTPMethod]
-	allHTTPHeaderFieldsSel          objc.SEL // [request allHTTPHeaderFields]
-	didReceiveResponseSel           objc.SEL // [task didReceiveResponse:]
-	didReceiveDataSel               objc.SEL // [task didReceiveData:]
-	schemeFinishSel                 objc.SEL // [task didFinish]
-	initWithURLStatusCodeHTTPVersionHeaderFieldsSel objc.SEL
-	dataWithBytesLengthSel          objc.SEL
-	dictionaryWithObjectsForKeysCountSel objc.SEL
-	retainSel                           objc.SEL
-	releaseSel                          objc.SEL
-	respondsToSelectorSel               objc.SEL
-	setMessageTextSel                   objc.SEL
-	setInformativeTextSel               objc.SEL
-	addButtonWithTitleSel               objc.SEL
-	alertRunModalSel                    objc.SEL
-	setAccessoryViewSel                 objc.SEL
-	nsTextFieldSel                      objc.SEL
-	stringValueSel                      objc.SEL
-	setInitialFirstResponderSel         objc.SEL
-	windowSel                           objc.SEL
-	errorWithDomainSel                  objc.SEL // [NSError errorWithDomain:code:userInfo:]
-	didFailWithErrorSel                 objc.SEL // [task didFailWithError:]
-	arrayInstanceSel                    objc.SEL // [NSMutableArray array]
-	addObjectSel                        objc.SEL // [array addObject:]
-	setMessageSel                       objc.SEL // [panel setMessage:]
-	addUserScriptSel                    objc.SEL // [ucc addUserScript:]
-	removeAllUserScriptsSel             objc.SEL // [ucc removeAllUserScripts]
-	initWithSourceInjectionTimeForMainFrameOnlySel objc.SEL // [WKUserScript initWithSource:injectionTime:forMainFrameOnly:]
+	windowWillCloseSel                                    objc.SEL
+	initWithTitleSel                                      objc.SEL
+	initWithTitleOnlySel                                  objc.SEL
+	autoreleaseSel                                        objc.SEL
+	separatorItemSel                                      objc.SEL
+	setSubmenuSel                                         objc.SEL
+	setMainMenuSel                                        objc.SEL
+	addItemSel                                            objc.SEL
+	setWebsiteDataStoreSel                                objc.SEL
+	nonPersistentDataStoreSel                             objc.SEL
+	defaultDataStoreSel                                   objc.SEL
+	allowsMultipleSelectionSel                            objc.SEL
+	allowsDirectoriesSel                                  objc.SEL
+	allowedContentTypesSel                                objc.SEL
+	openPanelSel                                          objc.SEL
+	setCanChooseFilesSel                                  objc.SEL
+	setCanChooseDirectoriesSel                            objc.SEL
+	setAllowedContentTypesSel                             objc.SEL
+	setAllowsMultipleSelectionSel                         objc.SEL
+	setDirectoryURLSel                                    objc.SEL
+	setAllowedFileTypesSel                                objc.SEL
+	runModalSel                                           objc.SEL
+	defaultManagerSel                                     objc.SEL
+	homeDirectoryForCurrentUserSel                        objc.SEL
+	fileURLWithPathSel                                    objc.SEL
+	arrayWithObjectsCountSel                              objc.SEL
+	URLsSel                                               objc.SEL
+	setNavigationDelegateSel                              objc.SEL
+	setNameFieldStringValueSel                            objc.SEL
+	suggestedFilenameSel                                  objc.SEL
+	sharedWorkspaceSel                                    objc.SEL
+	activateFileViewerSel                                 objc.SEL
+	savePanelSel                                          objc.SEL
+	panelURLSel                                           objc.SEL
+	preferencesSel                                        objc.SEL
+	setValueForKeySel                                     objc.SEL
+	numberWithBoolSel                                     objc.SEL
+	standardUserDefaultsSel                               objc.SEL
+	setBoolForKeySel                                      objc.SEL
+	setInspectableSel                                     objc.SEL
+	addSubviewSel                                         objc.SEL
+	setAutoresizesSubviewsSel                             objc.SEL
+	setAutoresizingMaskSel                                objc.SEL
+	setURLSchemeHandlerForURLSchemeSel                    objc.SEL
+	schemeRequestSel                                      objc.SEL // [task request]
+	HTTPMethodSel                                         objc.SEL // [request HTTPMethod]
+	allHTTPHeaderFieldsSel                                objc.SEL // [request allHTTPHeaderFields]
+	didReceiveResponseSel                                 objc.SEL // [task didReceiveResponse:]
+	didReceiveDataSel                                     objc.SEL // [task didReceiveData:]
+	schemeFinishSel                                       objc.SEL // [task didFinish]
+	initWithURLStatusCodeHTTPVersionHeaderFieldsSel       objc.SEL
+	dataWithBytesLengthSel                                objc.SEL
+	dictionaryWithObjectsForKeysCountSel                  objc.SEL
+	retainSel                                             objc.SEL
+	releaseSel                                            objc.SEL
+	respondsToSelectorSel                                 objc.SEL
+	setMessageTextSel                                     objc.SEL
+	setInformativeTextSel                                 objc.SEL
+	addButtonWithTitleSel                                 objc.SEL
+	alertRunModalSel                                      objc.SEL
+	setAccessoryViewSel                                   objc.SEL
+	nsTextFieldSel                                        objc.SEL
+	stringValueSel                                        objc.SEL
+	setInitialFirstResponderSel                           objc.SEL
+	windowSel                                             objc.SEL
+	errorWithDomainSel                                    objc.SEL // [NSError errorWithDomain:code:userInfo:]
+	didFailWithErrorSel                                   objc.SEL // [task didFailWithError:]
+	arrayInstanceSel                                      objc.SEL // [NSMutableArray array]
+	addObjectSel                                          objc.SEL // [array addObject:]
+	setMessageSel                                         objc.SEL // [panel setMessage:]
+	addUserScriptSel                                      objc.SEL // [ucc addUserScript:]
+	removeAllUserScriptsSel                               objc.SEL // [ucc removeAllUserScripts]
+	initWithSourceInjectionTimeForMainFrameOnlySel        objc.SEL // [WKUserScript initWithSource:injectionTime:forMainFrameOnly:]
 )
 
 // activePlatform is the Platform whose webview is currently set up. Process-
@@ -312,10 +311,10 @@ func init() {
 	nsHTTPURLResponseClass = objc.GetClass("NSHTTPURLResponse")
 	nsDataClass = objc.GetClass("NSData")
 	nsDictionaryClass = objc.GetClass("NSDictionary")
-	nsAlertClass        = objc.GetClass("NSAlert")
-	nsTextFieldClass    = objc.GetClass("NSTextField")
-	nsErrorClass        = objc.GetClass("NSError")
-	wkUserScriptClass   = objc.GetClass("WKUserScript")
+	nsAlertClass = objc.GetClass("NSAlert")
+	nsTextFieldClass = objc.GetClass("NSTextField")
+	nsErrorClass = objc.GetClass("NSError")
+	wkUserScriptClass = objc.GetClass("WKUserScript")
 
 	allocSel = objc.RegisterName("alloc")
 	initSel = objc.RegisterName("init")
@@ -401,21 +400,21 @@ func init() {
 	initWithURLStatusCodeHTTPVersionHeaderFieldsSel = objc.RegisterName("initWithURL:statusCode:HTTPVersion:headerFields:")
 	dataWithBytesLengthSel = objc.RegisterName("dataWithBytes:length:")
 	dictionaryWithObjectsForKeysCountSel = objc.RegisterName("dictionaryWithObjects:forKeys:count:")
-	setMessageTextSel      = objc.RegisterName("setMessageText:")
-	setInformativeTextSel  = objc.RegisterName("setInformativeText:")
-	addButtonWithTitleSel  = objc.RegisterName("addButtonWithTitle:")
-	alertRunModalSel       = objc.RegisterName("runModal")
-	setAccessoryViewSel    = objc.RegisterName("setAccessoryView:")
-	nsTextFieldSel         = objc.RegisterName("textFieldWithString:")
-	stringValueSel         = objc.RegisterName("stringValue")
+	setMessageTextSel = objc.RegisterName("setMessageText:")
+	setInformativeTextSel = objc.RegisterName("setInformativeText:")
+	addButtonWithTitleSel = objc.RegisterName("addButtonWithTitle:")
+	alertRunModalSel = objc.RegisterName("runModal")
+	setAccessoryViewSel = objc.RegisterName("setAccessoryView:")
+	nsTextFieldSel = objc.RegisterName("textFieldWithString:")
+	stringValueSel = objc.RegisterName("stringValue")
 	setInitialFirstResponderSel = objc.RegisterName("setInitialFirstResponder:")
-	windowSel              = objc.RegisterName("window")
-	errorWithDomainSel     = objc.RegisterName("errorWithDomain:code:userInfo:")
-	didFailWithErrorSel    = objc.RegisterName("didFailWithError:")
-	arrayInstanceSel       = objc.RegisterName("array")
-	addObjectSel           = objc.RegisterName("addObject:")
-	setMessageSel          = objc.RegisterName("setMessage:")
-	addUserScriptSel        = objc.RegisterName("addUserScript:")
+	windowSel = objc.RegisterName("window")
+	errorWithDomainSel = objc.RegisterName("errorWithDomain:code:userInfo:")
+	didFailWithErrorSel = objc.RegisterName("didFailWithError:")
+	arrayInstanceSel = objc.RegisterName("array")
+	addObjectSel = objc.RegisterName("addObject:")
+	setMessageSel = objc.RegisterName("setMessage:")
+	addUserScriptSel = objc.RegisterName("addUserScript:")
 	removeAllUserScriptsSel = objc.RegisterName("removeAllUserScripts")
 	initWithSourceInjectionTimeForMainFrameOnlySel = objc.RegisterName("initWithSource:injectionTime:forMainFrameOnly:")
 
@@ -1439,16 +1438,16 @@ func (p *Platform) rebuildScriptsLocked() {
 
 // addWKUserScript adds a WKUserScript to the given WKUserContentController.
 func addWKUserScript(ucc objc.ID, src string) {
- s := objc.ID(wkUserScriptClass).Send(allocSel)
- s = s.Send(initWithSourceInjectionTimeForMainFrameOnlySel, nsString(src), wkInjectionTimeAtDocumentStart, true)
- ucc.Send(addUserScriptSel, s)
- s.Send(releaseSel)
+	s := objc.ID(wkUserScriptClass).Send(allocSel)
+	s = s.Send(initWithSourceInjectionTimeForMainFrameOnlySel, nsString(src), wkInjectionTimeAtDocumentStart, true)
+	ucc.Send(addUserScriptSel, s)
+	s.Send(releaseSel)
 }
 
 // boundFuncNames returns the current bound function names from BoundFuncs.
 func (p *Platform) boundFuncNames() []string {
- if p.BoundFuncs != nil {
-  return p.BoundFuncs()
- }
- return nil
+	if p.BoundFuncs != nil {
+		return p.BoundFuncs()
+	}
+	return nil
 }

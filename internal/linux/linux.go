@@ -21,7 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
-	"github.com/opentoys/webview/types"
+	"github.com/opentoys/webview/internal/types"
 )
 
 // Re-export shared types from types.
@@ -343,9 +343,9 @@ func cstr(p uintptr) string {
 // --- instance + dispatch registries ----------------------------------------
 
 var (
-	regMu      sync.Mutex
-	registry   = map[uintptr]*Platform{}
-	engineSeq  uintptr
+	regMu     sync.Mutex
+	registry  = map[uintptr]*Platform{}
+	engineSeq uintptr
 
 	dispatchMu  sync.Mutex
 	dispatchMap = map[uintptr]func(){}

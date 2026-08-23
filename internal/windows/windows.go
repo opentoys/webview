@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/opentoys/webview/types"
+	"github.com/opentoys/webview/internal/types"
 )
 
 // Re-export shared types from types.

@@ -1,6 +1,6 @@
 package webview
 
-import "github.com/opentoys/webview/types"
+import "github.com/opentoys/webview/internal/types"
 
 type SizeHint = types.SizeHint
 
