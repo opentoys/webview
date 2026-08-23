@@ -1,5 +1,20 @@
 package webview
 
+import "github.com/opentoys/webview/types"
+
+type SizeHint = types.SizeHint
+
+const (
+	SizeNone  = types.SizeNone
+	SizeMin   = types.SizeMin
+	SizeMax   = types.SizeMax
+	SizeFixed = types.SizeFixed
+)
+
+type ResourceRequest = types.ResourceRequest
+type ResourceResponse = types.ResourceResponse
+type ResourceHandler = types.ResourceHandler
+
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
 // from types, re-exported per-platform in platform_*.go files.
 
@@ -45,7 +60,7 @@ func New(opts Options) (*W, error) {
 func (w *W) Run() error            { return w.p.Run() }
 func (w *W) Close() error          { return w.p.Close() }
 func (w *W) SetTitle(title string) { w.p.SetTitle(title) }
-func (w *W) SetSize(width, height int, hint SizeHint) {
+func (w *W) SetSize(width, height int, hint types.SizeHint) {
 	w.p.SetSize(width, height, hint)
 }
 func (w *W) Navigate(url string) error { return w.p.Navigate(url) }

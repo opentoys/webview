@@ -4,21 +4,7 @@ package webview
 
 import (
 	"github.com/opentoys/webview/internal/linux"
-	"github.com/opentoys/webview/types"
 )
-
-type SizeHint = types.SizeHint
-
-const (
-	SizeNone  = types.SizeNone
-	SizeMin   = types.SizeMin
-	SizeMax   = types.SizeMax
-	SizeFixed = types.SizeFixed
-)
-
-type ResourceRequest = types.ResourceRequest
-type ResourceResponse = types.ResourceResponse
-type ResourceHandler = types.ResourceHandler
 
 func buildPlatform(opts Options, w *W) Platform {
 	p := linux.New()
