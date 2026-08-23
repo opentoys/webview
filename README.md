@@ -9,12 +9,13 @@
 - **零 CGO** -- 像普通 Go 项目一样交叉编译，无需 C 工具链
 - **三端支持** -- macOS (WKWebView) / Windows (WebView2) / Linux (WebKitGTK)
 - **完整 JS 桥接** -- 从 JavaScript 调用 Go 函数，通过 Promise 返回结果
+- **原生菜单** -- 三平台原生菜单栏，支持快捷键和回调
 - **自定义 URL Scheme** -- `app://` 等自定义协议，安全上下文，无需开端口
 - **JS 注入** -- `Init(js)` 在每次页面加载前执行 JS
 - **预 Run 缓冲** -- `SetTitle`、`SetHTML`、`Navigate` 可在 `Run()` 前调用
-- **内嵌 WebView2Loader.dll** -- 按架构 (amd64/arm64/x86)，自动解压到临时目录
-- **原生文件选择器** -- macOS 上 `<input type=file>` 映射到 NSOpenPanel，支持 `accept` 属性过滤（MIME 类型、扩展名、通配符）
+- **原生文件选择器** -- `<input type=file>` 映射到系统文件选择器，支持 `accept` 过滤
 - **隐身模式** -- 内存数据存储，不持久化 cookie/缓存
+- **内嵌 WebView2Loader.dll** -- 按架构 (amd64/arm64/x86)，自动解压到临时目录
 
 ## 平台状态
 
@@ -26,12 +27,10 @@
 
 ## 环境要求
 
-- Go 1.24+
+- Go 1.25+
 - macOS 10.13+
 - Windows 10+（需安装 [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)）
-- Linux：需安装 WebKitGTK（见下方安装说明）
-
-### Linux WebKitGTK 安装
+- Linux：需安装 WebKitGTK：
 
 ```bash
 # Debian / Ubuntu
@@ -89,10 +88,6 @@ CGO_ENABLED=0 go run ./example
 ### 创建
 
 ```go
-func New(opts Options) (*W, error)
-```
-
-```go
 w, err := webview.New(webview.Options{
     Debug:     true,     // 启用开发者工具
     Incognito: true,     // 内存数据存储
@@ -102,19 +97,20 @@ w, err := webview.New(webview.Options{
 
 ### 控制
 
-| 方法 | 签名 | 说明 |
-|------|------|------|
-| `Run` | `func (w *W) Run() error` | 启动事件循环，阻塞直到窗口关闭 |
-| `Close` | `func (w *W) Close() error` | 关闭窗口 |
-| `SetTitle` | `func (w *W) SetTitle(title string)` | 设置窗口标题 |
-| `SetSize` | `func (w *W) SetSize(w, h int, hint SizeHint)` | 设置窗口尺寸 |
-| `Navigate` | `func (w *W) Navigate(url string) error` | 导航到 URL |
-| `SetHTML` | `func (w *W) SetHTML(html string) error` | 加载 HTML 字符串 |
-| `Eval` | `func (w *W) Eval(js string) error` | 执行 JavaScript |
-| `Init` | `func (w *W) Init(js string) error` | 注入每次页面加载前执行的 JS |
-| `Bind` | `func (w *W) Bind(name string, fn any) error` | 将 Go 函数暴露给 JS |
-| `Unbind` | `func (w *W) Unbind(name string)` | 移除已绑定的 JS 函数 |
-| `InterceptResource` | `func (w *W) InterceptResource(scheme string, handler ResourceHandler)` | 注册自定义 URL scheme 资源拦截 |
+| 方法 | 说明 |
+|------|------|
+| `Run()` | 启动事件循环，阻塞直到窗口关闭 |
+| `Close()` | 关闭窗口 |
+| `SetTitle(title)` | 设置窗口标题 |
+| `SetSize(w, h, hint)` | 设置窗口尺寸 |
+| `Navigate(url)` | 导航到 URL |
+| `SetHTML(html)` | 加载 HTML 字符串 |
+| `Eval(js)` | 执行 JavaScript |
+| `Init(js)` | 注入每次页面加载前执行的 JS |
+| `Bind(name, fn)` | 将 Go 函数暴露给 JS |
+| `Unbind(name)` | 移除已绑定的 JS 函数 |
+| `SetMenu(menus...)` | 设置原生菜单栏 |
+| `InterceptResource(scheme, handler)` | 注册自定义 URL scheme 资源拦截 |
 
 ### SizeHint
 
@@ -125,24 +121,45 @@ w, err := webview.New(webview.Options{
 | `SizeMax` | 2 | 最大尺寸 |
 | `SizeFixed` | 3 | 固定尺寸 |
 
-### Init（JS 注入）
+### 原生菜单
 
 ```go
-func (w *W) Init(js string) error
+// 平台修饰键：macOS 为 "Cmd"，其他为 "Ctrl"
+webview.CmdOrCtrl
+
+// 获取平台默认菜单（macOS 返回 Edit 菜单，其他返回空）
+menus := webview.DefaultMenus(w)
+
+// 添加自定义菜单
+menus = append(menus, webview.Menu{
+    Label: "File",
+    Items: []webview.MenuItem{
+        {Label: "Open", Shortcut: webview.CmdOrCtrl + "+O", Action: func() { ... }},
+        {Separator: true},
+        {Label: "Quit", Shortcut: webview.CmdOrCtrl + "+Q", Action: func() { w.Close() }},
+    },
+})
+
+w.SetMenu(menus...)
 ```
 
-注册在每次页面加载前执行的 JavaScript。可多次调用，脚本按注册顺序执行。适合注入 polyfill、全局变量拦截等。
+**类型定义：**
 
 ```go
-w.Init(`console.log('page loading...')`)
-w.Init(`window.__APP_VERSION = '1.0.0'`)
+type Menu struct {
+    Label string
+    Items []MenuItem
+}
+
+type MenuItem struct {
+    Label     string
+    Shortcut  string // "Ctrl+Z", "Cmd+Shift+Z" 等
+    Action    func()
+    Separator bool   // 为 true 时忽略其他字段
+}
 ```
 
 ### Bind（JS 桥接）
-
-```go
-func (w *W) Bind(name string, fn any) error
-```
 
 将 Go 函数暴露给 JavaScript。函数在 webview 中成为全局的、返回 Promise 的函数。
 
@@ -160,8 +177,6 @@ w.Bind("readFile", func(path string) (string, error) {
 })
 ```
 
-JavaScript 端：
-
 ```javascript
 const sum = await add(1, 2);
 try {
@@ -172,10 +187,6 @@ try {
 ```
 
 ### InterceptResource（自定义 URL Scheme）
-
-```go
-func (w *W) InterceptResource(scheme string, handler ResourceHandler)
-```
 
 注册自定义 URL scheme 的资源拦截器。必须在 `Run()` 前调用。
 
@@ -210,8 +221,6 @@ type ResourceResponse struct {
     Headers    map[string]string
     Body       []byte
 }
-
-type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 ```
 
 ### 文件选择器（macOS）
@@ -219,44 +228,14 @@ type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 macOS 上 `<input type=file>` 的 `accept` 属性原生支持文件类型过滤：
 
 ```html
-<!-- MIME 类型 -->
-<input type="file" accept="image/png,application/pdf">
-
-<!-- 文件扩展名 -->
-<input type="file" accept=".png,.jpg,.pdf">
-
-<!-- 通配符 -->
-<input type="file" accept="image/*,video/*">
-
-<!-- 混合 -->
-<input type="file" accept="image/*,.pdf,text/plain">
-```
-
-支持的通配符映射：
-| 通配符 | UTType |
-|--------|--------|
-| `image/*` | `UTTypeImage` |
-| `video/*` | `UTTypeMovie` |
-| `audio/*` | `UTTypeAudio` |
-| `text/*` | `UTTypeText` |
-
-### Unbind
-
-```go
-func (w *W) Unbind(name string)
-```
-
-移除已绑定的 JS 函数。调用后 JS 端再调用该函数会 reject。
-
-```go
-w.Bind("temp", func() string { return "hello" })
-// ... 某些时候后
-w.Unbind("temp")
+<input type="file" accept="image/png,application/pdf">  <!-- MIME 类型 -->
+<input type="file" accept=".png,.jpg,.pdf">              <!-- 扩展名 -->
+<input type="file" accept="image/*,video/*">             <!-- 通配符 -->
 ```
 
 ## cmd/app -- 通用 App 启动外壳
 
-`cmd/app` 是一个通用的桌面应用启动器，从 zip 文件或目录加载前端资源 + 配置，创建 webview 窗口。
+`cmd/app` 是一个通用的桌面应用启动器，从 zip 文件或目录加载前端资源 + 配置。
 
 **目录结构：**
 ```
@@ -284,51 +263,17 @@ app.data (zip) 或 data/
 
 **运行：**
 ```bash
-# 从 data/ 目录
-go run ./cmd/app
-
-# 构建
-CGO_ENABLED=0 go build -o myapp ./cmd/app
+go run ./cmd/app              # 从 data/ 目录
+CGO_ENABLED=0 go build -o myapp ./cmd/app  # 构建
 ```
 
-**JS 桥接函数：**
-- `app.version()` -- 返回应用版本号
-- `app.close()` -- 关闭窗口
-- `app.debug(msg)` -- 输出到 stdout
-
-## JS 桥接协议
-
-桥接使用 JSON 消息协议在 JS 和 Go 之间通信。
-
-**JS -> Go（请求）：**
-```json
-{"id": 1, "name": "add", "args": [1, 2]}
-```
-
-**Go -> JS（响应）：**
-```javascript
-webviewBridge.resolve(1, 3)       // 成功
-webviewBridge.reject(1, "error")  // 失败
-```
-
-传输层：
-- macOS / Linux: `window.webkit.messageHandlers.webviewBridge.postMessage()`
-- Windows: `window.chrome.webview.postMessage()`
+**JS 桥接函数：** `app.version()` / `app.close()` / `app.debug(msg)`
 
 ## 构建与运行
 
 ```bash
-# macOS
-CGO_ENABLED=0 go run ./example
-
-# Linux
-CGO_ENABLED=0 go run ./example
-
-# Windows（从 macOS/Linux 交叉编译）
-GOOS=windows GOARCH=amd64 go build -o app.exe ./example
-
-# 或在 Windows 上原生构建
-go build -o app.exe ./example
+CGO_ENABLED=0 go run ./example                    # macOS / Linux
+GOOS=windows GOARCH=amd64 go build -o app.exe ./example  # 交叉编译 Windows
 ```
 
 ## 测试
@@ -336,18 +281,6 @@ go build -o app.exe ./example
 ```bash
 CGO_ENABLED=0 go test ./...
 ```
-
-## Windows WebView2 加载器
-
-WebView2 需要 `WebView2Loader.dll` 来引导启动。库会自动处理：
-
-**搜索顺序：**
-1. `X_WEBVIEW2LOADER_DLL` 环境变量（显式路径）
-2. 内嵌 DLL（按架构，解压到临时目录，基于哈希缓存）
-3. 系统 DLL（搜索 PATH 和可执行文件目录）
-4. 可执行文件目录显式搜索
-
-如未安装 WebView2 Runtime，请从 [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) 下载。
 
 ## License
 

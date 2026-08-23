@@ -9,12 +9,13 @@ No-CGO webview framework for Go, powered by [purego](https://github.com/ebitengi
 - **Zero CGO** -- cross-compiles like any pure Go project, no C toolchain required
 - **Three platforms** -- macOS (WKWebView) / Windows (WebView2) / Linux (WebKitGTK)
 - **Full JS bridge** -- call Go functions from JavaScript, return results via Promises
+- **Native menus** -- platform-native menu bar with keyboard shortcuts and callbacks
 - **Custom URL Schemes** -- `app://`-style origins with secure context, no port needed
 - **JS injection** -- `Init(js)` runs JavaScript before every page load
 - **Pre-Run buffering** -- `SetTitle`, `SetHTML`, `Navigate` can be called before `Run()`
-- **Embedded WebView2Loader.dll** -- per-architecture (amd64/arm64/x86), auto-extracted to temp
-- **Native file picker** -- `<input type=file>` maps to NSOpenPanel on macOS, with `accept` attribute filtering (MIME types, extensions, wildcards)
+- **Native file picker** -- `<input type=file>` maps to system file picker with `accept` filtering
 - **Incognito mode** -- in-memory data store, no cookies/cache persisted to disk
+- **Embedded WebView2Loader.dll** -- per-architecture (amd64/arm64/x86), auto-extracted to temp
 
 ## Platform Status
 
@@ -26,12 +27,10 @@ No-CGO webview framework for Go, powered by [purego](https://github.com/ebitengi
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.25+
 - macOS 10.13+
 - Windows 10+ (with [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) installed)
-- Linux: WebKitGTK required (see below)
-
-### Linux WebKitGTK Installation
+- Linux: WebKitGTK required:
 
 ```bash
 # Debian / Ubuntu
@@ -89,10 +88,6 @@ CGO_ENABLED=0 go run ./example
 ### Create
 
 ```go
-func New(opts Options) (*W, error)
-```
-
-```go
 w, err := webview.New(webview.Options{
     Debug:     true,     // enable dev tools
     Incognito: true,     // in-memory data store
@@ -102,19 +97,20 @@ w, err := webview.New(webview.Options{
 
 ### Control
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `Run` | `func (w *W) Run() error` | Start event loop, blocks until window closes |
-| `Close` | `func (w *W) Close() error` | Close window |
-| `SetTitle` | `func (w *W) SetTitle(title string)` | Set window title |
-| `SetSize` | `func (w *W) SetSize(w, h int, hint SizeHint)` | Set window size |
-| `Navigate` | `func (w *W) Navigate(url string) error` | Navigate to URL |
-| `SetHTML` | `func (w *W) SetHTML(html string) error` | Load HTML string |
-| `Eval` | `func (w *W) Eval(js string) error` | Execute JavaScript |
-| `Init` | `func (w *W) Init(js string) error` | Inject JS that runs before every page load |
-| `Bind` | `func (w *W) Bind(name string, fn any) error` | Expose a Go function to JS |
-| `Unbind` | `func (w *W) Unbind(name string)` | Remove a bound JS function |
-| `InterceptResource` | `func (w *W) InterceptResource(scheme string, handler ResourceHandler)` | Register custom URL scheme resource handler |
+| Method | Description |
+|--------|-------------|
+| `Run()` | Start event loop, blocks until window closes |
+| `Close()` | Close window |
+| `SetTitle(title)` | Set window title |
+| `SetSize(w, h, hint)` | Set window size |
+| `Navigate(url)` | Navigate to URL |
+| `SetHTML(html)` | Load HTML string |
+| `Eval(js)` | Execute JavaScript |
+| `Init(js)` | Inject JS that runs before every page load |
+| `Bind(name, fn)` | Expose a Go function to JS |
+| `Unbind(name)` | Remove a bound JS function |
+| `SetMenu(menus...)` | Set native menu bar |
+| `InterceptResource(scheme, handler)` | Register custom URL scheme resource handler |
 
 ### SizeHint
 
@@ -125,26 +121,47 @@ w, err := webview.New(webview.Options{
 | `SizeMax` | 2 | Maximum size |
 | `SizeFixed` | 3 | Fixed size |
 
-### Init (JS Injection)
+### Native Menus
 
 ```go
-func (w *W) Init(js string) error
+// Platform modifier key: "Cmd" on macOS, "Ctrl" elsewhere
+webview.CmdOrCtrl
+
+// Get platform default menus (Edit menu on macOS, empty on others)
+menus := webview.DefaultMenus(w)
+
+// Add custom menus
+menus = append(menus, webview.Menu{
+    Label: "File",
+    Items: []webview.MenuItem{
+        {Label: "Open", Shortcut: webview.CmdOrCtrl + "+O", Action: func() { ... }},
+        {Separator: true},
+        {Label: "Quit", Shortcut: webview.CmdOrCtrl + "+Q", Action: func() { w.Close() }},
+    },
+})
+
+w.SetMenu(menus...)
 ```
 
-Registers JavaScript to run before every page load. Can be called multiple times; scripts execute in registration order. Useful for polyfills, global variable interception, etc.
+**Types:**
 
 ```go
-w.Init(`console.log('page loading...')`)
-w.Init(`window.__APP_VERSION = '1.0.0'`)
+type Menu struct {
+    Label string
+    Items []MenuItem
+}
+
+type MenuItem struct {
+    Label     string
+    Shortcut  string // "Ctrl+Z", "Cmd+Shift+Z", etc.
+    Action    func()
+    Separator bool   // when true, other fields are ignored
+}
 ```
 
 ### Bind (JS Bridge)
 
-```go
-func (w *W) Bind(name string, fn any) error
-```
-
-Expose a Go function to JavaScript. The function becomes a global Promise-returning function in the webview.
+Expose a Go function to JavaScript. The function becomes a global Promise-returning function.
 
 **Supported return signatures:**
 - `func(args...)` -- no return, Promise resolves to `undefined`
@@ -160,8 +177,6 @@ w.Bind("readFile", func(path string) (string, error) {
 })
 ```
 
-JavaScript side:
-
 ```javascript
 const sum = await add(1, 2);
 try {
@@ -172,10 +187,6 @@ try {
 ```
 
 ### InterceptResource (Custom URL Scheme)
-
-```go
-func (w *W) InterceptResource(scheme string, handler ResourceHandler)
-```
 
 Register a resource handler for a custom URL scheme. Must be called before `Run()`.
 
@@ -196,7 +207,7 @@ w.InterceptResource("app", func(req webview.ResourceRequest, respond func(*webvi
 w.Navigate("app://host/index.html")
 ```
 
-**Type definitions:**
+**Types:**
 
 ```go
 type ResourceRequest struct {
@@ -210,8 +221,6 @@ type ResourceResponse struct {
     Headers    map[string]string
     Body       []byte
 }
-
-type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 ```
 
 ### File Picker (macOS)
@@ -219,30 +228,14 @@ type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 The `accept` attribute on `<input type=file>` is natively supported for file type filtering:
 
 ```html
-<!-- MIME types -->
-<input type="file" accept="image/png,application/pdf">
-
-<!-- File extensions -->
-<input type="file" accept=".png,.jpg,.pdf">
-
-<!-- Wildcards -->
-<input type="file" accept="image/*,video/*">
-
-<!-- Mixed -->
-<input type="file" accept="image/*,.pdf,text/plain">
+<input type="file" accept="image/png,application/pdf">  <!-- MIME types -->
+<input type="file" accept=".png,.jpg,.pdf">              <!-- extensions -->
+<input type="file" accept="image/*,video/*">             <!-- wildcards -->
 ```
-
-Wildcard mapping:
-| Wildcard | UTType |
-|----------|--------|
-| `image/*` | `UTTypeImage` |
-| `video/*` | `UTTypeMovie` |
-| `audio/*` | `UTTypeAudio` |
-| `text/*` | `UTTypeText` |
 
 ## cmd/app -- Universal App Shell
 
-`cmd/app` is a universal desktop app launcher that loads frontend resources + config from a zip file or directory.
+`cmd/app` is a desktop app launcher that loads frontend resources + config from a zip file or directory.
 
 **Directory structure:**
 ```
@@ -270,51 +263,17 @@ app.data (zip) or data/
 
 **Run:**
 ```bash
-# From data/ directory
-go run ./cmd/app
-
-# Build
-CGO_ENABLED=0 go build -o myapp ./cmd/app
+go run ./cmd/app                             # from data/ directory
+CGO_ENABLED=0 go build -o myapp ./cmd/app   # build
 ```
 
-**JS bridge functions:**
-- `app.version()` -- returns app version
-- `app.close()` -- closes the window
-- `app.debug(msg)` -- prints to stdout
-
-## JS Bridge Protocol
-
-The bridge uses a JSON message protocol between JS and Go.
-
-**JS -> Go (request):**
-```json
-{"id": 1, "name": "add", "args": [1, 2]}
-```
-
-**Go -> JS (response):**
-```javascript
-webviewBridge.resolve(1, 3)       // success
-webviewBridge.reject(1, "error")  // failure
-```
-
-Transport:
-- macOS / Linux: `window.webkit.messageHandlers.webviewBridge.postMessage()`
-- Windows: `window.chrome.webview.postMessage()`
+**JS bridge functions:** `app.version()` / `app.close()` / `app.debug(msg)`
 
 ## Build & Run
 
 ```bash
-# macOS
-CGO_ENABLED=0 go run ./example
-
-# Linux
-CGO_ENABLED=0 go run ./example
-
-# Windows (cross-compile from macOS/Linux)
-GOOS=windows GOARCH=amd64 go build -o app.exe ./example
-
-# Or build natively on Windows
-go build -o app.exe ./example
+CGO_ENABLED=0 go run ./example                           # macOS / Linux
+GOOS=windows GOARCH=amd64 go build -o app.exe ./example  # cross-compile for Windows
 ```
 
 ## Test
@@ -322,18 +281,6 @@ go build -o app.exe ./example
 ```bash
 CGO_ENABLED=0 go test ./...
 ```
-
-## Windows WebView2 Loader
-
-WebView2 requires `WebView2Loader.dll` to bootstrap. The library handles this automatically.
-
-**Search order:**
-1. `X_WEBVIEW2LOADER_DLL` environment variable (explicit path)
-2. Embedded DLL (per-architecture, hash-based cache in temp dir)
-3. System DLL (PATH + exe directory)
-4. Explicit exe directory search
-
-If WebView2 Runtime is not installed, download it from [Microsoft](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
 ## License
 
