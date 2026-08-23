@@ -16,46 +16,20 @@ func main() {
 	w.SetTitle("Menu Demo")
 	w.SetSize(480, 360, webview.SizeNone)
 
-	// Platform-aware shortcut prefix.
-	cmdOrCtrl := "Ctrl"
-	// (In a real app you'd detect macOS at runtime; here we just use Ctrl.)
-	_ = cmdOrCtrl
+	// Start with platform defaults (Edit menu on macOS; empty on Linux/Windows).
+	menus := webview.DefaultMenus(w)
 
-	w.SetMenu(
+	// Append custom menus.
+	menus = append(menus,
 		webview.Menu{
 			Label: "File",
 			Items: []webview.MenuItem{
-				{Label: "New Window", Shortcut: "Ctrl+N", Action: func() {
+				{Label: "New Window", Shortcut: webview.CmdOrCtrl + "+N", Action: func() {
 					fmt.Println("File → New Window")
 				}},
 				{Separator: true},
-				{Label: "Quit", Shortcut: "Ctrl+Q", Action: func() {
+				{Label: "Quit", Shortcut: webview.CmdOrCtrl + "+Q", Action: func() {
 					w.Close()
-				}},
-			},
-		},
-		webview.Menu{
-			Label: "Edit",
-			Items: []webview.MenuItem{
-				{Label: "Undo", Shortcut: "Ctrl+Z", Action: func() {
-					w.Eval("document.execCommand('undo')")
-				}},
-				{Label: "Redo", Shortcut: "Ctrl+Y", Action: func() {
-					w.Eval("document.execCommand('redo')")
-				}},
-				{Separator: true},
-				{Label: "Cut", Shortcut: "Ctrl+X", Action: func() {
-					w.Eval("document.execCommand('cut')")
-				}},
-				{Label: "Copy", Shortcut: "Ctrl+C", Action: func() {
-					w.Eval("document.execCommand('copy')")
-				}},
-				{Label: "Paste", Shortcut: "Ctrl+V", Action: func() {
-					w.Eval("document.execCommand('paste')")
-				}},
-				{Separator: true},
-				{Label: "Select All", Shortcut: "Ctrl+A", Action: func() {
-					w.Eval("document.execCommand('selectAll')")
 				}},
 			},
 		},
@@ -69,6 +43,8 @@ func main() {
 		},
 	)
 
+	w.SetMenu(menus...)
+
 	w.SetHTML(`<!DOCTYPE html>
 <html>
 <head>
@@ -80,9 +56,9 @@ func main() {
 </head>
 <body>
   <h3>Native Menu API Demo</h3>
-  <p>This example uses <code>w.SetMenu(...)</code> to build a custom menu bar
-     with File, Edit, and Help menus. Try the shortcuts or click the menu items.</p>
-  <textarea id="box">Type here to test Cut/Copy/Paste/Undo/Redo from the Edit menu.</textarea>
+  <p>Uses <code>DefaultMenus(w)</code> for the Edit menu and appends File + Help.
+     Shortcuts use <code>webview.CmdOrCtrl</code> (Cmd on macOS, Ctrl elsewhere).</p>
+  <textarea id="box">Type here to test Cut/Copy/Paste/Undo/Redo.</textarea>
 </body>
 </html>`)
 
