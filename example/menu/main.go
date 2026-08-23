@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/opentoys/webview"
 )
@@ -17,8 +18,10 @@ func main() {
 	w.SetSize(480, 360, webview.SizeNone)
 
 	// Start with platform defaults (Edit menu on macOS; empty on Linux/Windows).
-	menus := webview.DefaultMenus(w)
-
+	var menus = []webview.Menu{}
+	if runtime.GOOS == "darwin" {
+		menus = append(menus, webview.Menu{})
+	}
 	// Append custom menus.
 	menus = append(menus,
 		webview.Menu{
@@ -33,15 +36,17 @@ func main() {
 				}},
 			},
 		},
-		webview.Menu{
-			Label: "Help",
-			Items: []webview.MenuItem{
-				{Label: "About", Action: func() {
-					fmt.Println("Help → About")
-				}},
-			},
-		},
 	)
+
+	menus = append(menus, webview.DefaultMenus(w)...)
+	menus = append(menus, webview.Menu{
+		Label: "Help",
+		Items: []webview.MenuItem{
+			{Label: "About", Action: func() {
+				fmt.Println("Help → About")
+			}},
+		},
+	})
 
 	w.SetMenu(menus...)
 
