@@ -29,6 +29,10 @@ var (
 	pSetFocus           = user32.NewProc("SetFocus")
 	pGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
 	pPostMessageW       = user32.NewProc("PostMessageW")
+	pCreateMenu         = user32.NewProc("CreateMenu")
+	pCreatePopupMenu    = user32.NewProc("CreatePopupMenu")
+	pAppendMenuW        = user32.NewProc("AppendMenuW")
+	pSetMenu            = user32.NewProc("SetMenu")
 	pCoInitializeEx       = ole32.NewProc("CoInitializeEx")
 	pCoUninitialize       = ole32.NewProc("CoUninitialize")
 	pCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
@@ -52,7 +56,15 @@ const (
 	WM_SIZE    = 0x0005
 	WM_CLOSE   = 0x0010
 	WM_DESTROY = 0x0002
+	WM_COMMAND = 0x0111
 	WM_APP     = 0x8000
+)
+
+// Menu constants.
+const (
+	MF_STRING    = 0x00000000
+	MF_SEPARATOR = 0x00000800
+	MF_POPUP     = 0x00000010
 )
 
 // SetWindowPos flags.

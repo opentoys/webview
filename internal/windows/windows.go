@@ -30,6 +30,8 @@ const (
 type ResourceRequest = types.ResourceRequest
 type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
+type Menu = types.Menu
+type MenuItem = types.MenuItem
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
@@ -67,6 +69,12 @@ type Platform struct {
 	// webview is ready. They are injected via AddScriptToExecuteOnDocumentCreated.
 	userScriptSrcs []string
 
+	pendingMenus   []Menu
+	hasCustomMenus bool
+	// menuCallbacks maps command IDs to Go callbacks for custom menus.
+	menuCallbacks map[uintptr]func()
+	nextMenuCmdID uintptr
+
 	// Loader.
 	createEnv WebView2CreateEnvironmentWithOptions
 
@@ -83,13 +91,33 @@ type Platform struct {
 	dispatch     dispatchQueue
 }
 
+// Edit menu command IDs.
+const (
+	cmdUndo = 1001 + iota
+	cmdRedo
+	cmdCut
+	cmdCopy
+	cmdPaste
+	cmdSelectAll
+
+	cmdCustomBase = 2000
+)
+
 // New creates a Platform instance.
 func New() *Platform {
 	return &Platform{
 		runDone:        make(chan struct{}),
 		pendingURL:     "about:blank",
 		schemeHandlers: make(map[string]ResourceHandler),
+		menuCallbacks:  make(map[uintptr]func()),
+		nextMenuCmdID:  cmdCustomBase,
 	}
+}
+
+// SetMenus replaces the native menu bar. Call before Run().
+func (p *Platform) SetMenus(menus []Menu) {
+	p.pendingMenus = menus
+	p.hasCustomMenus = len(menus) > 0
 }
 
 // Run blocks until the window is closed.
@@ -251,6 +279,35 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			fn()
 		}
 		return 0
+	case WM_COMMAND:
+		cmdID := wParam & 0xFFFF
+		// Custom menu callbacks.
+		if cb, ok := p.menuCallbacks[cmdID]; ok {
+			cb()
+			return 0
+		}
+		// Built-in Edit menu.
+		if p.webview != nil {
+			var js string
+			switch cmdID {
+			case cmdUndo:
+				js = "document.execCommand('undo')"
+			case cmdRedo:
+				js = "document.execCommand('redo')"
+			case cmdCut:
+				js = "document.execCommand('cut')"
+			case cmdCopy:
+				js = "document.execCommand('copy')"
+			case cmdPaste:
+				js = "document.execCommand('paste')"
+			case cmdSelectAll:
+				js = "document.execCommand('selectAll')"
+			}
+			if js != "" {
+				p.webview.ExecuteScript(js, 0)
+			}
+		}
+		return 0
 	case WM_CLOSE:
 		pDestroyWindow.Call(hwnd)
 		return 0
@@ -353,6 +410,12 @@ func (p *Platform) initWebView() {
 	pUpdateWindow.Call(p.hwnd)
 	pSetFocus.Call(p.hwnd)
 
+	if p.hasCustomMenus {
+		p.applyMenus(p.pendingMenus)
+	} else {
+		p.setupMainMenu()
+	}
+
 	// Mark ready so SetTitle/SetSize/SetHTML apply immediately.
 	p.ready.Store(1)
 
@@ -377,6 +440,81 @@ func (p *Platform) navigatePending() {
 	} else if url != "" {
 		p.webview.Navigate(p.rewriteSchemeURL(url))
 	}
+}
+
+// setupMainMenu creates a Win32 menu bar with an Edit menu containing
+// Undo, Redo, Cut, Copy, Paste, Select All.
+func (p *Platform) setupMainMenu() {
+	editMenu, _, _ := pCreatePopupMenu.Call()
+	if editMenu == 0 {
+		return
+	}
+
+	appendEditItem := func(label string, id uintptr) {
+		putf16 := utf16PtrFromStr(label)
+		pAppendMenuW.Call(editMenu, MF_STRING, id, uintptr(unsafe.Pointer(putf16)))
+		runtime.KeepAlive(putf16)
+	}
+
+	appendEditItem("Undo\tCtrl+Z", cmdUndo)
+	appendEditItem("Redo\tCtrl+Y", cmdRedo)
+	pAppendMenuW.Call(editMenu, MF_SEPARATOR, 0, 0)
+	appendEditItem("Cut\tCtrl+X", cmdCut)
+	appendEditItem("Copy\tCtrl+C", cmdCopy)
+	appendEditItem("Paste\tCtrl+V", cmdPaste)
+	pAppendMenuW.Call(editMenu, MF_SEPARATOR, 0, 0)
+	appendEditItem("Select All\tCtrl+A", cmdSelectAll)
+
+	menuBar, _, _ := pCreateMenu.Call()
+	if menuBar == 0 {
+		return
+	}
+
+	editLabel := utf16PtrFromStr("Edit")
+	pAppendMenuW.Call(menuBar, MF_POPUP, editMenu, uintptr(unsafe.Pointer(editLabel)))
+	runtime.KeepAlive(editLabel)
+	pSetMenu.Call(p.hwnd, menuBar)
+}
+
+// applyMenus builds and installs a Win32 menu bar from the given Menu slice.
+func (p *Platform) applyMenus(menus []Menu) {
+	p.menuCallbacks = make(map[uintptr]func())
+	p.nextMenuCmdID = cmdCustomBase
+
+	menuBar, _, _ := pCreateMenu.Call()
+	if menuBar == 0 {
+		return
+	}
+
+	for _, m := range menus {
+		submenu, _, _ := pCreatePopupMenu.Call()
+		if submenu == 0 {
+			continue
+		}
+		for _, mi := range m.Items {
+			if mi.Separator {
+				pAppendMenuW.Call(submenu, MF_SEPARATOR, 0, 0)
+				continue
+			}
+			label := mi.Label
+			if mi.Shortcut != "" {
+				label += "\t" + mi.Shortcut
+			}
+			cmdID := p.nextMenuCmdID
+			p.nextMenuCmdID++
+			if mi.Action != nil {
+				p.menuCallbacks[cmdID] = mi.Action
+			}
+			putf16 := utf16PtrFromStr(label)
+			pAppendMenuW.Call(submenu, MF_STRING, cmdID, uintptr(unsafe.Pointer(putf16)))
+			runtime.KeepAlive(putf16)
+		}
+		topLabel := utf16PtrFromStr(m.Label)
+		pAppendMenuW.Call(menuBar, MF_POPUP, submenu, uintptr(unsafe.Pointer(topLabel)))
+		runtime.KeepAlive(topLabel)
+	}
+
+	pSetMenu.Call(p.hwnd, menuBar)
 }
 
 func (p *Platform) InvokeWebMessageReceived(sender *iCoreWebView2, args *iCoreWebView2WebMessageReceivedEventArgs) uintptr {

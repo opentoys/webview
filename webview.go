@@ -15,6 +15,9 @@ type ResourceRequest = types.ResourceRequest
 type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
 
+type Menu = types.Menu
+type MenuItem = types.MenuItem
+
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
 // from types, re-exported per-platform in platform_*.go files.
 
@@ -28,6 +31,7 @@ type Platform interface {
 	Eval(js string) error
 	Init(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
+	SetMenus(menus []Menu)
 }
 
 // Options configures the webview. Field semantics are per-platform; each
@@ -78,4 +82,11 @@ func (w *W) Unbind(name string) {
 
 func (w *W) InterceptResource(scheme string, handler ResourceHandler) {
 	w.p.InterceptResource(scheme, handler)
+}
+
+// SetMenu replaces the native menu bar. Each Menu becomes a top-level menu.
+// Call before Run() for the initial bar, or after for live updates (not
+// supported on all platforms — Linux requires re-layout).
+func (w *W) SetMenu(menus ...Menu) {
+	w.p.SetMenus(menus)
 }

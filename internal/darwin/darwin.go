@@ -32,6 +32,8 @@ const (
 type ResourceRequest = types.ResourceRequest
 type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
+type Menu = types.Menu
+type MenuItem = types.MenuItem
 
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
@@ -77,6 +79,10 @@ var commandHandlerClass objc.Class
 // Registered once at package init; one instance per scheme.
 var schemeHandlerClass objc.Class
 
+// menuHandlerClass receives menu item actions via performSelector:withObject:.
+// Registered once at package init; uses a tag→callback map for dispatch.
+var menuHandlerClass objc.Class
+
 // commandChan carries closures from any goroutine to be executed on the host
 // thread (via performSelectorOnMainThread:YES).
 var commandChan = make(chan func(), 64)
@@ -88,6 +94,9 @@ var scriptHandler objc.ID
 // schemeHandlerInstances maps scheme name → Go handler. Written once per
 // scheme in setup(), read from ObjC callbacks on the host thread.
 var schemeHandlerInstances = map[string]ResourceHandler{}
+
+var menuCallbackMu sync.Mutex
+var menuCallbacks = map[uintptr]func(){}
 
 // schemeTaskStore holds WKURLSchemeTask objects by numeric ID, preventing GC
 // before the async Go handler calls back.
@@ -199,7 +208,12 @@ var (
 	separatorItemSel                                      objc.SEL
 	setSubmenuSel                                         objc.SEL
 	setMainMenuSel                                        objc.SEL
+	setKeyEquivalentModifierMaskSel                       objc.SEL
+	setTagSel                                             objc.SEL
+	setTargetSel                                          objc.SEL
+	setKeyEquivalentSel                                   objc.SEL
 	addItemSel                                            objc.SEL
+	menuItemSelectedSel                                   objc.SEL
 	setWebsiteDataStoreSel                                objc.SEL
 	nonPersistentDataStoreSel                             objc.SEL
 	defaultDataStoreSel                                   objc.SEL
@@ -352,9 +366,14 @@ func init() {
 	releaseSel = objc.RegisterName("release")
 	respondsToSelectorSel = objc.RegisterName("respondsToSelector:")
 	separatorItemSel = objc.RegisterName("separatorItem")
-	addItemSel = objc.RegisterName("addItem:")
 	setSubmenuSel = objc.RegisterName("setSubmenu:")
 	setMainMenuSel = objc.RegisterName("setMainMenu:")
+	setKeyEquivalentModifierMaskSel = objc.RegisterName("setKeyEquivalentModifierMask:")
+	setTagSel = objc.RegisterName("setTag:")
+	setTargetSel = objc.RegisterName("setTarget:")
+	setKeyEquivalentSel = objc.RegisterName("setKeyEquivalent:")
+	addItemSel = objc.RegisterName("addItem:")
+	menuItemSelectedSel = objc.RegisterName("menuItemSelected:")
 	setWebsiteDataStoreSel = objc.RegisterName("setWebsiteDataStore:")
 	nonPersistentDataStoreSel = objc.RegisterName("nonPersistentDataStore")
 	defaultDataStoreSel = objc.RegisterName("defaultDataStore")
@@ -645,6 +664,31 @@ func init() {
 		panic(err)
 	}
 
+	// Menu item action handler: dispatches via a tag→callback map.
+	menuCallbackMu.Lock()
+	menuCallbacks = map[uintptr]func(){}
+	menuCallbackMu.Unlock()
+	menuHandlerClass, err = objc.RegisterClass(
+		"GoWebviewMenuHandler",
+		objc.GetClass("NSObject"),
+		nil,
+		nil,
+		[]objc.MethodDef{
+			{Cmd: menuItemSelectedSel, Fn: func(self objc.ID, cmd objc.SEL, sender objc.ID) {
+				tag := sender.Send(objc.RegisterName("tag"))
+				menuCallbackMu.Lock()
+				cb := menuCallbacks[uintptr(tag)]
+				menuCallbackMu.Unlock()
+				if cb != nil {
+					cb()
+				}
+			}},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
 	// WKURLSchemeHandler: intercepts custom-scheme URL loads.
 	startSchemeTask := func(id objc.ID, cmd objc.SEL, webView objc.ID, task objc.ID) {
 		// Get the request URL.
@@ -879,12 +923,26 @@ type Platform struct {
 	// injected into WKUserContentController so they run at document start
 	// for every page load.
 	userScriptSrcs []string
+
+	// pendingMenus stores menus set via SetMenus before Run().
+	pendingMenus  []Menu
+	hasCustomMenus bool
 }
 
 func New() *Platform {
 	return &Platform{
 		runDone:        make(chan struct{}),
 		schemeHandlers: make(map[string]ResourceHandler),
+	}
+}
+
+// SetMenus replaces the native menu bar. Safe to call before or after Run().
+func (p *Platform) SetMenus(menus []Menu) {
+	p.pendingMenus = menus
+	p.hasCustomMenus = len(menus) > 0
+	// If the host thread is already running, apply immediately.
+	if p.window != 0 {
+		mainThread(func() { p.applyMenus(menus) })
 	}
 }
 
@@ -983,6 +1041,20 @@ func setupMainMenu() {
 	editItem.Send(setSubmenuSel, editMenu)
 	menu.Send(addItemSel, editItem)
 
+	for _, e := range []struct {
+		title, action, key string
+		mods               uintptr
+	}{
+		{"Undo", "undo:", "z", 1 << 20},                  // Cmd
+		{"Redo", "redo:", "z", (1 << 20) | (1 << 17)}, // Cmd+Shift
+	} {
+		item := objc.ID(nsMenuItemClass).Send(allocSel)
+		item = item.Send(initWithTitleSel, nsString(e.title), objc.RegisterName(e.action), nsString(e.key))
+		item.Send(setKeyEquivalentModifierMaskSel, e.mods)
+		editMenu.Send(addItemSel, item)
+	}
+	sep := objc.ID(nsMenuItemClass).Send(separatorItemSel)
+	editMenu.Send(addItemSel, sep)
 	for _, e := range []struct{ title, action, key string }{
 		{"Cut", "cut:", "x"},
 		{"Copy", "copy:", "c"},
@@ -992,14 +1064,88 @@ func setupMainMenu() {
 		item = item.Send(initWithTitleSel, nsString(e.title), objc.RegisterName(e.action), nsString(e.key))
 		editMenu.Send(addItemSel, item)
 	}
-	sep := objc.ID(nsMenuItemClass).Send(separatorItemSel)
-	editMenu.Send(addItemSel, sep)
+	editMenu.Send(addItemSel, objc.ID(nsMenuItemClass).Send(separatorItemSel))
 	selectAll := objc.ID(nsMenuItemClass).Send(allocSel)
 	selectAll = selectAll.Send(initWithTitleSel, nsString("Select All"), objc.RegisterName("selectAll:"), nsString("a"))
 	editMenu.Send(addItemSel, selectAll)
 
 	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
 	app.Send(setMainMenuSel, menu)
+}
+
+// applyMenus builds and installs a native NSMenu bar from the given Menu slice.
+// Runs on the host thread.
+func (p *Platform) applyMenus(menus []Menu) {
+	// Clear old callbacks.
+	menuCallbackMu.Lock()
+	menuCallbacks = map[uintptr]func(){}
+	menuCallbackMu.Unlock()
+
+	handler := objc.ID(menuHandlerClass).Send(allocSel).Send(initSel)
+
+	menuBar := objc.ID(nsMenuClass).Send(allocSel).Send(initSel)
+	tag := uintptr(1)
+
+	for _, m := range menus {
+		topItem := objc.ID(nsMenuItemClass).Send(allocSel)
+		topItem = topItem.Send(initWithTitleSel, nsString(m.Label), 0, nsString(""))
+		submenu := objc.ID(nsMenuClass).Send(allocSel).Send(initWithTitleOnlySel, nsString(m.Label))
+		submenu.Send(autoreleaseSel)
+		topItem.Send(setSubmenuSel, submenu)
+		menuBar.Send(addItemSel, topItem)
+
+		for _, mi := range m.Items {
+			if mi.Separator {
+				submenu.Send(addItemSel, objc.ID(nsMenuItemClass).Send(separatorItemSel))
+				continue
+			}
+			item := objc.ID(nsMenuItemClass).Send(allocSel)
+			item = item.Send(initWithTitleSel, nsString(mi.Label), menuItemSelectedSel, nsString(""))
+			item.Send(setTargetSel, handler)
+			item.Send(setTagSel, tag)
+
+			if mi.Shortcut != "" {
+				key, mods := parseShortcut(mi.Shortcut)
+				if key != "" {
+					item.Send(setKeyEquivalentSel, nsString(key))
+					item.Send(setKeyEquivalentModifierMaskSel, mods)
+				}
+			}
+
+			if mi.Action != nil {
+				menuCallbackMu.Lock()
+				menuCallbacks[tag] = mi.Action
+				menuCallbackMu.Unlock()
+			}
+			tag++
+
+			submenu.Send(addItemSel, item)
+		}
+	}
+
+	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
+	app.Send(setMainMenuSel, menuBar)
+}
+
+// parseShortcut parses a shortcut string like "Cmd+Shift+Z" into (key, mods).
+func parseShortcut(s string) (string, uintptr) {
+	var mods uintptr
+	key := ""
+	for _, part := range strings.Split(s, "+") {
+		switch strings.TrimSpace(part) {
+		case "Cmd", "Meta":
+			mods |= 1 << 20 // NSEventModifierFlagCommand
+		case "Shift":
+			mods |= 1 << 17 // NSEventModifierFlagShift
+		case "Ctrl", "Control":
+			mods |= 1 << 18 // NSEventModifierFlagControl
+		case "Alt", "Option":
+			mods |= 1 << 19 // NSEventModifierFlagOption
+		default:
+			key = strings.ToLower(strings.TrimSpace(part))
+		}
+	}
+	return key, mods
 }
 
 // setupDataStore returns the WKWebsiteDataStore for the platform: a non-
@@ -1123,7 +1269,11 @@ func (p *Platform) setup() error {
 	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(activateIgnoringOtherAppsSel, true)
 	// Cmd-C/Cmd-V need an Edit menu (key equivalents route via the main menu).
 	// Bare AppKit apps without a nib have no menu, so install one once.
-	setupMainMenu()
+	if p.hasCustomMenus {
+		p.applyMenus(p.pendingMenus)
+	} else {
+		setupMainMenu()
+	}
 
 	// Apply a title set before Run().
 	p.mu.Lock()

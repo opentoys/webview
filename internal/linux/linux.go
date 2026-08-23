@@ -17,7 +17,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
+	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -37,6 +39,8 @@ const (
 type ResourceRequest = types.ResourceRequest
 type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
+type Menu = types.Menu
+type MenuItem = types.MenuItem
 
 const (
 	gtkWindowToplevel = 0
@@ -52,6 +56,11 @@ const (
 
 	defaultWidth  = 640
 	defaultHeight = 480
+
+	gdkControlMask = 1 << 2 // GDK_CONTROL_MASK
+
+	gtkAccelVisible   = 1 << 0 // GTK_ACCEL_VISIBLE
+	gSignalActivate   = "activate"
 )
 
 // gdkGeometry mirrors the C GdkGeometry struct.
@@ -87,6 +96,16 @@ var (
 	gtkContainerRemove        func(container, widget uintptr)
 	gtkWidgetShow             func(widget uintptr)
 	gtkWidgetShowAll          func(widget uintptr)
+	gtkMenuBarNew             func() uintptr
+	gtkMenuNew                func() uintptr
+	gtkMenuItemNewWithLabel   func(label string) uintptr
+	gtkMenuItemSetSubmenu     func(menuItem, submenu uintptr)
+	gtkMenuShellAppend        func(shell, child uintptr)
+	gtkSeparatorMenuItemNew   func() uintptr
+	gtkAccelGroupNew          func() uintptr
+	gtkWindowAddAccelGroup    func(window, accelGroup uintptr)
+	gtkWidgetAddAccelerator   func(widget uintptr, accelSignal string, accelGroup uintptr, accelKey uint, mods, flags int)
+	gtkVboxNew                func(homogeneous bool, spacing int) uintptr
 	gtkWidgetGrabFocus        func(widget uintptr)
 	gtkWindowPresent          func(window uintptr)
 	gtkWindowClose            func(window uintptr)
@@ -223,6 +242,16 @@ func ensureInit() error {
 			purego.RegisterLibFunc(&gtkWidgetShowAll, gtk, "gtk_widget_show_all")
 			purego.RegisterLibFunc(&gtkWindowResize, gtk, "gtk_window_resize")
 			purego.RegisterLibFunc(&gtkWindowSetGeometryHints, gtk, "gtk_window_set_geometry_hints")
+			purego.RegisterLibFunc(&gtkMenuBarNew, gtk, "gtk_menu_bar_new")
+			purego.RegisterLibFunc(&gtkMenuNew, gtk, "gtk_menu_new")
+			purego.RegisterLibFunc(&gtkMenuItemNewWithLabel, gtk, "gtk_menu_item_new_with_label")
+			purego.RegisterLibFunc(&gtkMenuItemSetSubmenu, gtk, "gtk_menu_item_set_submenu")
+			purego.RegisterLibFunc(&gtkMenuShellAppend, gtk, "gtk_menu_shell_append")
+			purego.RegisterLibFunc(&gtkSeparatorMenuItemNew, gtk, "gtk_separator_menu_item_new")
+			purego.RegisterLibFunc(&gtkAccelGroupNew, gtk, "gtk_accel_group_new")
+			purego.RegisterLibFunc(&gtkWindowAddAccelGroup, gtk, "gtk_window_add_accel_group")
+			purego.RegisterLibFunc(&gtkWidgetAddAccelerator, gtk, "gtk_widget_add_accelerator")
+			purego.RegisterLibFunc(&gtkVboxNew, gtk, "gtk_vbox_new")
 		}
 		purego.RegisterLibFunc(&gtkWindowSetTitle, gtk, "gtk_window_set_title")
 		purego.RegisterLibFunc(&gtkWindowSetResizable, gtk, "gtk_window_set_resizable")
@@ -396,6 +425,7 @@ type Platform struct {
 	stopRunLoop   bool
 	isWindowShown bool
 	isSizeSet     bool
+	menuBar       uintptr
 
 	// Callback wiring (set by buildPlatform before Run).
 	MessageFunc func(string)
@@ -418,6 +448,9 @@ type Platform struct {
 	// Scheme handlers for InterceptResource.
 	schemeHandlers map[string]ResourceHandler
 	schemeCB       uintptr
+
+	pendingMenus  []Menu
+	hasCustomMenus bool
 }
 
 // New creates a new Platform instance.
@@ -445,6 +478,11 @@ func (p *Platform) Run() error {
 		return err
 	}
 	p.windowSettings()
+	if p.hasCustomMenus {
+		p.applyMenus(p.pendingMenus)
+	} else {
+		p.setupMainMenu()
+	}
 
 	// Apply pending title/size/HTML/URL directly (not via dispatch) so the
 	// window is visible before the main loop starts.
@@ -461,10 +499,171 @@ func (p *Platform) Run() error {
 	return nil
 }
 
+// SetMenus replaces the native menu bar. Call before Run().
+func (p *Platform) SetMenus(menus []Menu) {
+	p.pendingMenus = menus
+	p.hasCustomMenus = len(menus) > 0
+}
+
 // Close signals the main loop to stop.
 func (p *Platform) Close() error {
 	p.stopRunLoop = true
 	return nil
+}
+
+// setupMainMenu installs an Edit menu bar with Undo/Redo/Cut/Copy/Paste/Select All.
+// Only on GTK3; GTK4 uses GMenu/GAction (not yet implemented).
+func (p *Platform) setupMainMenu() {
+	if gtk4 {
+		return
+	}
+	menuBar := gtkMenuBarNew()
+	editItem := gtkMenuItemNewWithLabel("Edit")
+	editMenu := gtkMenuNew()
+
+	accelGroup := gtkAccelGroupNew()
+	gtkWindowAddAccelGroup(p.window, accelGroup)
+
+	gtkMenuItemSetSubmenu(editItem, editMenu)
+	gtkMenuShellAppend(menuBar, editItem)
+
+	// menuActionFn handles activate signals on edit menu items.
+	menuActionFn = purego.NewCallback(func(item, userData uintptr) uintptr {
+		action := menuActionLookup(item)
+		if action == "" || p.webview == 0 {
+			return 0
+		}
+		js := "document.execCommand('" + action + "')"
+		if haveEvaluateJavascript {
+			webkitWebViewEvaluateJavascript(p.webview, js, len(js), 0, 0, 0, 0, 0)
+		} else {
+			webkitWebViewRunJavascript(p.webview, js, 0, 0, 0)
+		}
+		return 0
+	})
+
+	addEditItem := func(label, action string, key uint, mods int) {
+		item := gtkMenuItemNewWithLabel(label)
+		gSignalConnectData(item, gSignalActivate, menuActionFn, 0, 0, 0)
+		menuActionRegister(item, action)
+		gtkWidgetAddAccelerator(item, gSignalActivate, accelGroup, key, mods, gtkAccelVisible)
+		gtkMenuShellAppend(editMenu, item)
+	}
+
+	addEditItem("Undo", "undo", 0x07a, gdkControlMask)     // Ctrl+Z
+	addEditItem("Redo", "redo", 0x079, gdkControlMask)     // Ctrl+Y
+	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
+	addEditItem("Cut", "cut", 0x078, gdkControlMask)       // Ctrl+X
+	addEditItem("Copy", "copy", 0x063, gdkControlMask)     // Ctrl+C
+	addEditItem("Paste", "paste", 0x076, gdkControlMask)   // Ctrl+V
+	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
+	addEditItem("Select All", "selectAll", 0x061, gdkControlMask) // Ctrl+A
+
+	p.menuBar = menuBar
+}
+
+var (
+	menuActionFn      uintptr
+	menuActionMu      sync.Mutex
+	menuActionItems   = map[uintptr]string{}
+)
+
+func menuActionRegister(item uintptr, action string) {
+	menuActionMu.Lock()
+	menuActionItems[item] = action
+	menuActionMu.Unlock()
+}
+
+func menuActionLookup(item uintptr) string {
+	menuActionMu.Lock()
+	defer menuActionMu.Unlock()
+	return menuActionItems[item]
+}
+
+// menuCustomCBMap stores custom menu item callbacks (by item pointer).
+var menuCustomCBMu sync.Mutex
+var menuCustomCBMap = map[uintptr]func(){}
+
+// applyMenus builds and installs a GTK3 menu bar from the given Menu slice.
+func (p *Platform) applyMenus(menus []Menu) {
+	if gtk4 {
+		return
+	}
+	// Clear old custom callbacks.
+	menuCustomCBMu.Lock()
+	menuCustomCBMap = map[uintptr]func(){}
+	menuCustomCBMu.Unlock()
+
+	menuBar := gtkMenuBarNew()
+	accelGroup := gtkAccelGroupNew()
+	gtkWindowAddAccelGroup(p.window, accelGroup)
+
+	// Register a callback that dispatches to menuCustomCBMap.
+	customMenuActionFn = purego.NewCallback(func(item, userData uintptr) uintptr {
+		menuCustomCBMu.Lock()
+		cb := menuCustomCBMap[item]
+		menuCustomCBMu.Unlock()
+		if cb != nil {
+			cb()
+		}
+		return 0
+	})
+
+	for _, m := range menus {
+		topItem := gtkMenuItemNewWithLabel(m.Label)
+		submenu := gtkMenuNew()
+		gtkMenuItemSetSubmenu(topItem, submenu)
+		gtkMenuShellAppend(menuBar, topItem)
+
+		for _, mi := range m.Items {
+			if mi.Separator {
+				gtkMenuShellAppend(submenu, gtkSeparatorMenuItemNew())
+				continue
+			}
+			item := gtkMenuItemNewWithLabel(mi.Label)
+			if mi.Action != nil {
+				gSignalConnectData(item, gSignalActivate, customMenuActionFn, 0, 0, 0)
+				menuCustomCBMu.Lock()
+				menuCustomCBMap[item] = mi.Action
+				menuCustomCBMu.Unlock()
+			}
+			if mi.Shortcut != "" {
+				key, mods := parseGtkShortcut(mi.Shortcut)
+				if key != 0 {
+					gtkWidgetAddAccelerator(item, gSignalActivate, accelGroup, key, mods, gtkAccelVisible)
+				}
+			}
+			gtkMenuShellAppend(submenu, item)
+		}
+	}
+
+	p.menuBar = menuBar
+}
+
+var customMenuActionFn uintptr
+
+// parseGtkShortcut parses "Ctrl+Z" into (gdk_keyval, GdkModifierType).
+func parseGtkShortcut(s string) (uint, int) {
+	var mods int
+	var key uint
+	for _, part := range strings.Split(s, "+") {
+		switch strings.TrimSpace(part) {
+		case "Ctrl", "Control":
+			mods |= gdkControlMask
+		case "Shift":
+			mods |= 1 << 0 // GDK_SHIFT_MASK
+		case "Alt":
+			mods |= 1 << 3 // GDK_MOD1_MASK
+		case "Super", "Cmd", "Meta":
+			mods |= 1 << 6 // GDK_SUPER_MASK
+		default:
+			k := strings.TrimSpace(part)
+			if len(k) == 1 {
+				key = uint(unicode.ToLower(rune(k[0])))
+			}
+		}
+	}
+	return key, mods
 }
 
 func (p *Platform) windowInit(window uintptr) error {
@@ -673,7 +872,12 @@ func (p *Platform) windowShow() {
 		gtkWidgetSetVisible(p.webview, true)
 		gtkWidgetSetVisible(p.window, true)
 	} else {
-		gtkContainerAdd(p.window, p.webview)
+		box := gtkVboxNew(false, 0)
+		if p.menuBar != 0 {
+			gtkMenuShellAppend(box, p.menuBar)
+		}
+		gtkContainerAdd(box, p.webview)
+		gtkContainerAdd(p.window, box)
 		gtkWidgetShowAll(p.window)
 	}
 	if p.ownsWindow {
