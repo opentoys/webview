@@ -13,7 +13,7 @@ No-CGO webview framework for Go, powered by [purego](https://github.com/ebitengi
 - **JS injection** -- `Init(js)` runs JavaScript before every page load
 - **Pre-Run buffering** -- `SetTitle`, `SetHTML`, `Navigate` can be called before `Run()`
 - **Embedded WebView2Loader.dll** -- per-architecture (amd64/arm64/x86), auto-extracted to temp
-- **Native file picker** -- `<input type=file>` maps to NSOpenPanel on macOS
+- **Native file picker** -- `<input type=file>` maps to NSOpenPanel on macOS, with `accept` attribute filtering (MIME types, extensions, wildcards)
 - **Incognito mode** -- in-memory data store, no cookies/cache persisted to disk
 
 ## Platform Status
@@ -213,6 +213,74 @@ type ResourceResponse struct {
 
 type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 ```
+
+### File Picker (macOS)
+
+The `accept` attribute on `<input type=file>` is natively supported for file type filtering:
+
+```html
+<!-- MIME types -->
+<input type="file" accept="image/png,application/pdf">
+
+<!-- File extensions -->
+<input type="file" accept=".png,.jpg,.pdf">
+
+<!-- Wildcards -->
+<input type="file" accept="image/*,video/*">
+
+<!-- Mixed -->
+<input type="file" accept="image/*,.pdf,text/plain">
+```
+
+Wildcard mapping:
+| Wildcard | UTType |
+|----------|--------|
+| `image/*` | `UTTypeImage` |
+| `video/*` | `UTTypeMovie` |
+| `audio/*` | `UTTypeAudio` |
+| `text/*` | `UTTypeText` |
+
+## cmd/app -- Universal App Shell
+
+`cmd/app` is a universal desktop app launcher that loads frontend resources + config from a zip file or directory.
+
+**Directory structure:**
+```
+app.data (zip) or data/
+├── config.json
+└── dist/
+    └── index.html
+```
+
+**config.json:**
+```json
+{
+  "title": "My App",
+  "width": 1024,
+  "height": 768,
+  "resizable": true,
+  "debug": false,
+  "incognito": true,
+  "version": "1.0.0",
+  "entry": "index.html",
+  "dist": "dist",
+  "scheme": "app"
+}
+```
+
+**Run:**
+```bash
+# From data/ directory
+go run ./cmd/app
+
+# Build
+CGO_ENABLED=0 go build -o myapp ./cmd/app
+```
+
+**JS bridge functions:**
+- `app.version()` -- returns app version
+- `app.close()` -- closes the window
+- `app.debug(msg)` -- prints to stdout
 
 ## JS Bridge Protocol
 

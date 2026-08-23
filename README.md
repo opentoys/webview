@@ -13,7 +13,7 @@
 - **JS 注入** -- `Init(js)` 在每次页面加载前执行 JS
 - **预 Run 缓冲** -- `SetTitle`、`SetHTML`、`Navigate` 可在 `Run()` 前调用
 - **内嵌 WebView2Loader.dll** -- 按架构 (amd64/arm64/x86)，自动解压到临时目录
-- **原生文件选择器** -- macOS 上 `<input type=file>` 映射到 NSOpenPanel
+- **原生文件选择器** -- macOS 上 `<input type=file>` 映射到 NSOpenPanel，支持 `accept` 属性过滤（MIME 类型、扩展名、通配符）
 - **隐身模式** -- 内存数据存储，不持久化 cookie/缓存
 
 ## 平台状态
@@ -213,6 +213,88 @@ type ResourceResponse struct {
 
 type ResourceHandler func(req ResourceRequest, respond func(*ResourceResponse))
 ```
+
+### 文件选择器（macOS）
+
+macOS 上 `<input type=file>` 的 `accept` 属性原生支持文件类型过滤：
+
+```html
+<!-- MIME 类型 -->
+<input type="file" accept="image/png,application/pdf">
+
+<!-- 文件扩展名 -->
+<input type="file" accept=".png,.jpg,.pdf">
+
+<!-- 通配符 -->
+<input type="file" accept="image/*,video/*">
+
+<!-- 混合 -->
+<input type="file" accept="image/*,.pdf,text/plain">
+```
+
+支持的通配符映射：
+| 通配符 | UTType |
+|--------|--------|
+| `image/*` | `UTTypeImage` |
+| `video/*` | `UTTypeMovie` |
+| `audio/*` | `UTTypeAudio` |
+| `text/*` | `UTTypeText` |
+
+### Unbind
+
+```go
+func (w *W) Unbind(name string)
+```
+
+移除已绑定的 JS 函数。调用后 JS 端再调用该函数会 reject。
+
+```go
+w.Bind("temp", func() string { return "hello" })
+// ... 某些时候后
+w.Unbind("temp")
+```
+
+## cmd/app -- 通用 App 启动外壳
+
+`cmd/app` 是一个通用的桌面应用启动器，从 zip 文件或目录加载前端资源 + 配置，创建 webview 窗口。
+
+**目录结构：**
+```
+app.data (zip) 或 data/
+├── config.json
+└── dist/
+    └── index.html
+```
+
+**config.json：**
+```json
+{
+  "title": "My App",
+  "width": 1024,
+  "height": 768,
+  "resizable": true,
+  "debug": false,
+  "incognito": true,
+  "version": "1.0.0",
+  "entry": "index.html",
+  "dist": "dist",
+  "scheme": "app"
+}
+```
+
+**运行：**
+```bash
+# 从 data/ 目录
+go run ./cmd/app
+
+# 构建
+CGO_ENABLED=0 go build -o myapp ./cmd/app
+```
+
+**JS 桥接函数：**
+- `app.version()` -- 返回应用版本号
+- `app.close()` -- 关闭窗口
+- `app.debug(msg)` -- 输出到 stdout
 
 ## JS 桥接协议
 
