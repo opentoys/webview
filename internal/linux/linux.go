@@ -505,6 +505,16 @@ func (p *Platform) SetMenus(menus []Menu) {
 	p.hasCustomMenus = len(menus) > 0
 }
 
+// MainThread runs f on the GTK main thread, blocking until it completes.
+func (p *Platform) MainThread(f func()) {
+	done := make(chan struct{})
+	dispatchMain(func() {
+		f()
+		close(done)
+	})
+	<-done
+}
+
 // Close destroys the window and signals the main loop to stop.
 func (p *Platform) Close() error {
 	if p.window != 0 {

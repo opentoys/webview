@@ -120,6 +120,17 @@ func (p *Platform) SetMenus(menus []Menu) {
 	p.hasCustomMenus = len(menus) > 0
 }
 
+// MainThread runs f on the Win32 UI thread, blocking until it completes.
+func (p *Platform) MainThread(f func()) {
+	done := make(chan struct{})
+	p.dispatch.push(func() {
+		f()
+		close(done)
+	})
+	pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
+	<-done
+}
+
 // Run blocks until the window is closed.
 func (p *Platform) Run() error {
 	runtime.LockOSThread()

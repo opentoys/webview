@@ -948,6 +948,9 @@ func (p *Platform) SetMenus(menus []Menu) {
 	}
 }
 
+// MainThread runs f on the AppKit host thread, blocking until it completes.
+func (p *Platform) MainThread(f func()) { mainThread(f) }
+
 func (p *Platform) Run() error {
 	startAppHost()
 	var setupErr error
@@ -956,10 +959,6 @@ func (p *Platform) Run() error {
 		return setupErr
 	}
 	<-p.runDone
-	// Stop the NSApp run loop so hostLoop() returns and the host thread exits.
-	mainThread(func() {
-		objc.ID(nsAppClass).Send(sharedApplicationSel).Send(stopSel, 0)
-	})
 	return nil
 }
 
@@ -1012,6 +1011,9 @@ func (p *Platform) signalExit() {
 	p.window = 0
 	p.webview = 0
 	p.mu.Unlock()
+	// Do NOT call [NSApp stop:] here — it kills the host thread's run loop,
+	// which deadlocks any subsequent mainThread() call (process-global
+	// singleton). The run loop lives until the process exits; that's fine.
 	select {
 	case p.runDone <- struct{}{}:
 	default:

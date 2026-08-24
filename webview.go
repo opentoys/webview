@@ -32,6 +32,7 @@ type Platform interface {
 	Init(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
+	MainThread(f func())
 }
 
 // Options configures the webview. Field semantics are per-platform; each
@@ -89,4 +90,11 @@ func (w *W) InterceptResource(scheme string, handler ResourceHandler) {
 // supported on all platforms — Linux requires re-layout).
 func (w *W) SetMenu(menus ...Menu) {
 	w.p.SetMenus(menus)
+}
+
+// MainThread runs f on the platform's UI thread, blocking until it completes.
+// Use this when calling platform APIs that must be invoked from the main thread
+// (e.g., native dialogs, window manipulation).
+func (w *W) MainThread(f func()) {
+	w.p.MainThread(f)
 }
