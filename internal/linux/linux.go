@@ -505,9 +505,13 @@ func (p *Platform) SetMenus(menus []Menu) {
 	p.hasCustomMenus = len(menus) > 0
 }
 
-// Close signals the main loop to stop.
+// Close destroys the window and signals the main loop to stop.
 func (p *Platform) Close() error {
-	p.stopRunLoop = true
+	if p.window != 0 {
+		dispatchMain(func() { gtkWindowClose(p.window) })
+	} else {
+		p.stopRunLoop = true
+	}
 	return nil
 }
 
