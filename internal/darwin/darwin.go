@@ -200,6 +200,7 @@ var (
 	setActivationPolicySel                                objc.SEL
 	activateIgnoringOtherAppsSel                          objc.SEL
 	finishLaunchingSel                                    objc.SEL
+	stopSel                                               objc.SEL
 	performSelectorOnMainThreadWithObjectWaitUntilDoneSel objc.SEL
 	windowWillCloseSel                                    objc.SEL
 	initWithTitleSel                                      objc.SEL
@@ -357,6 +358,7 @@ func init() {
 	setActivationPolicySel = objc.RegisterName("setActivationPolicy:")
 	activateIgnoringOtherAppsSel = objc.RegisterName("activateIgnoringOtherApps:")
 	finishLaunchingSel = objc.RegisterName("finishLaunching")
+	stopSel = objc.RegisterName("stop:")
 	performSelectorOnMainThreadWithObjectWaitUntilDoneSel = objc.RegisterName("performSelectorOnMainThread:withObject:waitUntilDone:")
 	windowWillCloseSel = objc.RegisterName("windowWillClose:")
 	initWithTitleSel = objc.RegisterName("initWithTitle:action:keyEquivalent:")
@@ -954,6 +956,10 @@ func (p *Platform) Run() error {
 		return setupErr
 	}
 	<-p.runDone
+	// Stop the NSApp run loop so hostLoop() returns and the host thread exits.
+	mainThread(func() {
+		objc.ID(nsAppClass).Send(sharedApplicationSel).Send(stopSel, 0)
+	})
 	return nil
 }
 
