@@ -110,6 +110,7 @@ w, err := webview.New(webview.Options{
 | `Bind(name, fn)` | Expose a Go function to JS |
 | `Unbind(name)` | Remove a bound JS function |
 | `SetMenu(menus...)` | Set native menu bar |
+| `MainThread(f)` | Run f on the platform UI thread, blocking until complete |
 | `InterceptResource(scheme, handler)` | Register custom URL scheme resource handler |
 
 ### SizeHint
@@ -214,6 +215,7 @@ type ResourceRequest struct {
     URL     string
     Method  string
     Headers map[string]string
+    Body    []byte
 }
 
 type ResourceResponse struct {
@@ -221,6 +223,18 @@ type ResourceResponse struct {
     Headers    map[string]string
     Body       []byte
 }
+```
+
+### MainThread (UI Thread Dispatch)
+
+Run a function on the platform's UI thread, blocking until it completes. Use when calling platform APIs that must run on the main thread (e.g., native dialogs, window manipulation).
+
+```go
+w.MainThread(func() {
+    // macOS: runs on AppKit thread
+    // Windows: runs on Win32 message loop thread
+    // Linux: runs on GTK main thread
+})
 ```
 
 ### File Picker (macOS)

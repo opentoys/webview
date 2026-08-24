@@ -110,6 +110,7 @@ w, err := webview.New(webview.Options{
 | `Bind(name, fn)` | 将 Go 函数暴露给 JS |
 | `Unbind(name)` | 移除已绑定的 JS 函数 |
 | `SetMenu(menus...)` | 设置原生菜单栏 |
+| `MainThread(f)` | 在平台 UI 线程执行 f，阻塞直到完成 |
 | `InterceptResource(scheme, handler)` | 注册自定义 URL scheme 资源拦截 |
 
 ### SizeHint
@@ -214,6 +215,7 @@ type ResourceRequest struct {
     URL     string
     Method  string
     Headers map[string]string
+    Body    []byte
 }
 
 type ResourceResponse struct {
@@ -221,6 +223,18 @@ type ResourceResponse struct {
     Headers    map[string]string
     Body       []byte
 }
+```
+
+### MainThread（UI 线程调度）
+
+在平台 UI 线程上执行函数，阻塞直到完成。适用于必须在主线程调用的平台 API（如原生对话框、窗口操作）。
+
+```go
+w.MainThread(func() {
+    // 在 macOS 上运行在 AppKit 线程
+    // 在 Windows 上运行在 Win32 消息循环线程
+    // 在 Linux 上运行在 GTK 主线程
+})
 ```
 
 ### 文件选择器（macOS）
