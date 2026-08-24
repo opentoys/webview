@@ -11,6 +11,13 @@ func DefaultMenus(w *W) []Menu {
 	}
 	return []Menu{
 		{
+			Items: []MenuItem{
+				{Label: "Quit", Shortcut: CmdOrCtrl + "+Q", Action: func() {
+					w.Close()
+				}},
+			},
+		},
+		{
 			Label: "Edit",
 			Items: []MenuItem{
 				{Label: "Undo", Shortcut: CmdOrCtrl + "+Z", Action: edit("undo")},
