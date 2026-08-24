@@ -4,6 +4,7 @@ type ResourceRequest struct {
 	URL     string
 	Method  string
 	Headers map[string]string
+	Body    []byte
 }
 
 type ResourceResponse struct {

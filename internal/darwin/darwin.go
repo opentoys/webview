@@ -730,10 +730,21 @@ func init() {
 		// Store task to prevent GC; get numeric ID for the closure.
 		taskID := activeSchemeTasks.put(task)
 
+		// Get HTTP body (may be nil for GET).
+		var bodyGo []byte
+		if httpBody := objc.ID(req).Send(objc.RegisterName("HTTPBody")); httpBody != 0 {
+			bodyLen := int(httpBody.Send(objc.RegisterName("length")))
+			if bodyLen > 0 {
+				bodyGo = make([]byte, bodyLen)
+				copy(bodyGo, unsafe.Slice((*byte)(unsafe.Pointer(httpBody.Send(objc.RegisterName("bytes")))), bodyLen))
+			}
+		}
+
 		sr := ResourceRequest{
 			URL:     urlGo,
 			Method:  methodGo,
 			Headers: headersGo,
+			Body:    bodyGo,
 		}
 
 		// failTask sends didFailWithError: to the task on the host thread.
