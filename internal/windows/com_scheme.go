@@ -113,6 +113,40 @@ func (r *iCoreWebView2WebResourceRequest) GetHeaders() map[string]string {
 	return m
 }
 
+// GetContent returns the request body as an IStream (nil for GET/HEAD).
+func (r *iCoreWebView2WebResourceRequest) GetContent() *iStream {
+	var stream *iStream
+	r.vtbl.GetContent.Call(
+		uintptr(unsafe.Pointer(r)),
+		uintptr(unsafe.Pointer(&stream)),
+	)
+	return stream
+}
+
+// ReadAll reads the stream to exhaustion and releases it.
+func (s *iStream) ReadAll() []byte {
+	if s == nil {
+		return nil
+	}
+	var body []byte
+	buf := make([]byte, 4096)
+	for {
+		var n uint32
+		s.vtbl.Read.Call(
+			uintptr(unsafe.Pointer(s)),
+			uintptr(unsafe.Pointer(&buf[0])),
+			uintptr(len(buf)),
+			uintptr(unsafe.Pointer(&n)),
+		)
+		if n == 0 {
+			break
+		}
+		body = append(body, buf[:n]...)
+	}
+	s.vtbl.Release.Call(uintptr(unsafe.Pointer(s)))
+	return body
+}
+
 // --- ICoreWebView2WebResourceResponse ---
 
 type iCoreWebView2WebResourceResponse struct {

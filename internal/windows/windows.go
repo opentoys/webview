@@ -713,6 +713,7 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		URL:     uri,
 		Method:  method,
 		Headers: headers,
+		Body:    req.GetContent().ReadAll(),
 	}
 
 	deferral := args.GetRequestDeferral()

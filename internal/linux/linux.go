@@ -992,9 +992,12 @@ func (p *Platform) registerSchemes() error {
 		registerAsSecure         func(sm uintptr, scheme string)
 		requestGetURI            func(uintptr) uintptr
 		requestGetScheme         func(uintptr) uintptr
+		requestGetHTTPMethod     func(uintptr) uintptr
+		requestGetHTTPBody       func(uintptr) uintptr
 		schemeRequestFinish      func(req, stream uintptr, streamLen int64, contentType string)
 		schemeRequestFinishError func(req, err uintptr)
 		memInputStreamNew        func(data unsafe.Pointer, length int, destroy uintptr) uintptr
+		gInputStreamRead         func(stream, buf uintptr, count uint, cancellable uintptr, gerr *uintptr) int
 		schemeGObjectUnref       func(uintptr)
 		newErrorLiteral          func(domain uint32, code int32, message string) uintptr
 		freeError                func(err uintptr)
@@ -1007,9 +1010,12 @@ func (p *Platform) registerSchemes() error {
 	purego.RegisterLibFunc(&registerAsSecure, webkit, "webkit_security_manager_register_uri_scheme_as_secure")
 	purego.RegisterLibFunc(&requestGetURI, webkit, "webkit_uri_scheme_request_get_uri")
 	purego.RegisterLibFunc(&requestGetScheme, webkit, "webkit_uri_scheme_request_get_scheme")
+	purego.RegisterLibFunc(&requestGetHTTPMethod, webkit, "webkit_uri_scheme_request_get_http_method")
+	purego.RegisterLibFunc(&requestGetHTTPBody, webkit, "webkit_uri_scheme_request_get_http_body")
 	purego.RegisterLibFunc(&schemeRequestFinish, webkit, "webkit_uri_scheme_request_finish")
 	purego.RegisterLibFunc(&schemeRequestFinishError, webkit, "webkit_uri_scheme_request_finish_error")
 	purego.RegisterLibFunc(&memInputStreamNew, gio, "g_memory_input_stream_new_from_data")
+	purego.RegisterLibFunc(&gInputStreamRead, gio, "g_input_stream_read")
 	purego.RegisterLibFunc(&schemeGObjectUnref, gobject, "g_object_unref")
 	purego.RegisterLibFunc(&newErrorLiteral, glib, "g_error_new_literal")
 	purego.RegisterLibFunc(&freeError, glib, "g_error_free")
@@ -1053,7 +1059,28 @@ func (p *Platform) registerSchemes() error {
 			return 0
 		}
 
-		sr := ResourceRequest{URL: url}
+		// Extract HTTP method (nil/empty → GET).
+		method := "GET"
+		if m := cstr(requestGetHTTPMethod(request)); m != "" {
+			method = m
+		}
+
+		// Extract HTTP body from GInputStream (nil for GET/HEAD).
+		var body []byte
+		if stream := requestGetHTTPBody(request); stream != 0 {
+			buf := make([]byte, 4096)
+			for {
+				var gerr uintptr
+				n := gInputStreamRead(stream, uintptr(unsafe.Pointer(&buf[0])), uint(len(buf)), 0, &gerr)
+				if n <= 0 {
+					break
+				}
+				body = append(body, buf[:n]...)
+			}
+			schemeGObjectUnref(stream)
+		}
+
+		sr := ResourceRequest{URL: url, Method: method, Headers: map[string]string{}, Body: body}
 		var resp *ResourceResponse
 		handler(sr, func(r *ResourceResponse) {
 			resp = r
@@ -1073,13 +1100,13 @@ func (p *Platform) registerSchemes() error {
 			mime = ct
 		}
 
-		body := resp.Body
+		respBody := resp.Body
 		var dataPtr unsafe.Pointer
-		if len(body) > 0 {
-			dataPtr = memdup(unsafe.Pointer(&body[0]), len(body))
+		if len(respBody) > 0 {
+			dataPtr = memdup(unsafe.Pointer(&respBody[0]), len(respBody))
 		}
-		stream := memInputStreamNew(dataPtr, len(body), uintptr(gFreeAddr))
-		schemeRequestFinish(request, stream, int64(len(body)), mime)
+		stream := memInputStreamNew(dataPtr, len(respBody), uintptr(gFreeAddr))
+		schemeRequestFinish(request, stream, int64(len(respBody)), mime)
 		schemeGObjectUnref(stream)
 		return 0
 	})
