@@ -104,6 +104,20 @@ func (a *iCoreWebView2DownloadStartingEventArgs) PutResultFilePath(path string) 
 	return r
 }
 
+func (a *iCoreWebView2DownloadStartingEventArgs) GetResultFilePath() string {
+	var pwstr *uint16
+	a.vtbl.GetResultFilePath.Call(
+		uintptr(unsafe.Pointer(a)),
+		uintptr(unsafe.Pointer(&pwstr)),
+	)
+	if pwstr == nil {
+		return ""
+	}
+	s := wideToString(pwstr)
+	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
+	return s
+}
+
 func (a *iCoreWebView2DownloadStartingEventArgs) PutCancel(cancel bool) uintptr {
 	v := uintptr(0)
 	if cancel {
@@ -260,4 +274,12 @@ func filenameFromURL(u string) string {
 		u = u[i+1:]
 	}
 	return u
+}
+
+// basename returns the final segment of a Windows path or URL.
+func basename(p string) string {
+	if i := strings.LastIndexAny(p, `\/`); i >= 0 {
+		p = p[i+1:]
+	}
+	return p
 }
