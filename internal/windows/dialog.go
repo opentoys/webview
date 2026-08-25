@@ -11,7 +11,7 @@ import (
 
 // Native file save dialog via the Common Item Dialog COM API
 // (IFileSaveDialog). Adapted from docs/glaze/dialog_windows.go to this
-// project's ComProc/syscall idiom. SaveFile is application-modal: Show runs
+// project's ComProc/syscall idiom. The dialog is application-modal: Show runs
 // its own message loop, so it must run on the UI thread (via MainThread).
 
 // --- CLSIDs / IIDs ---------------------------------------------------------
@@ -133,24 +133,6 @@ func (s *iShellItem) GetDisplayName(sigdn uintptr, out **uint16) uintptr {
 func (s *iShellItem) Release() {
 	s.vtbl.Release.Call(uintptr(unsafe.Pointer(s)))
 }
-
-// SaveFile shows a modal save-file dialog and returns the chosen path, or ""
-// when cancelled. It runs the dialog on the UI thread and blocks until the
-// user dismisses it.
-func (p *Platform) SaveFile(opts FileDialogOptions) (string, error) {
-	type outcome struct {
-		path string
-		err  error
-	}
-	ch := make(chan outcome, 1)
-	p.MainThread(func() {
-		path, err := p.saveFileDialog(opts)
-		ch <- outcome{path, err}
-	})
-	r := <-ch
-	return r.path, r.err
-}
-
 // saveFileDialog does the actual IFileSaveDialog work. Runs on the UI thread.
 func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 	var dlg *iFileDialog

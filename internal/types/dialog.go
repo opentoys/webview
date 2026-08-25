@@ -20,7 +20,7 @@ type FileDialogOptions struct {
 	// path. Empty uses the platform default (usually the last-used directory).
 	Directory string
 
-	// Filename is the suggested file name. Used by SaveFile.
+	// Filename is the suggested file name.
 	Filename string
 
 	// Filters limits the selectable file types. An empty list shows all files.

@@ -960,10 +960,6 @@ func (p *Platform) SetMenus(menus []Menu) {
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
 
-// SaveFile is not implemented on macOS.
-func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
-	return "", errors.New("webview: SaveFile is not implemented on macOS")
-}
 
 func (p *Platform) Run() error {
 	startAppHost()

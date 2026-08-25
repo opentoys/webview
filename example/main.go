@@ -32,20 +32,6 @@ func main() {
 		panic(err)
 	}
 
-	if err := w.Bind("saveFile", func() string {
-		path, err := w.SaveFile(webview.FileDialogOptions{
-			Title:    "Save File",
-			Filename: "hello.txt",
-			Filters:  []webview.FileFilter{{Name: "Text", Extensions: []string{"txt"}}},
-		})
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return path
-	}); err != nil {
-		panic(err)
-	}
-
 	w.SetTitle("purego webview counter")
 	w.SetSize(600, 400, webview.SizeNone)
 
@@ -68,10 +54,6 @@ func main() {
 		<a href="http://127.0.0.1:8080/dl">Download file (intercepts native dialog)</a>
 	</div>
 	<hr>
-	<h2>Save File Dialog Test</h2>
-	<button onclick="saveFile().then(p => document.getElementById('saveInfo').textContent = p)"
-		style="font-size:1.2em;padding:0.5em 1em">Save File</button>
-	<p id="saveInfo"></p>
 	<script>
 	document.getElementById('fileInput').addEventListener('change', function(e) {
 		var files = e.target.files;

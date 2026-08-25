@@ -515,10 +515,6 @@ func (p *Platform) MainThread(f func()) {
 	<-done
 }
 
-// SaveFile is not implemented on Linux.
-func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
-	return "", errors.New("webview: SaveFile is not implemented on Linux")
-}
 
 // Close destroys the window and signals the main loop to stop.
 func (p *Platform) Close() error {
