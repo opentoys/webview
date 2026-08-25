@@ -938,8 +938,7 @@ type Platform struct {
 	userScriptSrcs []string
 
 	// pendingMenus stores menus set via SetMenus before Run().
-	pendingMenus   []Menu
-	hasCustomMenus bool
+	pendingMenus []Menu
 }
 
 func New() *Platform {
@@ -952,7 +951,6 @@ func New() *Platform {
 // SetMenus replaces the native menu bar. Safe to call before or after Run().
 func (p *Platform) SetMenus(menus []Menu) {
 	p.pendingMenus = menus
-	p.hasCustomMenus = len(menus) > 0
 	// If the host thread is already running, apply immediately.
 	if p.window != 0 {
 		mainThread(func() { p.applyMenus(menus) })
@@ -1034,67 +1032,6 @@ func (p *Platform) signalExit() {
 	case p.runDone <- struct{}{}:
 	default:
 	}
-}
-
-// setupMainMenu installs a minimal main menu bar with an App menu and an Edit
-// menu. Without a nib, a bare AppKit app has no menu, so Cmd-C/Cmd-V key
-// equivalents (routed to the first responder via the main menu's Edit items)
-// silently do nothing. Follows the reference webview_go implementation
-// (webview.h: 2317-2348): each Edit item carries a real key equivalent
-// ("x"/"c"/"v"/"a") so the responder chain resolves cut:/copy:/paste:/selectAll:.
-// Runs on the host thread from setup().
-func setupMainMenu() {
-	menu := objc.ID(nsMenuClass).Send(allocSel)
-	menu = menu.Send(initSel)
-
-	// Application menu.
-	appItem := objc.ID(nsMenuItemClass).Send(allocSel)
-	appItem = appItem.Send(initWithTitleSel, nsString(""), 0, nsString(""))
-	appMenu := objc.ID(nsMenuClass).Send(allocSel)
-	appMenu = appMenu.Send(initWithTitleOnlySel, nsString(""))
-	appMenu.Send(autoreleaseSel)
-	appItem.Send(setSubmenuSel, appMenu)
-	menu.Send(addItemSel, appItem)
-
-	// Edit menu: Cut/Copy/Paste/Select All with Cmd shortcuts.
-	editItem := objc.ID(nsMenuItemClass).Send(allocSel)
-	editItem = editItem.Send(initWithTitleSel, nsString("Edit"), 0, nsString(""))
-	editMenu := objc.ID(nsMenuClass).Send(allocSel)
-	editMenu = editMenu.Send(initWithTitleOnlySel, nsString("Edit"))
-	editMenu.Send(autoreleaseSel)
-	editItem.Send(setSubmenuSel, editMenu)
-	menu.Send(addItemSel, editItem)
-
-	for _, e := range []struct {
-		title, action, key string
-		mods               uintptr
-	}{
-		{"Undo", "undo:", "z", 1 << 20},               // Cmd
-		{"Redo", "redo:", "z", (1 << 20) | (1 << 17)}, // Cmd+Shift
-	} {
-		item := objc.ID(nsMenuItemClass).Send(allocSel)
-		item = item.Send(initWithTitleSel, nsString(e.title), objc.RegisterName(e.action), nsString(e.key))
-		item.Send(setKeyEquivalentModifierMaskSel, e.mods)
-		editMenu.Send(addItemSel, item)
-	}
-	sep := objc.ID(nsMenuItemClass).Send(separatorItemSel)
-	editMenu.Send(addItemSel, sep)
-	for _, e := range []struct{ title, action, key string }{
-		{"Cut", "cut:", "x"},
-		{"Copy", "copy:", "c"},
-		{"Paste", "paste:", "v"},
-	} {
-		item := objc.ID(nsMenuItemClass).Send(allocSel)
-		item = item.Send(initWithTitleSel, nsString(e.title), objc.RegisterName(e.action), nsString(e.key))
-		editMenu.Send(addItemSel, item)
-	}
-	editMenu.Send(addItemSel, objc.ID(nsMenuItemClass).Send(separatorItemSel))
-	selectAll := objc.ID(nsMenuItemClass).Send(allocSel)
-	selectAll = selectAll.Send(initWithTitleSel, nsString("Select All"), objc.RegisterName("selectAll:"), nsString("a"))
-	editMenu.Send(addItemSel, selectAll)
-
-	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
-	app.Send(setMainMenuSel, menu)
 }
 
 // applyMenus builds and installs a native NSMenu bar from the given Menu slice.
@@ -1291,13 +1228,10 @@ func (p *Platform) setup() error {
 	w.Send(objc.RegisterName("makeFirstResponder:"), wv)
 	// Re-activate app to ensure window gets focus on modern macOS.
 	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(activateIgnoringOtherAppsSel, true)
-	// Cmd-C/Cmd-V need an Edit menu (key equivalents route via the main menu).
-	// Bare AppKit apps without a nib have no menu, so install one once.
-	if p.hasCustomMenus {
-		p.applyMenus(p.pendingMenus)
-	} else {
-		setupMainMenu()
-	}
+	// Apply the menu bar (SetMenus before Run() stores it in pendingMenus;
+	// buildPlatform wires DefaultMenus(w) through that same path so all
+	// platforms share one entry point).
+	p.applyMenus(p.pendingMenus)
 
 	// Apply a title set before Run().
 	p.mu.Lock()

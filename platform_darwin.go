@@ -6,6 +6,41 @@ import (
 	"github.com/opentoys/webview/internal/darwin"
 )
 
+// CmdOrCtrl is "Cmd" on macOS, intended for use in MenuItem.Shortcut.
+// Example: Shortcut: webview.CmdOrCtrl + "+Z"
+const CmdOrCtrl = "Cmd"
+
+// DefaultMenus returns the platform's default menu bar.
+// On macOS this is an Edit menu with Undo, Redo, Cut, Copy, Paste, Select All
+// (all wired to document.execCommand via the given webview).
+func DefaultMenus(w *W) []Menu {
+	edit := func(cmd string) func() {
+		return func() { w.Eval("document.execCommand('" + cmd + "')") }
+	}
+	return []Menu{
+		{
+			Items: []MenuItem{
+				{Label: "Quit", Shortcut: CmdOrCtrl + "+Q", Action: func() {
+					w.Close()
+				}},
+			},
+		},
+		{
+			Label: "Edit",
+			Items: []MenuItem{
+				{Label: "Undo", Shortcut: CmdOrCtrl + "+Z", Action: edit("undo")},
+				{Label: "Redo", Shortcut: CmdOrCtrl + "+Shift+Z", Action: edit("redo")},
+				{Separator: true},
+				{Label: "Cut", Shortcut: CmdOrCtrl + "+X", Action: edit("cut")},
+				{Label: "Copy", Shortcut: CmdOrCtrl + "+C", Action: edit("copy")},
+				{Label: "Paste", Shortcut: CmdOrCtrl + "+V", Action: edit("paste")},
+				{Separator: true},
+				{Label: "Select All", Shortcut: CmdOrCtrl + "+A", Action: edit("selectAll")},
+			},
+		},
+	}
+}
+
 func buildPlatform(opts Options, w *W) Platform {
 	p := darwin.New()
 	p.Debug = opts.Debug
@@ -15,6 +50,7 @@ func buildPlatform(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
+	p.SetMenus(DefaultMenus(w))
 	// Capture <input accept> on click so the native file picker can read it
 	// synchronously before showing the panel.
 	w.bridge.Bind("__accept__", func(v string) {
