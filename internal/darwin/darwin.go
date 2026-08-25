@@ -938,7 +938,7 @@ type Platform struct {
 	userScriptSrcs []string
 
 	// pendingMenus stores menus set via SetMenus before Run().
-	pendingMenus  []Menu
+	pendingMenus   []Menu
 	hasCustomMenus bool
 }
 
@@ -961,6 +961,11 @@ func (p *Platform) SetMenus(menus []Menu) {
 
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
+
+// SaveFile is not implemented on macOS.
+func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
+	return "", errors.New("webview: SaveFile is not implemented on macOS")
+}
 
 func (p *Platform) Run() error {
 	startAppHost()
@@ -1064,7 +1069,7 @@ func setupMainMenu() {
 		title, action, key string
 		mods               uintptr
 	}{
-		{"Undo", "undo:", "z", 1 << 20},                  // Cmd
+		{"Undo", "undo:", "z", 1 << 20},               // Cmd
 		{"Redo", "redo:", "z", (1 << 20) | (1 << 17)}, // Cmd+Shift
 	} {
 		item := objc.ID(nsMenuItemClass).Send(allocSel)

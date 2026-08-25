@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/opentoys/webview"
 )
@@ -15,6 +16,14 @@ func main() {
 	}
 	defer w.Close()
 
+	go func() {
+		http.HandleFunc("/dl", func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Content-Disposition", `attachment; filename="hello.txt"`)
+			rw.Write([]byte("hello from download"))
+		})
+		http.ListenAndServe("127.0.0.1:8080", nil)
+	}()
+
 	count := 0
 	if err := w.Bind("increment", func() int {
 		count++
@@ -23,8 +32,24 @@ func main() {
 		panic(err)
 	}
 
+	if err := w.Bind("saveFile", func() string {
+		path, err := w.SaveFile(webview.FileDialogOptions{
+			Title:    "Save File",
+			Filename: "hello.txt",
+			Filters:  []webview.FileFilter{{Name: "Text", Extensions: []string{"txt"}}},
+		})
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		return path
+	}); err != nil {
+		panic(err)
+	}
+
 	w.SetTitle("purego webview counter")
 	w.SetSize(600, 400, webview.SizeNone)
+
+	w.SetMenu(webview.DefaultMenus(w)...)
 	w.SetHTML(`<!doctype html>
 <html>
 <body style="font-family:system-ui;text-align:center;padding-top:2em">
@@ -39,6 +64,14 @@ func main() {
 	<div>
 		<a id="downloadLink" onclick="downloadTextSimple('Hello, World!', 'hello.txt')">Download Text</a>
 	</div>
+	<div>
+		<a href="http://127.0.0.1:8080/dl">Download file (intercepts native dialog)</a>
+	</div>
+	<hr>
+	<h2>Save File Dialog Test</h2>
+	<button onclick="saveFile().then(p => document.getElementById('saveInfo').textContent = p)"
+		style="font-size:1.2em;padding:0.5em 1em">Save File</button>
+	<p id="saveInfo"></p>
 	<script>
 	document.getElementById('fileInput').addEventListener('change', function(e) {
 		var files = e.target.files;

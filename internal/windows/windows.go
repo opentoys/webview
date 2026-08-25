@@ -32,6 +32,8 @@ type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
 type Menu = types.Menu
 type MenuItem = types.MenuItem
+type FileDialogOptions = types.FileDialogOptions
+type FileFilter = types.FileFilter
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
@@ -55,13 +57,16 @@ type Platform struct {
 	DataDir   string
 
 	// COM callback objects (prevent GC).
-	envCompletedHandler  *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
-	ctrlCompletedHandler *iCoreWebView2CreateCoreWebView2ControllerCompletedHandler
-	msgReceivedHandler   *iCoreWebView2WebMessageReceivedEventHandler
-	permRequestedHandler *iCoreWebView2PermissionRequestedEventHandler
-	navCompletedHandler  *iCoreWebView2NavigationCompletedEventHandler
-	webResourceHandler   *iCoreWebView2WebResourceRequestedEventHandler
-	webResourceToken     eventToken
+	envCompletedHandler     *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
+	ctrlCompletedHandler    *iCoreWebView2CreateCoreWebView2ControllerCompletedHandler
+	msgReceivedHandler      *iCoreWebView2WebMessageReceivedEventHandler
+	permRequestedHandler    *iCoreWebView2PermissionRequestedEventHandler
+	navCompletedHandler     *iCoreWebView2NavigationCompletedEventHandler
+	webResourceHandler      *iCoreWebView2WebResourceRequestedEventHandler
+	webResourceToken        eventToken
+	webview4                *iCoreWebView2_4
+	downloadStartingHandler *iCoreWebView2DownloadStartingEventHandler
+	downloadStartingToken   eventToken
 
 	// Resource interception.
 	schemeHandlers map[string]ResourceHandler
@@ -121,7 +126,15 @@ func (p *Platform) SetMenus(menus []Menu) {
 }
 
 // MainThread runs f on the Win32 UI thread, blocking until it completes.
+// Reentrant: if already on the UI thread (e.g. a menu Action or bound func),
+// f runs directly to avoid deadlocking the message loop.
 func (p *Platform) MainThread(f func()) {
+	if uiTID, _, _ := pGetWindowThreadProcessId.Call(p.hwnd, 0); uiTID != 0 {
+		if curTID, _, _ := pGetCurrentThreadId.Call(); curTID == uiTID {
+			f()
+			return
+		}
+	}
 	done := make(chan struct{})
 	p.dispatch.push(func() {
 		f()
@@ -408,6 +421,13 @@ func (p *Platform) initWebView() {
 		}
 	}
 
+	// Intercept downloads: replace WebView2's native save dialog with ours.
+	p.webview4 = p.webview.QueryInterface4()
+	if p.webview4 != nil {
+		p.downloadStartingHandler = newDownloadStartingHandler(p)
+		p.webview4.AddDownloadStarting(p.downloadStartingHandler, &p.downloadStartingToken)
+	}
+
 	// Set bounds and visibility (reference order: resize → visible → show).
 	p.resizeWidget()
 	p.controller.PutIsVisible(true)
@@ -538,6 +558,42 @@ func (p *Platform) InvokeWebMessageReceived(sender *iCoreWebView2, args *iCoreWe
 }
 
 func (p *Platform) InvokePermissionRequested(sender *iCoreWebView2, args uintptr) uintptr {
+	return S_OK
+}
+
+// InvokeDownloadStarting is called when WebView2 begins a download. It shows
+// our IFileSaveDialog and writes the chosen path to ResultFilePath so WebView2
+// downloads silently (no native save dialog). Cancelling the dialog cancels the
+// download. Runs on the UI thread (COM callback).
+func (p *Platform) InvokeDownloadStarting(sender *iCoreWebView2, args *iCoreWebView2DownloadStartingEventArgs) uintptr {
+	// Hold a deferral: IFileSaveDialog::Show pumps its own message loop, and
+	// without this WebView2 may finalize the download and free args while the
+	// dialog is still open.
+	deferral := args.GetDeferral()
+	defer func() {
+		if deferral != nil {
+			deferral.Complete()
+		}
+	}()
+
+	filename := ""
+	if op := args.GetDownloadOperation(); op != nil {
+		filename = filenameFromDisposition(op.GetContentDisposition())
+		if filename == "" {
+			filename = filenameFromURL(op.GetUri())
+		}
+		op.Release()
+	}
+
+	path, err := p.saveFileDialog(FileDialogOptions{
+		Title:    "Save File",
+		Filename: filename,
+	})
+	if err != nil || path == "" {
+		args.PutCancel(true)
+		return S_OK
+	}
+	args.PutResultFilePath(path)
 	return S_OK
 }
 

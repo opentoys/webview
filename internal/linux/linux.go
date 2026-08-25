@@ -59,8 +59,8 @@ const (
 
 	gdkControlMask = 1 << 2 // GDK_CONTROL_MASK
 
-	gtkAccelVisible   = 1 << 0 // GTK_ACCEL_VISIBLE
-	gSignalActivate   = "activate"
+	gtkAccelVisible = 1 << 0 // GTK_ACCEL_VISIBLE
+	gSignalActivate = "activate"
 )
 
 // gdkGeometry mirrors the C GdkGeometry struct.
@@ -449,7 +449,7 @@ type Platform struct {
 	schemeHandlers map[string]ResourceHandler
 	schemeCB       uintptr
 
-	pendingMenus  []Menu
+	pendingMenus   []Menu
 	hasCustomMenus bool
 }
 
@@ -515,6 +515,11 @@ func (p *Platform) MainThread(f func()) {
 	<-done
 }
 
+// SaveFile is not implemented on Linux.
+func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
+	return "", errors.New("webview: SaveFile is not implemented on Linux")
+}
+
 // Close destroys the window and signals the main loop to stop.
 func (p *Platform) Close() error {
 	if p.window != 0 {
@@ -564,12 +569,12 @@ func (p *Platform) setupMainMenu() {
 		gtkMenuShellAppend(editMenu, item)
 	}
 
-	addEditItem("Undo", "undo", 0x07a, gdkControlMask)     // Ctrl+Z
-	addEditItem("Redo", "redo", 0x079, gdkControlMask)     // Ctrl+Y
+	addEditItem("Undo", "undo", 0x07a, gdkControlMask) // Ctrl+Z
+	addEditItem("Redo", "redo", 0x079, gdkControlMask) // Ctrl+Y
 	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
-	addEditItem("Cut", "cut", 0x078, gdkControlMask)       // Ctrl+X
-	addEditItem("Copy", "copy", 0x063, gdkControlMask)     // Ctrl+C
-	addEditItem("Paste", "paste", 0x076, gdkControlMask)   // Ctrl+V
+	addEditItem("Cut", "cut", 0x078, gdkControlMask)     // Ctrl+X
+	addEditItem("Copy", "copy", 0x063, gdkControlMask)   // Ctrl+C
+	addEditItem("Paste", "paste", 0x076, gdkControlMask) // Ctrl+V
 	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
 	addEditItem("Select All", "selectAll", 0x061, gdkControlMask) // Ctrl+A
 
@@ -577,9 +582,9 @@ func (p *Platform) setupMainMenu() {
 }
 
 var (
-	menuActionFn      uintptr
-	menuActionMu      sync.Mutex
-	menuActionItems   = map[uintptr]string{}
+	menuActionFn    uintptr
+	menuActionMu    sync.Mutex
+	menuActionItems = map[uintptr]string{}
 )
 
 func menuActionRegister(item uintptr, action string) {

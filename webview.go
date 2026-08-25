@@ -18,6 +18,9 @@ type ResourceHandler = types.ResourceHandler
 type Menu = types.Menu
 type MenuItem = types.MenuItem
 
+type FileFilter = types.FileFilter
+type FileDialogOptions = types.FileDialogOptions
+
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
 // from types, re-exported per-platform in platform_*.go files.
 
@@ -33,6 +36,7 @@ type Platform interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
+	SaveFile(opts FileDialogOptions) (string, error)
 }
 
 // Options configures the webview. Field semantics are per-platform; each
@@ -97,4 +101,10 @@ func (w *W) SetMenu(menus ...Menu) {
 // (e.g., native dialogs, window manipulation).
 func (w *W) MainThread(f func()) {
 	w.p.MainThread(f)
+}
+
+// SaveFile shows a native save-file dialog and returns the chosen path, or ""
+// when cancelled. Only implemented on Windows; other platforms return an error.
+func (w *W) SaveFile(opts FileDialogOptions) (string, error) {
+	return w.p.SaveFile(opts)
 }
