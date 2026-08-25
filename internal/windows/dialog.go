@@ -191,9 +191,13 @@ func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 	}
 
 	specs := buildFilterSpecs(opts.Filters)
-	if len(specs) > 0 {
-		dlg.SetFileTypes(uint32(len(specs)), &specs[0])
+	if len(specs) == 0 {
+		specs = []comdlgFilterSpec{{
+			pszName: utf16PtrFromStr("All Files"),
+			pszSpec: utf16PtrFromStr("*.*"),
+		}}
 	}
+	dlg.SetFileTypes(uint32(len(specs)), &specs[0])
 
 	hr := dlg.Show(p.hwnd)
 	runtime.KeepAlive(specs)

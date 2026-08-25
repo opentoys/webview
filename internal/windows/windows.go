@@ -578,7 +578,12 @@ func (p *Platform) InvokeDownloadStarting(sender *iCoreWebView2, args *iCoreWebV
 
 	// Preferred: WebView2's default ResultFilePath already encodes the
 	// suggested name (download attribute > Content-Disposition > URL).
-	filename := basename(args.GetResultFilePath())
+	resultPath := args.GetResultFilePath()
+	filename := basename(resultPath)
+	dir := ""
+	if resultPath != "" {
+		dir = filepath.Dir(resultPath)
+	}
 	if filename == "" {
 		if op := args.GetDownloadOperation(); op != nil {
 			filename = filenameFromDisposition(op.GetContentDisposition())
@@ -590,8 +595,9 @@ func (p *Platform) InvokeDownloadStarting(sender *iCoreWebView2, args *iCoreWebV
 	}
 
 	path, err := p.saveFileDialog(FileDialogOptions{
-		Title:    "Save File",
-		Filename: filename,
+		Title:     "Save File",
+		Directory: dir,
+		Filename:  filename,
 	})
 	if err != nil || path == "" {
 		args.PutCancel(true)
