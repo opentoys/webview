@@ -51,7 +51,7 @@ func main() {
 		<a id="downloadLink" onclick="downloadTextSimple('Hello, World!', 'hello.txt')">Download Text</a>
 	</div>
 	<div>
-		<a href="http://127.0.0.1:8080/dl">Download file (intercepts native dialog)</a>
+		<a href="http://127.0.0.1:8080/dl" download="a.txt">Download file (intercepts native dialog)</a>
 	</div>
 	<hr>
 	<script>

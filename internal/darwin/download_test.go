@@ -38,6 +38,27 @@ func TestDownloadDelegateRegistered(t *testing.T) {
 	}
 }
 
+// TestDownloadPolicyConstants verifies the WKNavigationResponsePolicy values
+// used by decidePolicyForNavigationResponse (allow vs. download) and that the
+// delegate responds to the policy selector, so attachment responses route to
+// the download path instead of navigating.
+func TestDownloadPolicyConstants(t *testing.T) {
+	if wkNavigationResponsePolicyAllow != 1 {
+		t.Fatalf("Allow policy = %d, want 1", wkNavigationResponsePolicyAllow)
+	}
+	if wkNavigationResponsePolicyDownload != 2 {
+		t.Fatalf("Download policy = %d, want 2", wkNavigationResponsePolicyDownload)
+	}
+	inst := objc.ID(downloadDelegateClass).Send(allocSel).Send(initSel)
+	if inst == 0 {
+		t.Fatal("failed to alloc download delegate instance")
+	}
+	sel := objc.RegisterName("decidePolicyForNavigationResponse:decisionHandler:")
+	if inst.Send(respondsToSelectorSel, sel) == 0 {
+		t.Fatal("download delegate does not respond to decidePolicyForNavigationResponse:decisionHandler:")
+	}
+}
+
 func TestDownloadFuncRouting(t *testing.T) {
 	p := New()
 	called := make(chan string, 1)

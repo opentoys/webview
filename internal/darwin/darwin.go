@@ -38,6 +38,14 @@ type MenuItem = types.MenuItem
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
 
+
+// WKNavigationResponsePolicy values.
+const (
+	wkNavigationResponsePolicyAllow    int64 = 1
+	wkNavigationResponsePolicyDownload int64 = 2
+)
+
+
 // NSWindow styleMask bits (NSWindowStyleMask).
 const (
 	styleTitled    = 1 << 0
@@ -241,6 +249,9 @@ var (
 	activateFileViewerSel                                 objc.SEL
 	savePanelSel                                          objc.SEL
 	panelURLSel                                           objc.SEL
+	responseSel                                           objc.SEL
+	valueForHTTPHeaderFieldSel                             objc.SEL
+	canShowMIMETypeSel                                     objc.SEL
 	preferencesSel                                        objc.SEL
 	setValueForKeySel                                     objc.SEL
 	numberWithBoolSel                                     objc.SEL
@@ -402,6 +413,9 @@ func init() {
 	activateFileViewerSel = objc.RegisterName("activateFileViewerSelectingURLs:")
 	savePanelSel = objc.RegisterName("savePanel")
 	panelURLSel = objc.RegisterName("URL")
+	responseSel = objc.RegisterName("response")
+	valueForHTTPHeaderFieldSel = objc.RegisterName("valueForHTTPHeaderField:")
+	canShowMIMETypeSel = objc.RegisterName("canShowMIMEType")
 	preferencesSel = objc.RegisterName("preferences")
 	setValueForKeySel = objc.RegisterName("setValue:forKey:")
 	numberWithBoolSel = objc.RegisterName("numberWithBool:")
@@ -627,6 +641,39 @@ func init() {
 		pendingDownloads.Delete(downloadKey(download))
 	}
 
+	// decidePolicyForNavigationResponse turns a response into a download instead
+	// of letting the page preview/navigate. If WebKit can show the MIME type
+	// (e.g. PDF), download only when the server requests an attachment via
+	// Content-Disposition; otherwise (e.g. .zip, unknown type) always download.
+	// The closure MUST take the full arg order (id, cmd, webView,
+	// navigationResponse, decisionHandler) — a wrong arity makes purego misroute
+	// args and WebKit treats the method as unimplemented (silently Allow).
+	decidePolicyForNavigationResponse := func(id objc.ID, cmd objc.SEL, webView objc.ID, navigationResponse objc.ID, decisionHandler objc.ID) {
+		policy := wkNavigationResponsePolicyAllow
+		if objc.ID(navigationResponse).Send(canShowMIMETypeSel) != 0 {
+			resp := objc.ID(navigationResponse).Send(responseSel)
+			if resp != 0 && objc.ID(resp).Send(respondsToSelectorSel, valueForHTTPHeaderFieldSel) != 0 {
+				cd := objc.ID(resp).Send(valueForHTTPHeaderFieldSel, nsString("Content-Disposition"))
+				if cd != 0 && strings.Contains(strings.ToLower(goString(cd)), "attachment") {
+					policy = wkNavigationResponsePolicyDownload
+				}
+			}
+		} else {
+			policy = wkNavigationResponsePolicyDownload
+		}
+		callBlock(decisionHandler, policy)
+	}
+
+	// Response-stage handoff: when the policy above returns Download, WebKit
+	// calls this with the navigation response (not the action) to finish the
+	// WKDownload. Give each download its own delegate.
+	downloadDidBecomeFromResponse := func(id objc.ID, cmd objc.SEL, webView objc.ID, navigationResponse objc.ID, download objc.ID) {
+		inst := objc.ID(downloadDelegateClass).Send(allocSel)
+		inst = inst.Send(initSel)
+		download.Send(setDelegateSel, inst)
+	}
+
+
 	downloadDelegateClass, err = objc.RegisterClass(
 		"GoWebviewDownloadDelegate",
 		objc.GetClass("NSObject"),
@@ -637,6 +684,8 @@ func init() {
 		nil,
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("webView:navigationAction:didBecomeDownload:"), Fn: downloadDidBecome},
+			{Cmd: objc.RegisterName("webView:navigationResponse:didBecomeDownload:"), Fn: downloadDidBecomeFromResponse},
+			{Cmd: objc.RegisterName("webView:decidePolicyForNavigationResponse:decisionHandler:"), Fn: decidePolicyForNavigationResponse},
 			{Cmd: objc.RegisterName("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"), Fn: decideDestination},
 			{Cmd: objc.RegisterName("downloadDidFinish:"), Fn: downloadDidFinish},
 			{Cmd: objc.RegisterName("download:didFailWithError:"), Fn: downloadDidFail},
