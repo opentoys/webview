@@ -604,6 +604,7 @@ func (p *Platform) InvokeDownloadStarting(sender *iCoreWebView2, args *iCoreWebV
 		return S_OK
 	}
 	args.PutResultFilePath(path)
+	args.PutHandled(true)
 	return S_OK
 }
 

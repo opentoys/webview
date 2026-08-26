@@ -127,6 +127,18 @@ func (a *iCoreWebView2DownloadStartingEventArgs) PutCancel(cancel bool) uintptr 
 	return r
 }
 
+// PutHandled=true tells WebView2 we've taken over the download (own save
+// dialog + silent download to ResultFilePath) so it suppresses its download
+// bubble/notification.
+func (a *iCoreWebView2DownloadStartingEventArgs) PutHandled(handled bool) uintptr {
+	v := uintptr(0)
+	if handled {
+		v = 1
+	}
+	r, _, _ := a.vtbl.PutHandled.Call(uintptr(unsafe.Pointer(a)), v)
+	return r
+}
+
 func (a *iCoreWebView2DownloadStartingEventArgs) GetDownloadOperation() *iCoreWebView2DownloadOperation {
 	var op *iCoreWebView2DownloadOperation
 	a.vtbl.GetDownloadOperation.Call(
