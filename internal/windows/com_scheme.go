@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"net/http"
 	"runtime"
 	"unsafe"
 )
@@ -16,9 +17,9 @@ type iCoreWebView2WebResourceRequestedEventArgs struct {
 // Vtable layout from WebView2.h ICoreWebView2WebResourceRequestedEventArgs.
 type iCoreWebView2WebResourceRequestedEventArgsVtbl struct {
 	_IUnknownVtbl
-	GetRequest        ComProc // 3
-	GetResponse       ComProc // 4
-	PutResponse       ComProc // 5
+	GetRequest         ComProc // 3
+	GetResponse        ComProc // 4
+	PutResponse        ComProc // 5
 	GetRequestDeferral ComProc // 6
 }
 
@@ -92,7 +93,7 @@ func (r *iCoreWebView2WebResourceRequest) GetMethod() string {
 	return s
 }
 
-func (r *iCoreWebView2WebResourceRequest) GetHeaders() map[string]string {
+func (r *iCoreWebView2WebResourceRequest) GetHeaders() http.Header {
 	var hdrs *iCoreWebView2HttpRequestHeaders
 	r.vtbl.GetHeaders.Call(
 		uintptr(unsafe.Pointer(r)),
@@ -101,13 +102,13 @@ func (r *iCoreWebView2WebResourceRequest) GetHeaders() map[string]string {
 	if hdrs == nil {
 		return nil
 	}
-	m := make(map[string]string)
+	m := make(http.Header)
 	for _, name := range []string{
 		"Accept", "Accept-Encoding", "Accept-Language",
 		"Content-Type", "User-Agent", "Referer",
 	} {
 		if v := hdrs.GetHeader(name); v != "" {
-			m[name] = v
+			m.Add(name, v)
 		}
 	}
 	return m
@@ -212,10 +213,10 @@ type iCoreWebView2HttpRequestHeaders struct {
 // Vtable layout from WebView2.h ICoreWebView2HttpRequestHeaders.
 type iCoreWebView2HttpRequestHeadersVtbl struct {
 	_IUnknownVtbl
-	GetHeader  ComProc // 3
-	GetHeaders ComProc // 4
-	Contains   ComProc // 5
-	SetHeader  ComProc // 6
+	GetHeader    ComProc // 3
+	GetHeaders   ComProc // 4
+	Contains     ComProc // 5
+	SetHeader    ComProc // 6
 	RemoveHeader ComProc // 7
 }
 
@@ -261,17 +262,17 @@ type iStream struct {
 
 type _IStreamVtbl struct {
 	_IUnknownVtbl
-	Read    ComProc // 3
-	Write   ComProc // 4
-	Seek    ComProc // 5
-	SetSize ComProc // 6
-	CopyTo  ComProc // 7
-	Commit  ComProc // 8
-	Revert  ComProc // 9
+	Read         ComProc // 3
+	Write        ComProc // 4
+	Seek         ComProc // 5
+	SetSize      ComProc // 6
+	CopyTo       ComProc // 7
+	Commit       ComProc // 8
+	Revert       ComProc // 9
 	LockRegion   ComProc // 10
 	UnlockRegion ComProc // 11
-	Stat    ComProc // 12
-	Clone   ComProc // 13
+	Stat         ComProc // 12
+	Clone        ComProc // 13
 }
 
 // createStreamOnHGlobal creates a real COM IStream backed by global memory.

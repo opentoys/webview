@@ -1,15 +1,17 @@
 package types
 
+import "net/http"
+
 type ResourceRequest struct {
 	URL     string
 	Method  string
-	Headers map[string]string
+	Headers http.Header
 	Body    []byte
 }
 
 type ResourceResponse struct {
 	StatusCode int
-	Headers    map[string]string
+	Headers    http.Header
 	Body       []byte
 }
 

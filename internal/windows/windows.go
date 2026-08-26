@@ -4,6 +4,7 @@ package windows
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -772,7 +773,7 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 
 	method := req.GetMethod()
 	if method == "" {
-		method = "GET"
+		method = http.MethodGet
 	}
 	headers := req.GetHeaders()
 
@@ -780,7 +781,11 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		URL:     uri,
 		Method:  method,
 		Headers: headers,
-		Body:    req.GetContent().ReadAll(),
+	}
+	switch method {
+	case "GET", "HEAD", "TRACE", "OPTIONS":
+	default:
+		sr.Body = req.GetContent().ReadAll()
 	}
 
 	deferral := args.GetRequestDeferral()
@@ -833,7 +838,7 @@ func (p *Platform) applyResponse(args *iCoreWebView2WebResourceRequestedEventArg
 	if len(resp.Headers) > 0 {
 		var parts []string
 		for k, v := range resp.Headers {
-			parts = append(parts, k+": "+v)
+			parts = append(parts, k+": "+strings.Join(v, ";"))
 		}
 		webResp.PutHeaders(strings.Join(parts, "\n"))
 	}

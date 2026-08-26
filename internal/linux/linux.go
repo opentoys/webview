@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
@@ -514,7 +515,6 @@ func (p *Platform) MainThread(f func()) {
 	})
 	<-done
 }
-
 
 // Close destroys the window and signals the main loop to stop.
 func (p *Platform) Close() error {
@@ -1061,27 +1061,31 @@ func (p *Platform) registerSchemes() error {
 		}
 
 		// Extract HTTP method (nil/empty → GET).
-		method := "GET"
+		method := http.MethodGet
 		if m := cstr(requestGetHTTPMethod(request)); m != "" {
 			method = m
 		}
 
 		// Extract HTTP body from GInputStream (nil for GET/HEAD).
 		var body []byte
-		if stream := requestGetHTTPBody(request); stream != 0 {
-			buf := make([]byte, 4096)
-			for {
-				var gerr uintptr
-				n := gInputStreamRead(stream, uintptr(unsafe.Pointer(&buf[0])), uint(len(buf)), 0, &gerr)
-				if n <= 0 {
-					break
+		switch method {
+		case "GET", "HEAD", "TRACE", "OPTIONS":
+		default:
+			if stream := requestGetHTTPBody(request); stream != 0 {
+				buf := make([]byte, 4096)
+				for {
+					var gerr uintptr
+					n := gInputStreamRead(stream, uintptr(unsafe.Pointer(&buf[0])), uint(len(buf)), 0, &gerr)
+					if n <= 0 {
+						break
+					}
+					body = append(body, buf[:n]...)
 				}
-				body = append(body, buf[:n]...)
+				schemeGObjectUnref(stream)
 			}
-			schemeGObjectUnref(stream)
 		}
 
-		sr := ResourceRequest{URL: url, Method: method, Headers: map[string]string{}, Body: body}
+		sr := ResourceRequest{URL: url, Method: method, Headers: http.Header{}, Body: body}
 		var resp *ResourceResponse
 		handler(sr, func(r *ResourceResponse) {
 			resp = r
@@ -1095,9 +1099,9 @@ func (p *Platform) registerSchemes() error {
 		}
 
 		mime := "application/octet-stream"
-		if ct, ok := resp.Headers["Content-Type"]; ok {
+		if ct := resp.Headers.Get("Content-Type"); ct != "" {
 			mime = ct
-		} else if ct, ok := resp.Headers["content-type"]; ok {
+		} else if ct := resp.Headers.Get("content-type"); ct != "" {
 			mime = ct
 		}
 

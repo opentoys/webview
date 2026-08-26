@@ -4,6 +4,7 @@ package darwin
 
 import (
 	"errors"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
@@ -38,13 +39,11 @@ type MenuItem = types.MenuItem
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
 
-
 // WKNavigationResponsePolicy values.
 const (
 	wkNavigationResponsePolicyAllow    int64 = 1
 	wkNavigationResponsePolicyDownload int64 = 2
 )
-
 
 // NSWindow styleMask bits (NSWindowStyleMask).
 const (
@@ -250,8 +249,8 @@ var (
 	savePanelSel                                          objc.SEL
 	panelURLSel                                           objc.SEL
 	responseSel                                           objc.SEL
-	valueForHTTPHeaderFieldSel                             objc.SEL
-	canShowMIMETypeSel                                     objc.SEL
+	valueForHTTPHeaderFieldSel                            objc.SEL
+	canShowMIMETypeSel                                    objc.SEL
 	preferencesSel                                        objc.SEL
 	setValueForKeySel                                     objc.SEL
 	numberWithBoolSel                                     objc.SEL
@@ -673,7 +672,6 @@ func init() {
 		download.Send(setDelegateSel, inst)
 	}
 
-
 	downloadDelegateClass, err = objc.RegisterClass(
 		"GoWebviewDownloadDelegate",
 		objc.GetClass("NSObject"),
@@ -765,13 +763,13 @@ func init() {
 		}
 
 		// Get HTTP method.
-		methodGo := "GET"
+		methodGo := http.MethodGet
 		if m := objc.ID(req).Send(HTTPMethodSel); m != 0 {
 			methodGo = goString(m)
 		}
 
 		// Get headers (may be nil).
-		headersGo := map[string]string{}
+		headersGo := http.Header{}
 		if hdrs := objc.ID(req).Send(allHTTPHeaderFieldsSel); hdrs != 0 {
 			headersGo = goMapFromNSDictionary(hdrs)
 		}
@@ -779,13 +777,18 @@ func init() {
 		// Store task to prevent GC; get numeric ID for the closure.
 		taskID := activeSchemeTasks.put(task)
 
-		// Get HTTP body (may be nil for GET).
+		// Get HTTP body. Only body-bearing methods (POST/PUT/PATCH/DELETE)
+		// can carry one; skip the lookup for GET/HEAD/TRACE/OPTIONS.
 		var bodyGo []byte
-		if httpBody := objc.ID(req).Send(objc.RegisterName("HTTPBody")); httpBody != 0 {
-			bodyLen := int(httpBody.Send(objc.RegisterName("length")))
-			if bodyLen > 0 {
-				bodyGo = make([]byte, bodyLen)
-				copy(bodyGo, unsafe.Slice((*byte)(unsafe.Pointer(httpBody.Send(objc.RegisterName("bytes")))), bodyLen))
+		switch methodGo {
+		case "GET", "HEAD", "TRACE", "OPTIONS":
+		default:
+			if httpBody := objc.ID(req).Send(objc.RegisterName("HTTPBody")); httpBody != 0 {
+				bodyLen := int(httpBody.Send(objc.RegisterName("length")))
+				if bodyLen > 0 {
+					bodyGo = make([]byte, bodyLen)
+					copy(bodyGo, unsafe.Slice((*byte)(unsafe.Pointer(httpBody.Send(objc.RegisterName("bytes")))), bodyLen))
+				}
 			}
 		}
 
@@ -1008,7 +1011,6 @@ func (p *Platform) SetMenus(menus []Menu) {
 
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
-
 
 func (p *Platform) Run() error {
 	startAppHost()
@@ -1420,9 +1422,9 @@ func respondToSchemeTask(task objc.ID, resp ResourceResponse, reqURL objc.ID) {
 	}
 
 	// Inject bootstrap JS into HTML responses so Bind works on custom schemes.
-	ct := resp.Headers["Content-Type"]
+	ct := resp.Headers.Get("Content-Type")
 	if ct == "" {
-		ct = resp.Headers["content-type"]
+		ct = resp.Headers.Get("content-type")
 	}
 	if strings.HasPrefix(ct, "text/html") || (ct == "" && len(resp.Body) > 0 && looksLikeHTML(resp.Body)) {
 		resp.Body = []byte(prependBootstrap(string(resp.Body)))
@@ -1457,7 +1459,7 @@ func respondToSchemeTask(task objc.ID, resp ResourceResponse, reqURL objc.ID) {
 }
 
 // nsDictionary creates an NSDictionary from a Go map[string]string.
-func nsDictionary(m map[string]string) objc.ID {
+func nsDictionary(m http.Header) objc.ID {
 	if len(m) == 0 {
 		return 0
 	}
@@ -1465,7 +1467,7 @@ func nsDictionary(m map[string]string) objc.ID {
 	vals := make([]objc.ID, 0, len(m))
 	for k, v := range m {
 		keys = append(keys, nsString(k))
-		vals = append(vals, nsString(v))
+		vals = append(vals, nsString(strings.Join(v, ";")))
 	}
 	return objc.ID(nsDictionaryClass).Send(dictionaryWithObjectsForKeysCountSel,
 		unsafe.Pointer(&vals[0]), unsafe.Pointer(&keys[0]), uintptr(len(m)))
@@ -1474,8 +1476,8 @@ func nsDictionary(m map[string]string) objc.ID {
 // goMapFromNSDictionary converts an NSDictionary (NSString→NSString) to a Go map.
 // Uses objectForKey: with known keys or enumerates via block. Simplified: reads
 // allKeys and iterates.
-func goMapFromNSDictionary(dict objc.ID) map[string]string {
-	out := map[string]string{}
+func goMapFromNSDictionary(dict objc.ID) http.Header {
+	out := http.Header{}
 	if dict == 0 {
 		return out
 	}
@@ -1492,7 +1494,7 @@ func goMapFromNSDictionary(dict objc.ID) map[string]string {
 		key := objc.ID(keys).Send(objectAtIndexSel, uintptr(i))
 		val := objc.ID(dict).Send(objc.RegisterName("objectForKey:"), key)
 		if key != 0 && val != 0 {
-			out[goString(key)] = goString(val)
+			out.Add(goString(key), goString(val))
 		}
 	}
 	return out

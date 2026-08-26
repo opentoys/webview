@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -32,7 +33,7 @@ func main() {
 		if strings.Contains(req.URL, "index.html") {
 			respond(&webview.ResourceResponse{
 				StatusCode: 200,
-				Headers:    map[string]string{"Content-Type": "text/html"},
+				Headers:    http.Header{"Content-Type": []string{"text/html"}},
 				Body: []byte(`<!doctype html>
 <html>
 <meta charset="UTF-8">
