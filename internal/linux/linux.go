@@ -112,6 +112,11 @@ var (
 	gtkWindowClose            func(window uintptr)
 	gtkWindowSetPosition      func(window uintptr, position int)
 
+	// WebKitGTK URI request header accessor + libsoup foreach (set in
+	// registerSchemes; libsoup 2 vs 3 differ in foreach callback signature).
+	requestGetHTTPHeaders     func(uintptr) uintptr
+	soupMessageHeadersForeach func(hdrs, cb, userData uintptr)
+
 	// GTK 4 variants.
 	gtk4                    bool
 	gtkInitCheck0           func() bool
@@ -599,6 +604,15 @@ func menuActionLookup(item uintptr) string {
 var menuCustomCBMu sync.Mutex
 var menuCustomCBMap = map[uintptr]func(){}
 
+// soup3 is true when the loaded WebKitGTK links libsoup 3 (webkit2gtk-4.1 /
+// webkitgtk-6.0); false for libsoup 2 (webkit2gtk-4.0). The two differ in the
+// soup_message_headers_foreach callback signature.
+var soup3 bool
+
+// soupForeachCB is the pre-built purego callback for soup_message_headers_foreach,
+// chosen by soup3. Set once in registerSchemes.
+var soupForeachCB uintptr
+
 // applyMenus builds and installs a GTK3 menu bar from the given Menu slice.
 func (p *Platform) applyMenus(menus []Menu) {
 	if gtk4 {
@@ -986,6 +1000,37 @@ func (p *Platform) registerSchemes() error {
 		return fmt.Errorf("webview: register schemes: load webkit: %w", err)
 	}
 
+		// Detect libsoup version (2 vs 3) by probing the already-loaded soup
+		// library without loading a new one (RTLD_NOLOAD = 0x4).
+		const rtldNoLoad = 0x4
+		var soupLib uintptr
+		if h, e := purego.Dlopen("libsoup-3.0.so.0", rtldNoLoad); e == nil {
+			soup3 = true
+			soupLib = h
+		} else if h, e := purego.Dlopen("libsoup-2.4.so.1", rtldNoLoad); e == nil {
+			soup3 = false
+			soupLib = h
+		}
+		if soupLib != 0 {
+			purego.RegisterLibFunc(&soupMessageHeadersForeach, soupLib, "soup_message_headers_foreach")
+			// libsoup3 callback: (name, value, user_data).
+			// libsoup2 callback: (hdrs, name, value, user_data).
+			soupForeachCB = purego.NewCallback(func(a, b, c, d uintptr) uintptr {
+				var name, value uintptr
+				if soup3 {
+					name, value = a, b
+				} else {
+					name, value = b, c
+				}
+				h := (*http.Header)(unsafe.Pointer(d))
+				n := cstr(name)
+				if n != "" {
+					h.Add(n, cstr(value))
+				}
+				return 0
+			})
+		}
+
 	var (
 		getContext               func(uintptr) uintptr
 		registerScheme           func(ctx uintptr, scheme string, cb, data, notify uintptr)
@@ -1013,6 +1058,7 @@ func (p *Platform) registerSchemes() error {
 	purego.RegisterLibFunc(&requestGetScheme, webkit, "webkit_uri_scheme_request_get_scheme")
 	purego.RegisterLibFunc(&requestGetHTTPMethod, webkit, "webkit_uri_scheme_request_get_http_method")
 	purego.RegisterLibFunc(&requestGetHTTPBody, webkit, "webkit_uri_scheme_request_get_http_body")
+		purego.RegisterLibFunc(&requestGetHTTPHeaders, webkit, "webkit_uri_scheme_request_get_http_headers")
 	purego.RegisterLibFunc(&schemeRequestFinish, webkit, "webkit_uri_scheme_request_finish")
 	purego.RegisterLibFunc(&schemeRequestFinishError, webkit, "webkit_uri_scheme_request_finish_error")
 	purego.RegisterLibFunc(&memInputStreamNew, gio, "g_memory_input_stream_new_from_data")
@@ -1085,7 +1131,7 @@ func (p *Platform) registerSchemes() error {
 			}
 		}
 
-		sr := ResourceRequest{URL: url, Method: method, Headers: http.Header{}, Body: body}
+		sr := ResourceRequest{URL: url, Method: method, Headers: extractRequestHeaders(request), Body: body}
 		var resp *ResourceResponse
 		handler(sr, func(r *ResourceResponse) {
 			resp = r
@@ -1121,6 +1167,24 @@ func (p *Platform) registerSchemes() error {
 		registerAsSecure(sm, scheme)
 	}
 	return nil
+}
+
+// extractRequestHeaders reads the request's HTTP headers via WebKitGTK's
+// webkit_uri_scheme_request_get_http_headers (returns a SoupMessageHeaders*),
+// then iterates them with soup_message_headers_foreach. The per-version
+// callback signature is handled by soupForeachCB / soup3. Returns an empty
+// http.Header if headers are unavailable (e.g. soup not loaded).
+func extractRequestHeaders(request uintptr) http.Header {
+	h := make(http.Header)
+	if requestGetHTTPHeaders == nil {
+		return h
+	}
+	hdrs := requestGetHTTPHeaders(request)
+	if hdrs == 0 || soupForeachCB == 0 {
+		return h
+	}
+	soupMessageHeadersForeach(hdrs, soupForeachCB, uintptr(unsafe.Pointer(&h)))
+	return h
 }
 
 // resolveMemdup returns g_memdup2 (GLib >= 2.68) or g_memdup (older).
