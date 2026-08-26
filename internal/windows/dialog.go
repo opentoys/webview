@@ -3,235 +3,118 @@
 package windows
 
 import (
-	"fmt"
+	"path/filepath"
 	"runtime"
-	"strings"
+	"syscall"
+	"unicode/utf16"
 	"unsafe"
 )
 
-// Native file save dialog via the Common Item Dialog COM API
-// (IFileSaveDialog). Adapted from docs/glaze/dialog_windows.go to this
-// project's ComProc/syscall idiom. The dialog is application-modal: Show runs
-// its own message loop, so it must run on the UI thread (via MainThread).
-
-// --- CLSIDs / IIDs ---------------------------------------------------------
-
-var (
-	clsidFileSaveDialog = GUID{0xC0B4E2F3, 0xBA21, 0x4773, [8]byte{0x8D, 0xBA, 0x33, 0x5E, 0xC9, 0x46, 0xEB, 0x8B}}
-	iidFileSaveDialog   = GUID{0x84BCCD23, 0x5FDE, 0x4CDB, [8]byte{0xAE, 0xA4, 0xAF, 0x64, 0xB8, 0x3D, 0x78, 0xAB}}
-	iidShellItem        = GUID{0x43826D1E, 0xE718, 0x42EE, [8]byte{0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}}
-)
+// Native "Save As" dialog via the classic GetSaveFileNameW common dialog.
+// Unlike IFileSaveDialog (Common Item Dialog), this shows no places bar /
+// recent-downloads list — just the file picker. It must run on the UI thread
+// (via MainThread) because it pumps its own message loop.
 
 const (
-	clsctxInprocServer = 0x1
-
-	// FILEOPENDIALOGOPTIONS bits.
-	fosOverwritePrompt = 0x00000002
-	fosForceFilesystem = 0x00000040
-
-	// SIGDN_FILESYSPATH for IShellItem::GetDisplayName.
-	sigdnFileSysPath = 0x80058000
-
-	// HRESULT_FROM_WIN32(ERROR_CANCELLED): the user dismissed the dialog.
-	hrCancelled = 0x800704C7
+	ofnOverwritePrompt = 0x00000002
+	ofnExplorer        = 0x00080000
 )
 
-// --- COM vtable layouts (exact IDL order) ----------------------------------
-
-// iFileDialogVtbl covers the IFileDialog portion shared by IFileSaveDialog.
-// The IFileSaveDialog-specific methods (SetSaveAsItem, SetProperties, ...)
-// follow and are omitted — none are called.
-type iFileDialogVtbl struct {
-	_IUnknownVtbl
-	Show                ComProc // 3
-	SetFileTypes        ComProc // 4
-	SetFileTypeIndex    ComProc // 5
-	GetFileTypeIndex    ComProc // 6
-	Advise              ComProc // 7
-	Unadvise            ComProc // 8
-	SetOptions          ComProc // 9
-	GetOptions          ComProc // 10
-	SetDefaultFolder    ComProc // 11
-	SetFolder           ComProc // 12
-	GetFolder           ComProc // 13
-	GetCurrentSelection ComProc // 14
-	SetFileName         ComProc // 15
-	GetFileName         ComProc // 16
-	SetTitle            ComProc // 17
-	SetOkButtonLabel    ComProc // 18
-	SetFileNameLabel    ComProc // 19
-	GetResult           ComProc // 20
-	AddPlace            ComProc // 21
-	SetDefaultExtension ComProc // 22
-	Close               ComProc // 23
-	SetClientGuid       ComProc // 24
-	ClearClientData     ComProc // 25
-	SetFilter           ComProc // 26
+// openfilenameW mirrors the Win32 OPENFILENAMEW structure.
+type openfilenameW struct {
+	lStructSize       uint32
+	hwndOwner         uintptr
+	hInstance         uintptr
+	lpstrFilter       *uint16
+	lpstrCustomFilter *uint16
+	nMaxCustFilter    uint32
+	nFilterIndex      uint32
+	lpstrFile         *uint16
+	nMaxFile          uint32
+	lpstrFileTitle    *uint16
+	nMaxFileTitle     uint32
+	lpstrInitialDir   *uint16
+	lpstrTitle        *uint16
+	Flags             uint32
+	nFileOffset       uint16
+	nFileExtension    uint16
+	lpstrDefExt       *uint16
+	lCustData         uintptr
+	lpfnHook          uintptr
+	lpTemplateName    *uint16
+	pvReserved        uintptr
+	dwReserved        uint32
+	FlagsEx           uint32
 }
 
-type iShellItemVtbl struct {
-	_IUnknownVtbl
-	BindToHandler  ComProc // 3
-	GetParent      ComProc // 4
-	GetDisplayName ComProc // 5
-	GetAttributes  ComProc // 6
-	Compare        ComProc // 7
-}
-
-type iFileDialog struct{ vtbl *iFileDialogVtbl }
-type iShellItem struct{ vtbl *iShellItemVtbl }
-
-// comdlgFilterSpec mirrors COMDLG_FILTERSPEC.
-type comdlgFilterSpec struct {
-	pszName *uint16
-	pszSpec *uint16
-}
-
-func (d *iFileDialog) Show(parent uintptr) uintptr {
-	r, _, _ := d.vtbl.Show.Call(uintptr(unsafe.Pointer(d)), parent)
-	return r
-}
-
-func (d *iFileDialog) SetOptions(fos uint32) {
-	d.vtbl.SetOptions.Call(uintptr(unsafe.Pointer(d)), uintptr(fos))
-}
-
-func (d *iFileDialog) SetTitle(s string) {
-	p := utf16PtrFromStr(s)
-	d.vtbl.SetTitle.Call(uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(p)))
-	runtime.KeepAlive(p)
-}
-
-func (d *iFileDialog) SetFileName(s string) {
-	p := utf16PtrFromStr(s)
-	d.vtbl.SetFileName.Call(uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(p)))
-	runtime.KeepAlive(p)
-}
-
-func (d *iFileDialog) SetFolder(si *iShellItem) {
-	d.vtbl.SetFolder.Call(uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(si)))
-}
-
-func (d *iFileDialog) SetFileTypes(n uint32, specs *comdlgFilterSpec) {
-	d.vtbl.SetFileTypes.Call(uintptr(unsafe.Pointer(d)), uintptr(n), uintptr(unsafe.Pointer(specs)))
-}
-
-func (d *iFileDialog) GetResult(out **iShellItem) uintptr {
-	r, _, _ := d.vtbl.GetResult.Call(uintptr(unsafe.Pointer(d)), uintptr(unsafe.Pointer(out)))
-	return r
-}
-
-func (d *iFileDialog) Release() {
-	d.vtbl.Release.Call(uintptr(unsafe.Pointer(d)))
-}
-
-func (s *iShellItem) GetDisplayName(sigdn uintptr, out **uint16) uintptr {
-	r, _, _ := s.vtbl.GetDisplayName.Call(uintptr(unsafe.Pointer(s)), sigdn, uintptr(unsafe.Pointer(out)))
-	return r
-}
-
-func (s *iShellItem) Release() {
-	s.vtbl.Release.Call(uintptr(unsafe.Pointer(s)))
-}
-// saveFileDialog does the actual IFileSaveDialog work. Runs on the UI thread.
+// saveFileDialog shows the classic Save dialog and returns the chosen path.
+// An empty path with no error means the user cancelled. Runs on the UI thread.
 func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
-	var dlg *iFileDialog
-	r, _, _ := pCoCreateInstance.Call(
-		uintptr(unsafe.Pointer(&clsidFileSaveDialog)),
-		0,
-		clsctxInprocServer,
-		uintptr(unsafe.Pointer(&iidFileSaveDialog)),
-		uintptr(unsafe.Pointer(&dlg)),
-	)
-	if r != S_OK || dlg == nil {
-		return "", fmt.Errorf("webview: CoCreateInstance(IFileSaveDialog) failed: 0x%X", r)
-	}
-	defer dlg.Release()
-
-	dlg.SetOptions(fosForceFilesystem | fosOverwritePrompt)
-
-	if opts.Title != "" {
-		dlg.SetTitle(opts.Title)
-	}
+	const maxPath = 8192
+	buf := make([]uint16, maxPath)
 	if opts.Filename != "" {
-		dlg.SetFileName(opts.Filename)
+		copy(buf, syscall.StringToUTF16(opts.Filename))
 	}
+
+	// "Description\0*.ext\0\0" double-NUL terminated filter. Built manually
+	// because syscall.StringToUTF16Ptr rejects embedded NULs.
+	filter := utf16Filter("All Files (*.*)", "*.*")
+
+	var title *uint16
+	if opts.Title != "" {
+		title = utf16PtrFromStr(opts.Title)
+	}
+	var initialDir *uint16
 	if opts.Directory != "" {
-		var psi *iShellItem
-		dirPtr := utf16PtrFromStr(opts.Directory)
-		hr, _, _ := pSHCreateItemFromParsingName.Call(
-			uintptr(unsafe.Pointer(dirPtr)),
-			0,
-			uintptr(unsafe.Pointer(&iidShellItem)),
-			uintptr(unsafe.Pointer(&psi)),
-		)
-		runtime.KeepAlive(dirPtr)
-		if hr == S_OK && psi != nil {
-			dlg.SetFolder(psi)
-			psi.Release()
-		}
+		initialDir = utf16PtrFromStr(opts.Directory)
+	}
+	var defExt *uint16
+	if ext := filepath.Ext(opts.Filename); ext != "" {
+		defExt = utf16PtrFromStr(ext[1:]) // strip leading dot
 	}
 
-	specs := buildFilterSpecs(opts.Filters)
-	if len(specs) == 0 {
-		specs = []comdlgFilterSpec{{
-			pszName: utf16PtrFromStr("All Files"),
-			pszSpec: utf16PtrFromStr("*.*"),
-		}}
-	}
-	dlg.SetFileTypes(uint32(len(specs)), &specs[0])
-
-	hr := dlg.Show(p.hwnd)
-	runtime.KeepAlive(specs)
-	if hr != S_OK {
-		if hr == hrCancelled {
-			return "", nil
-		}
-		return "", fmt.Errorf("webview: file save dialog Show failed: 0x%X", hr)
+	ofn := openfilenameW{
+		lStructSize:     uint32(unsafe.Sizeof(openfilenameW{})),
+		hwndOwner:       p.hwnd,
+		lpstrFilter:     &filter[0],
+		nFilterIndex:    1,
+		lpstrFile:       &buf[0],
+		nMaxFile:        maxPath,
+		lpstrInitialDir: initialDir,
+		lpstrTitle:      title,
+		Flags:           ofnOverwritePrompt | ofnExplorer,
+		lpstrDefExt:     defExt,
 	}
 
-	var item *iShellItem
-	if r := dlg.GetResult(&item); r != S_OK || item == nil {
+	runtime.KeepAlive(buf)
+	runtime.KeepAlive(filter)
+	runtime.KeepAlive(title)
+	runtime.KeepAlive(initialDir)
+	runtime.KeepAlive(defExt)
+
+	ret, _, _ := pGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if ret == 0 {
+		// User cancelled (or dialog failed). CommDlgExtendedError would
+		// distinguish, but a cancelled download and a failed dialog both
+		// mean "no path".
 		return "", nil
 	}
-	defer item.Release()
-
-	var pwstr *uint16
-	if r := item.GetDisplayName(sigdnFileSysPath, &pwstr); r != S_OK || pwstr == nil {
-		return "", nil
-	}
-	path := wideToString(pwstr)
-	pCoTaskMemFree.Call(uintptr(unsafe.Pointer(pwstr)))
-	return path, nil
+	return syscall.UTF16ToString(buf), nil
 }
 
-// buildFilterSpecs turns FileFilters into a COMDLG_FILTERSPEC array. The
-// returned slice holds the backing UTF-16 pointers; the caller must keep it
-// alive across SetFileTypes and Show.
-func buildFilterSpecs(filters []FileFilter) []comdlgFilterSpec {
-	var specs []comdlgFilterSpec
-	for _, f := range filters {
-		var patterns []string
-		wildcard := false
-		for _, e := range f.Extensions {
-			if e == "" || e == "*" {
-				wildcard = true
-				break
-			}
-			patterns = append(patterns, "*."+strings.TrimPrefix(e, "."))
-		}
-		spec := "*.*"
-		if !wildcard && len(patterns) > 0 {
-			spec = strings.Join(patterns, ";")
-		}
-		name := f.Name
-		if name == "" {
-			name = spec
-		}
-		specs = append(specs, comdlgFilterSpec{
-			pszName: utf16PtrFromStr(name),
-			pszSpec: utf16PtrFromStr(spec),
-		})
+// utf16Filter builds a double-NUL-terminated OPENFILENAMEW filter in UTF-16:
+// "Description\0*.ext\0\0". syscall.StringToUTF16Ptr rejects embedded NULs, so
+// we encode the segments and join them with NULs manually.
+func utf16Filter(name, spec string) []uint16 {
+	parts := [][]uint16{
+		utf16.Encode([]rune(name)),
+		utf16.Encode([]rune(spec)),
 	}
-	return specs
+	var out []uint16
+	for _, p := range parts {
+		out = append(out, p...)
+		out = append(out, 0)
+	}
+	out = append(out, 0)
+	return out
 }
