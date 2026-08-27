@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -61,6 +62,9 @@ const (
 	gdkControlMask = 1 << 2 // GDK_CONTROL_MASK
 
 	gtkAccelVisible = 1 << 0 // GTK_ACCEL_VISIBLE
+
+	// GTK box orientation (gtk_box_new).
+	gtkOrientationVertical = 1 // GTK_ORIENTATION_VERTICAL
 	gSignalActivate = "activate"
 )
 
@@ -97,6 +101,10 @@ var (
 	gtkContainerRemove        func(container, widget uintptr)
 	gtkWidgetShow             func(widget uintptr)
 	gtkWidgetShowAll          func(widget uintptr)
+	gtkWidgetQueueDraw        func(widget uintptr)
+	gtkWidgetGetToplevel      func(widget uintptr) uintptr
+	gtkWidgetGetWindow        func(widget uintptr) uintptr
+	gdkWindowProcessUpdates   func(window uintptr, invalidateChildren bool)
 	gtkMenuBarNew             func() uintptr
 	gtkMenuNew                func() uintptr
 	gtkMenuItemNewWithLabel   func(label string) uintptr
@@ -107,10 +115,34 @@ var (
 	gtkWindowAddAccelGroup    func(window, accelGroup uintptr)
 	gtkWidgetAddAccelerator   func(widget uintptr, accelSignal string, accelGroup uintptr, accelKey uint, mods, flags int)
 	gtkVboxNew                func(homogeneous bool, spacing int) uintptr
+	gtkBoxPackStart           func(box, child uintptr, expand, fill int, padding uint)
 	gtkWidgetGrabFocus        func(widget uintptr)
 	gtkWindowPresent          func(window uintptr)
 	gtkWindowClose            func(window uintptr)
 	gtkWindowSetPosition      func(window uintptr, position int)
+
+	// GTK file chooser (native save dialog for downloads) + GTK4 box packing.
+	gtkFileChooserNativeNew  func(title string, parent uintptr, action int, accept, cancel string) uintptr
+	gtkNativeDialogShow      func(dialog uintptr)
+	gtkNativeDialogHide      func(dialog uintptr)
+	gtkNativeDialogSetModal  func(dialog uintptr, modal bool)
+	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
+	gtkFileChooserGetFilename func(chooser uintptr) uintptr // char* (GTK3)
+	gtkFileChooserGetFile    func(chooser uintptr) uintptr // GFile* (GTK4)
+	gFileGetPath             func(file uintptr) uintptr     // char* (GTK4)
+	gtkBoxNew                func(orientation int, spacing int) uintptr
+	gtkBoxAppend             func(box, child uintptr)
+	gtkWidgetInsertActionGroup func(widget uintptr, groupName string, group uintptr)
+
+	// GMenu / GAction for GTK4 menubar.
+	gMenuNew                func() uintptr
+	gMenuAppend             func(menu uintptr, label, detailedAction string)
+	gMenuAppendSubmenu      func(menu uintptr, label string, submenu uintptr)
+	gMenuAppendSection      func(menu uintptr, label string, section uintptr)
+	gSimpleActionNew        func(name string, parameterType uintptr) uintptr
+	gSimpleActionGroupNew   func() uintptr
+	gSimpleActionGroupInsert func(group, action uintptr)
+	gtkPopoverMenuBarNewFromModel func(model uintptr) uintptr
 
 	// WebKitGTK URI request header accessor + libsoup foreach (set in
 	// registerSchemes; libsoup 2 vs 3 differ in foreach callback signature).
@@ -144,6 +176,19 @@ var (
 
 	webkitWebViewEvaluateJavascript func(webview uintptr, script string, length int, world, source, cancellable, callback, userData uintptr)
 	webkitWebViewRunJavascript      func(webview uintptr, script string, cancellable, callback, userData uintptr)
+
+	// Download via the modern, always-exported API: a web-context
+	// "download-started" callback plus each download's "decide-destination"
+	// signal (which already hands us the suggested filename). The older
+	// response-policy-decision helpers are not exported on every WebKit2GTK
+	// build, so we avoid them.
+	webkitWebViewGetContext                    func(webview uintptr) uintptr
+	webkitWebContextSetDownloadStartedCallback func(context, callback, userData, destroyNotify uintptr)
+	webkitDownloadGetSuggestedFilename         func(download uintptr) uintptr
+	webkitDownloadGetURI                       func(download uintptr) uintptr
+	webkitDownloadSetDestination               func(download uintptr, destination string)
+	webkitDownloadCancel                       func(download uintptr)
+	hasDownloadSupport                         bool
 	haveEvaluateJavascript          bool
 
 	jscValueToString func(value uintptr) uintptr
@@ -183,6 +228,11 @@ func ensureInit() error {
 			return
 		}
 		gobject, err := openFirst("libgobject-2.0.so.0")
+		if err != nil {
+			initErr = err
+			return
+		}
+		gio, err := openFirst("libgio-2.0.so.0")
 		if err != nil {
 			initErr = err
 			return
@@ -228,6 +278,13 @@ func ensureInit() error {
 		purego.RegisterLibFunc(&gIdleAddFull, glib, "g_idle_add_full")
 		purego.RegisterLibFunc(&gMainContextIteration, glib, "g_main_context_iteration")
 		purego.RegisterLibFunc(&gFree, glib, "g_free")
+		purego.RegisterLibFunc(&gMenuNew, gio, "g_menu_new")
+		purego.RegisterLibFunc(&gMenuAppend, gio, "g_menu_append")
+		purego.RegisterLibFunc(&gMenuAppendSubmenu, gio, "g_menu_append_submenu")
+		purego.RegisterLibFunc(&gMenuAppendSection, gio, "g_menu_append_section")
+		purego.RegisterLibFunc(&gSimpleActionNew, gio, "g_simple_action_new")
+		purego.RegisterLibFunc(&gSimpleActionGroupNew, gio, "g_simple_action_group_new")
+		purego.RegisterLibFunc(&gSimpleActionGroupInsert, gio, "g_simple_action_group_insert")
 		purego.RegisterLibFunc(&gObjectRefSink, gobject, "g_object_ref_sink")
 		purego.RegisterLibFunc(&gObjectUnref, gobject, "g_object_unref")
 		purego.RegisterLibFunc(&gSignalConnectData, gobject, "g_signal_connect_data")
@@ -239,12 +296,20 @@ func ensureInit() error {
 			purego.RegisterLibFunc(&gtkWindowSetChild, gtk, "gtk_window_set_child")
 			purego.RegisterLibFunc(&gtkWidgetSetVisible, gtk, "gtk_widget_set_visible")
 			purego.RegisterLibFunc(&gtkWindowSetDefaultSize, gtk, "gtk_window_set_default_size")
+			// GTK4-only symbols (absent in GTK3's libgtk-3).
+			purego.RegisterLibFunc(&gtkBoxAppend, gtk, "gtk_box_append")
+			purego.RegisterLibFunc(&gtkWidgetInsertActionGroup, gtk, "gtk_widget_insert_action_group")
+			purego.RegisterLibFunc(&gtkPopoverMenuBarNewFromModel, gtk, "gtk_popover_menu_bar_new_from_model")
 		} else {
 			purego.RegisterLibFunc(&gtkInitCheck, gtk, "gtk_init_check")
 			purego.RegisterLibFunc(&gtkWindowNew, gtk, "gtk_window_new")
 			purego.RegisterLibFunc(&gtkContainerAdd, gtk, "gtk_container_add")
 			purego.RegisterLibFunc(&gtkContainerRemove, gtk, "gtk_container_remove")
 			purego.RegisterLibFunc(&gtkWidgetShow, gtk, "gtk_widget_show")
+			purego.RegisterLibFunc(&gtkWidgetQueueDraw, gtk, "gtk_widget_queue_draw")
+			purego.RegisterLibFunc(&gtkWidgetGetToplevel, gtk, "gtk_widget_get_toplevel")
+			purego.RegisterLibFunc(&gtkWidgetGetWindow, gtk, "gtk_widget_get_window")
+			purego.RegisterLibFunc(&gdkWindowProcessUpdates, gtk, "gdk_window_process_updates")
 			purego.RegisterLibFunc(&gtkWidgetShowAll, gtk, "gtk_widget_show_all")
 			purego.RegisterLibFunc(&gtkWindowResize, gtk, "gtk_window_resize")
 			purego.RegisterLibFunc(&gtkWindowSetGeometryHints, gtk, "gtk_window_set_geometry_hints")
@@ -258,6 +323,7 @@ func ensureInit() error {
 			purego.RegisterLibFunc(&gtkWindowAddAccelGroup, gtk, "gtk_window_add_accel_group")
 			purego.RegisterLibFunc(&gtkWidgetAddAccelerator, gtk, "gtk_widget_add_accelerator")
 			purego.RegisterLibFunc(&gtkVboxNew, gtk, "gtk_vbox_new")
+			purego.RegisterLibFunc(&gtkBoxPackStart, gtk, "gtk_box_pack_start")
 		}
 		purego.RegisterLibFunc(&gtkWindowSetTitle, gtk, "gtk_window_set_title")
 		purego.RegisterLibFunc(&gtkWindowSetResizable, gtk, "gtk_window_set_resizable")
@@ -266,6 +332,16 @@ func ensureInit() error {
 		purego.RegisterLibFunc(&gtkWindowPresent, gtk, "gtk_window_present")
 		purego.RegisterLibFunc(&gtkWindowClose, gtk, "gtk_window_close")
 		purego.RegisterLibFunc(&gtkWindowSetPosition, gtk, "gtk_window_set_position")
+		// Shared across GTK3 (>=3.20) and GTK4.
+		purego.RegisterLibFunc(&gtkFileChooserNativeNew, gtk, "gtk_file_chooser_native_new")
+		purego.RegisterLibFunc(&gtkNativeDialogShow, gtk, "gtk_native_dialog_show")
+		purego.RegisterLibFunc(&gtkNativeDialogHide, gtk, "gtk_native_dialog_hide")
+		purego.RegisterLibFunc(&gtkNativeDialogSetModal, gtk, "gtk_native_dialog_set_modal")
+		purego.RegisterLibFunc(&gtkFileChooserSetCurrentName, gtk, "gtk_file_chooser_set_current_name")
+		purego.RegisterLibFunc(&gtkFileChooserGetFilename, gtk, "gtk_file_chooser_get_filename")
+		purego.RegisterLibFunc(&gtkFileChooserGetFile, gtk, "gtk_file_chooser_get_file")
+		// g_file_get_path lives in libgio (GTK4 save-path result).
+		purego.RegisterLibFunc(&gFileGetPath, gio, "g_file_get_path")
 
 		purego.RegisterLibFunc(&webkitWebViewNew, webkit, "webkit_web_view_new")
 		purego.RegisterLibFunc(&webkitWebViewGetUserContentManager, webkit, "webkit_web_view_get_user_content_manager")
@@ -294,6 +370,20 @@ func ensureInit() error {
 		} else {
 			purego.RegisterLibFunc(&webkitWebViewRunJavascript, webkit, "webkit_web_view_run_javascript")
 		}
+
+		// Download support uses only always-exported WebKit2 symbols.
+		if _, e := purego.Dlsym(webkit, "webkit_web_context_set_download_started_callback"); e == nil {
+			purego.RegisterLibFunc(&webkitWebViewGetContext, webkit, "webkit_web_view_get_context")
+			purego.RegisterLibFunc(&webkitWebContextSetDownloadStartedCallback, webkit, "webkit_web_context_set_download_started_callback")
+			purego.RegisterLibFunc(&webkitDownloadGetSuggestedFilename, webkit, "webkit_download_get_suggested_filename")
+			purego.RegisterLibFunc(&webkitDownloadGetURI, webkit, "webkit_download_get_uri")
+			purego.RegisterLibFunc(&webkitDownloadSetDestination, webkit, "webkit_download_set_destination")
+			purego.RegisterLibFunc(&webkitDownloadCancel, webkit, "webkit_download_cancel")
+			hasDownloadSupport = true
+		}
+
+		connectDownloadCallbacks()
+		connectDialogCallback()
 
 		purego.RegisterLibFunc(&jscValueToString, jsc, "jsc_value_to_string")
 
@@ -489,7 +579,6 @@ func (p *Platform) Run() error {
 	} else {
 		p.setupMainMenu()
 	}
-
 	// Apply pending title/size/HTML/URL directly (not via dispatch) so the
 	// window is visible before the main loop starts.
 	p.applyPending()
@@ -532,9 +621,21 @@ func (p *Platform) Close() error {
 }
 
 // setupMainMenu installs an Edit menu bar with Undo/Redo/Cut/Copy/Paste/Select All.
-// Only on GTK3; GTK4 uses GMenu/GAction (not yet implemented).
 func (p *Platform) setupMainMenu() {
 	if gtk4 {
+		p.buildMenubarGTK4([]Menu{{
+			Label: "Edit",
+			Items: []MenuItem{
+				{Label: "Undo", Action: p.execEdit("undo")},
+				{Label: "Redo", Action: p.execEdit("redo")},
+				{Separator: true},
+				{Label: "Cut", Action: p.execEdit("cut")},
+				{Label: "Copy", Action: p.execEdit("copy")},
+				{Label: "Paste", Action: p.execEdit("paste")},
+				{Separator: true},
+				{Label: "Select All", Action: p.execEdit("selectAll")},
+			},
+		}})
 		return
 	}
 	menuBar := gtkMenuBarNew()
@@ -580,6 +681,7 @@ func (p *Platform) setupMainMenu() {
 	addEditItem("Select All", "selectAll", 0x061, gdkControlMask) // Ctrl+A
 
 	p.menuBar = menuBar
+	wireMenuRedraw(editMenu, p.window)
 }
 
 var (
@@ -600,6 +702,136 @@ func menuActionLookup(item uintptr) string {
 	return menuActionItems[item]
 }
 
+// menuRedrawFn repaints the toplevel window when a popup submenu is dismissed,
+// clearing the ghost rectangle left on GTK3 with no window manager compositor.
+var menuRedrawFn uintptr
+
+// winRedrawIdle repaints a window on the next idle, after any popup teardown
+// has fully settled. Used to clear the GTK3 ghost-popup rectangle. On systems
+// without a compositing window manager the popup's GdkWindow unmaps but the
+// exposed region behind it isn't repainted, so we explicitly process updates
+// on the parent toplevel's GdkWindow.
+var winRedrawIdle uintptr
+
+func winRedrawIdleBuild() uintptr {
+	if winRedrawIdle != 0 {
+		return winRedrawIdle
+	}
+	winRedrawIdle = purego.NewCallback(func(widget uintptr) uintptr {
+		if widget != 0 {
+			gtkWidgetQueueDraw(widget)
+			win := gtkWidgetGetWindow(widget)
+			if win != 0 {
+				gdkWindowProcessUpdates(win, true)
+			}
+		}
+		return gSourceRemove
+	})
+	return winRedrawIdle
+}
+
+// queueWinRedraw schedules a toplevel repaint on the next idle.
+func queueWinRedraw(widget uintptr) {
+	gIdleAddFull(gPriorityHighIdle, winRedrawIdleBuild(), widget, 0)
+}
+
+func menuRedrawFnBuild() uintptr {
+	if menuRedrawFn != 0 {
+		return menuRedrawFn
+	}
+	menuRedrawFn = purego.NewCallback(func(menu, userData uintptr) uintptr {
+		toplevel := gtkWidgetGetToplevel(userData)
+		if toplevel != 0 {
+			queueWinRedraw(toplevel)
+		}
+		return 0
+	})
+	return menuRedrawFn
+}
+
+// wireMenuRedraw connects a submenu's "hide" signal so the toplevel window is
+// repainted once the popup is actually removed from the screen (GHOST-popup
+// fix on GTK3 no-compositor). "hide" fires after the popup unmaps, which is the
+// correct time to clear the leftover rectangle.
+func wireMenuRedraw(submenu, toplevel uintptr) {
+	gSignalConnectData(submenu, "hide", menuRedrawFnBuild(), toplevel, 0, 0)
+}
+
+// GTK4 menubar: GMenu model + GSimpleAction group. Each item gets its own
+// activate callback closure (keyed by action pointer) so we don't depend on
+// g_simple_action_get_name, which some libgio builds don't export.
+var (
+	gtk4MenuActionMu sync.Mutex
+	gtk4MenuActions  = map[uintptr]func(){}
+)
+
+func (p *Platform) buildMenubarGTK4(menus []Menu) {
+	gtk4MenuActionMu.Lock()
+	gtk4MenuActions = map[uintptr]func(){}
+	gtk4MenuActionMu.Unlock()
+
+	group := gSimpleActionGroupNew()
+	root := gMenuNew()
+	idx := 0
+	for _, m := range menus {
+		sub := gMenuNew()
+		for _, mi := range m.Items {
+			if mi.Separator {
+				continue
+			}
+			name := "a" + strconv.Itoa(idx)
+			idx++
+			gMenuAppend(sub, mi.Label, "win."+name)
+			if mi.Action != nil {
+				cb := mi.Action
+				act := gSimpleActionNew(name, 0)
+				gtk4MenuActionMu.Lock()
+				gtk4MenuActions[act] = cb
+				gtk4MenuActionMu.Unlock()
+				gSignalConnectData(act, gSignalActivate, gtk4MenuActivateFn(), 0, 0, 0)
+				gSimpleActionGroupInsert(group, act)
+			}
+		}
+		gMenuAppendSubmenu(root, m.Label, sub)
+	}
+	gtkWidgetInsertActionGroup(p.window, "win", group)
+	p.menuBar = gtkPopoverMenuBarNewFromModel(root)
+}
+
+// gtk4MenuActivateFn returns the single activate callback (built once). It looks
+// up the clicked action by pointer in gtk4MenuActions.
+func gtk4MenuActivateFn() uintptr {
+	if gtk4MenuActivate != 0 {
+		return gtk4MenuActivate
+	}
+	gtk4MenuActivate = purego.NewCallback(func(action, param, userData uintptr) uintptr {
+		gtk4MenuActionMu.Lock()
+		cb := gtk4MenuActions[action]
+		gtk4MenuActionMu.Unlock()
+		if cb != nil {
+			cb()
+		}
+		return 0
+	})
+	return gtk4MenuActivate
+}
+
+var gtk4MenuActivate uintptr
+
+func (p *Platform) execEdit(action string) func() {
+	return func() {
+		if p.webview == 0 {
+			return
+		}
+		js := "document.execCommand('" + action + "')"
+		if haveEvaluateJavascript {
+			webkitWebViewEvaluateJavascript(p.webview, js, len(js), 0, 0, 0, 0, 0)
+		} else {
+			webkitWebViewRunJavascript(p.webview, js, 0, 0, 0)
+		}
+	}
+}
+
 // menuCustomCBMap stores custom menu item callbacks (by item pointer).
 var menuCustomCBMu sync.Mutex
 var menuCustomCBMap = map[uintptr]func(){}
@@ -613,9 +845,11 @@ var soup3 bool
 // chosen by soup3. Set once in registerSchemes.
 var soupForeachCB uintptr
 
-// applyMenus builds and installs a GTK3 menu bar from the given Menu slice.
+// applyMenus builds and installs a menu bar from the given Menu slice.
+// GTK4 uses a GMenu/GAction popover bar; GTK3 uses a classic GtkMenuBar.
 func (p *Platform) applyMenus(menus []Menu) {
 	if gtk4 {
+		p.buildMenubarGTK4(menus)
 		return
 	}
 	// Clear old custom callbacks.
@@ -664,6 +898,7 @@ func (p *Platform) applyMenus(menus []Menu) {
 			}
 			gtkMenuShellAppend(submenu, item)
 		}
+		wireMenuRedraw(submenu, p.window)
 	}
 
 	p.menuBar = menuBar
@@ -715,6 +950,11 @@ func (p *Platform) windowInit(window uintptr) error {
 	gSignalConnectData(p.manager, "script-message-received::webviewBridge",
 		messageHandlerFn, p.id, 0, 0)
 	registerScriptHandler(p.manager, "webviewBridge")
+
+	if hasDownloadSupport {
+		ctx := webkitWebViewGetContext(p.webview)
+		webkitWebContextSetDownloadStartedCallback(ctx, downloadStartedFn(), p.id, 0)
+	}
 
 	p.pushUserScript(bootstrapJS(nil))
 	return nil
@@ -897,15 +1137,22 @@ func (p *Platform) windowShow() {
 		return
 	}
 	if gtk4 {
-		gtkWindowSetChild(p.window, p.webview)
+		box := gtkBoxNew(gtkOrientationVertical, 0)
+		if p.menuBar != 0 {
+			gtkBoxAppend(box, p.menuBar)
+		}
+		gtkBoxAppend(box, p.webview)
+		gtkWindowSetChild(p.window, box)
 		gtkWidgetSetVisible(p.webview, true)
 		gtkWidgetSetVisible(p.window, true)
 	} else {
 		box := gtkVboxNew(false, 0)
 		if p.menuBar != 0 {
-			gtkMenuShellAppend(box, p.menuBar)
+			// Menubar is fixed height (no expand/fill).
+			gtkBoxPackStart(box, p.menuBar, 0, 0, 0)
 		}
-		gtkContainerAdd(box, p.webview)
+		// Webview expands to fill the remaining window space.
+		gtkBoxPackStart(box, p.webview, 1, 1, 0)
 		gtkContainerAdd(p.window, box)
 		gtkWidgetShowAll(p.window)
 	}
@@ -1209,4 +1456,205 @@ func resolveMemdup(glib uintptr) (func(mem unsafe.Pointer, size int) unsafe.Poin
 func marshalJSON(msg string) string {
 	data, _ := json.Marshal(msg)
 	return string(data)
+}
+
+
+// --- download interception (native save dialog) ------------------------------
+
+// downloadStartedFn is the WebKitWebContext "download-started" callback:
+// (context, download, user_data). We attach the download's "decide-destination"
+// signal so WebKit waits for us to pick a path through our own native save
+// dialog instead of navigating or spawning WebKit's download UI.
+func downloadStartedFn() uintptr {
+	if downloadStarted != 0 {
+		return downloadStarted
+	}
+	downloadStarted = purego.NewCallback(func(context, download, userData uintptr) uintptr {
+		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
+		gSignalConnectData(download, "finished", downloadFinishedFn(), userData, 0, 0)
+		gSignalConnectData(download, "failed", downloadFailedFn(), userData, 0, 0)
+		return 0
+	})
+	return downloadStarted
+}
+
+// downloadDecideDestFn handles a WebKitDownload's "decide-destination" signal:
+// (download, suggested_filename, user_data). We show our native save dialog
+// seeded with the suggested name and point WebKit at the chosen path; if the
+// user cancels we cancel the download instead of setting a destination.
+func downloadDecideDestFn() uintptr {
+	if downloadDecideDest != 0 {
+		return downloadDecideDest
+	}
+	downloadDecideDest = purego.NewCallback(func(download, suggested, userData uintptr) uintptr {
+		name := "download"
+		if suggested != 0 {
+			if n := cstr(suggested); n != "" {
+				name = n
+			}
+		}
+		p := lookupPlatform(userData)
+		if p == nil {
+			webkitDownloadCancel(download)
+			return 0
+		}
+		path, ok := p.showSaveDialog(name)
+		if !ok || path == "" {
+			webkitDownloadCancel(download)
+			return 0
+		}
+		webkitDownloadSetDestination(download, "file://"+path)
+		return 0
+	})
+	return downloadDecideDest
+}
+
+var (
+	downloadStarted     uintptr
+	downloadDecideDest  uintptr
+	downloadFinishedVar uintptr
+	downloadFailedVar   uintptr
+)
+
+func downloadFinishedFn() uintptr {
+	if downloadFinishedVar != 0 {
+		return downloadFinishedVar
+	}
+	downloadFinishedVar = purego.NewCallback(func(download, userData uintptr) uintptr {
+		return 0
+	})
+	return downloadFinishedVar
+}
+
+func downloadFailedFn() uintptr {
+	if downloadFailedVar != 0 {
+		return downloadFailedVar
+	}
+	downloadFailedVar = purego.NewCallback(func(download, errorPtr, userData uintptr) uintptr {
+		return 0
+	})
+	return downloadFailedVar
+}
+
+func connectDownloadCallbacks() {
+	// Build callbacks eagerly so the download-started hook can reference them.
+	downloadStartedFn()
+	downloadDecideDestFn()
+	downloadFinishedFn()
+	downloadFailedFn()
+}
+
+const (
+	gtkFileChooserActionSave = 1
+	gtkResponseAccept        = -3
+)
+
+// showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
+// thread and returns the chosen path. The second result is false when the user
+// cancels. Blocks the caller until the dialog is dismissed.
+// showSaveDialog presents a modal GtkFileChooserNative save dialog and returns
+// the chosen path. The second result is false when the user cancels. The caller
+// (decide-policy signal) already runs on the GTK main thread, so the chooser is
+// run directly here — never block waiting for a dispatched idle or it deadlocks.
+func (p *Platform) showSaveDialog(suggested string) (string, bool) {
+	path := runSaveChooser(p.window, suggested)
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// dialogResponseFn reports a single modal dialog's response, keyed by an integer
+// token passed as the signal user_data (only integers cross into C).
+var dialogResponseFn uintptr
+
+type dialogResp struct {
+	response int
+	done     bool
+}
+
+var (
+	dialogRespMu     sync.Mutex
+	dialogRespStates = map[uintptr]*dialogResp{}
+	dialogRespSeq    uintptr
+)
+
+func connectDialogCallback() {
+	if dialogResponseFn != 0 {
+		return
+	}
+	dialogResponseFn = purego.NewCallback(func(dialog, responseID, token uintptr) uintptr {
+		dialogRespMu.Lock()
+		st := dialogRespStates[token]
+		if st != nil {
+			st.response = int(int32(uint32(responseID)))
+			st.done = true
+		}
+		dialogRespMu.Unlock()
+		return 0
+	})
+}
+
+func runSaveChooser(parent uintptr, suggested string) string {
+	dlg := gtkFileChooserNativeNew("", parent, gtkFileChooserActionSave, "_Save", "_Cancel")
+	if dlg == 0 {
+		return ""
+	}
+	defer gObjectUnref(dlg)
+	if suggested != "" {
+		gtkFileChooserSetCurrentName(dlg, suggested)
+	}
+	if runNativeDialog(dlg) != gtkResponseAccept {
+		return ""
+	}
+	if gtk4 {
+		file := gtkFileChooserGetFile(dlg) // transfer full
+		if file == 0 {
+			return ""
+		}
+		defer gObjectUnref(file)
+		if cs := gFileGetPath(file); cs != 0 {
+			return cstr(cs)
+		}
+		return ""
+	}
+	cs := gtkFileChooserGetFilename(dlg) // char*, owned by caller
+	if cs == 0 {
+		return ""
+	}
+	defer gFree(cs)
+	return cstr(cs)
+}
+
+// runNativeDialog shows a GtkNativeDialog modally and pumps the main loop until
+// the user responds, returning the response id. Replaces the GTK4-removed
+// gtk_native_dialog_run with its underlying mechanism (show + "response" +
+// nested iteration), so it works on both GTK3 and GTK4.
+func runNativeDialog(dlg uintptr) int {
+	dialogRespMu.Lock()
+	dialogRespSeq++
+	token := dialogRespSeq
+	st := &dialogResp{}
+	dialogRespStates[token] = st
+	dialogRespMu.Unlock()
+	defer func() {
+		dialogRespMu.Lock()
+		delete(dialogRespStates, token)
+		dialogRespMu.Unlock()
+	}()
+
+	gSignalConnectData(dlg, "response", dialogResponseFn, token, 0, 0)
+	gtkNativeDialogSetModal(dlg, true)
+	gtkNativeDialogShow(dlg)
+	for {
+		dialogRespMu.Lock()
+		done := st.done
+		dialogRespMu.Unlock()
+		if done {
+			break
+		}
+		gMainContextIteration(0, true)
+	}
+	gtkNativeDialogHide(dlg)
+	return st.response
 }
