@@ -86,6 +86,7 @@ var (
 	gMainContextIteration            func(context uintptr, mayBlock bool) bool
 	gFree                            func(ptr uintptr)
 	gObjectRefSink                   func(obj uintptr) uintptr
+	gObjectRef                       func(obj uintptr) uintptr
 	gObjectUnref                     func(obj uintptr)
 	gSignalConnectData               func(instance uintptr, signal string, handler, data, destroy uintptr, flags int) uint64
 	gSignalHandlersDisconnectMatched func(instance uintptr, mask int, signalID, detail uint32, closure, fn, data uintptr) uint32
@@ -286,6 +287,7 @@ func ensureInit() error {
 		purego.RegisterLibFunc(&gSimpleActionGroupNew, gio, "g_simple_action_group_new")
 		purego.RegisterLibFunc(&gSimpleActionGroupInsert, gio, "g_simple_action_group_insert")
 		purego.RegisterLibFunc(&gObjectRefSink, gobject, "g_object_ref_sink")
+		purego.RegisterLibFunc(&gObjectRef, gobject, "g_object_ref")
 		purego.RegisterLibFunc(&gObjectUnref, gobject, "g_object_unref")
 		purego.RegisterLibFunc(&gSignalConnectData, gobject, "g_signal_connect_data")
 		purego.RegisterLibFunc(&gSignalHandlersDisconnectMatched, gobject, "g_signal_handlers_disconnect_matched")
@@ -380,6 +382,7 @@ func ensureInit() error {
 			purego.RegisterLibFunc(&webkitDownloadSetDestination, webkit, "webkit_download_set_destination")
 			purego.RegisterLibFunc(&webkitDownloadCancel, webkit, "webkit_download_cancel")
 			hasDownloadSupport = true
+			fmt.Println("[webview] found webkit_web_context_set_download_started_callback; download support enabled")
 		}
 
 		connectDownloadCallbacks()
@@ -857,7 +860,10 @@ func (p *Platform) windowInit(window uintptr) error {
 
 	if hasDownloadSupport {
 		ctx := webkitWebViewGetContext(p.webview)
+		fmt.Println("[webview] hasDownloadSupport=true; registering download-started callback")
 		webkitWebContextSetDownloadStartedCallback(ctx, downloadStartedFn(), p.id, 0)
+	} else {
+		fmt.Println("[webview] hasDownloadSupport=false; download callback NOT registered (symbol webkit_web_context_set_download_started_callback missing)")
 	}
 
 	p.pushUserScript(bootstrapJS(nil))
@@ -1374,9 +1380,13 @@ func downloadStartedFn() uintptr {
 		return downloadStarted
 	}
 	downloadStarted = purego.NewCallback(func(context, download, userData uintptr) uintptr {
+		fmt.Println("[webview] download-started fired; download=", download)
+		// WebKit frees the download object right after this callback returns,
+		// so take a reference and hold it until finished/failed.
+		gObjectRef(download)
 		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
-		gSignalConnectData(download, "finished", downloadFinishedFn(), userData, 0, 0)
-		gSignalConnectData(download, "failed", downloadFailedFn(), userData, 0, 0)
+		gSignalConnectData(download, "finished", downloadFinishedFn(), download, 0, 0)
+		gSignalConnectData(download, "failed", downloadFailedFn(), download, 0, 0)
 		return 0
 	})
 	return downloadStarted
@@ -1397,18 +1407,23 @@ func downloadDecideDestFn() uintptr {
 				name = n
 			}
 		}
+		fmt.Println("[webview] decide-destination fired; suggested=", name, " userData=", userData)
 		p := lookupPlatform(userData)
 		if p == nil {
+			fmt.Println("[webview] decide-destination: no platform for userData, cancelling")
 			webkitDownloadCancel(download)
-			return 0
+			return 1 // TRUE: we handled the destination (cancel), stop default
 		}
 		path, ok := p.showSaveDialog(name)
 		if !ok || path == "" {
+			fmt.Println("[webview] decide-destination: user cancelled")
 			webkitDownloadCancel(download)
-			return 0
+			return 1 // TRUE: we handled the destination (cancel), stop default
 		}
-		webkitDownloadSetDestination(download, "file://"+path)
-		return 0
+		fmt.Println("[webview] decide-destination: destination set to", path)
+		// WebKitGTK 2.40+ set_destination takes a raw absolute path (no file:// URI).
+		webkitDownloadSetDestination(download, path)
+		return 1 // TRUE: destination set, proceed with download
 	})
 	return downloadDecideDest
 }
@@ -1425,6 +1440,8 @@ func downloadFinishedFn() uintptr {
 		return downloadFinishedVar
 	}
 	downloadFinishedVar = purego.NewCallback(func(download, userData uintptr) uintptr {
+		fmt.Println("[webview] download finished; download=", download)
+		gObjectUnref(download)
 		return 0
 	})
 	return downloadFinishedVar
@@ -1435,6 +1452,8 @@ func downloadFailedFn() uintptr {
 		return downloadFailedVar
 	}
 	downloadFailedVar = purego.NewCallback(func(download, errorPtr, userData uintptr) uintptr {
+		fmt.Println("[webview] download failed; download=", download)
+		gObjectUnref(download)
 		return 0
 	})
 	return downloadFailedVar
@@ -1461,7 +1480,9 @@ const (
 // (decide-policy signal) already runs on the GTK main thread, so the chooser is
 // run directly here — never block waiting for a dispatched idle or it deadlocks.
 func (p *Platform) showSaveDialog(suggested string) (string, bool) {
+	fmt.Println("[webview] showSaveDialog: opening native save dialog; suggested=", suggested)
 	path := runSaveChooser(p.window, suggested)
+	fmt.Println("[webview] showSaveDialog: returned path=", path)
 	if path == "" {
 		return "", false
 	}
