@@ -184,9 +184,6 @@ var (
 	// response-policy-decision helpers are not exported on every WebKit2GTK
 	// build, so we avoid them.
 	webkitWebViewGetContext                    func(webview uintptr) uintptr
-	webkitWebContextSetDownloadStartedCallback func(context, callback, userData, destroyNotify uintptr)
-	webkitDownloadGetSuggestedFilename         func(download uintptr) uintptr
-	webkitDownloadGetURI                       func(download uintptr) uintptr
 	webkitDownloadSetDestination               func(download uintptr, destination string)
 	webkitDownloadCancel                       func(download uintptr)
 	hasDownloadSupport                         bool
@@ -374,16 +371,15 @@ func ensureInit() error {
 		}
 
 		// Download support uses only always-exported WebKit2 symbols.
-		if _, e := purego.Dlsym(webkit, "webkit_web_context_set_download_started_callback"); e == nil {
-			purego.RegisterLibFunc(&webkitWebViewGetContext, webkit, "webkit_web_view_get_context")
-			purego.RegisterLibFunc(&webkitWebContextSetDownloadStartedCallback, webkit, "webkit_web_context_set_download_started_callback")
-			purego.RegisterLibFunc(&webkitDownloadGetSuggestedFilename, webkit, "webkit_download_get_suggested_filename")
-			purego.RegisterLibFunc(&webkitDownloadGetURI, webkit, "webkit_download_get_uri")
-			purego.RegisterLibFunc(&webkitDownloadSetDestination, webkit, "webkit_download_set_destination")
-			purego.RegisterLibFunc(&webkitDownloadCancel, webkit, "webkit_download_cancel")
-			hasDownloadSupport = true
-			fmt.Println("[webview] found webkit_web_context_set_download_started_callback; download support enabled")
-		}
+		// Register WebKit download symbols. We connect the "download-started"
+		// GObject signal directly via g_signal_connect_data (portable across
+		// all WebKit2GTK versions) instead of relying on the optional
+		// webkit_web_context_set_download_started_callback C wrapper, which is
+		// absent in some builds and would silently disable downloads.
+		purego.RegisterLibFunc(&webkitWebViewGetContext, webkit, "webkit_web_view_get_context")
+		purego.RegisterLibFunc(&webkitDownloadSetDestination, webkit, "webkit_download_set_destination")
+		purego.RegisterLibFunc(&webkitDownloadCancel, webkit, "webkit_download_cancel")
+		hasDownloadSupport = true
 
 		connectDownloadCallbacks()
 		connectDialogCallback()
@@ -860,10 +856,7 @@ func (p *Platform) windowInit(window uintptr) error {
 
 	if hasDownloadSupport {
 		ctx := webkitWebViewGetContext(p.webview)
-		fmt.Println("[webview] hasDownloadSupport=true; registering download-started callback")
-		webkitWebContextSetDownloadStartedCallback(ctx, downloadStartedFn(), p.id, 0)
-	} else {
-		fmt.Println("[webview] hasDownloadSupport=false; download callback NOT registered (symbol webkit_web_context_set_download_started_callback missing)")
+		gSignalConnectData(ctx, "download-started", downloadStartedFn(), p.id, 0, 0)
 	}
 
 	p.pushUserScript(bootstrapJS(nil))
@@ -1380,7 +1373,6 @@ func downloadStartedFn() uintptr {
 		return downloadStarted
 	}
 	downloadStarted = purego.NewCallback(func(context, download, userData uintptr) uintptr {
-		fmt.Println("[webview] download-started fired; download=", download)
 		// WebKit frees the download object right after this callback returns,
 		// so take a reference and hold it until finished/failed.
 		gObjectRef(download)
@@ -1407,20 +1399,16 @@ func downloadDecideDestFn() uintptr {
 				name = n
 			}
 		}
-		fmt.Println("[webview] decide-destination fired; suggested=", name, " userData=", userData)
 		p := lookupPlatform(userData)
 		if p == nil {
-			fmt.Println("[webview] decide-destination: no platform for userData, cancelling")
 			webkitDownloadCancel(download)
 			return 1 // TRUE: we handled the destination (cancel), stop default
 		}
 		path, ok := p.showSaveDialog(name)
 		if !ok || path == "" {
-			fmt.Println("[webview] decide-destination: user cancelled")
 			webkitDownloadCancel(download)
 			return 1 // TRUE: we handled the destination (cancel), stop default
 		}
-		fmt.Println("[webview] decide-destination: destination set to", path)
 		// WebKitGTK 2.40+ set_destination takes a raw absolute path (no file:// URI).
 		webkitDownloadSetDestination(download, path)
 		return 1 // TRUE: destination set, proceed with download
@@ -1440,7 +1428,6 @@ func downloadFinishedFn() uintptr {
 		return downloadFinishedVar
 	}
 	downloadFinishedVar = purego.NewCallback(func(download, userData uintptr) uintptr {
-		fmt.Println("[webview] download finished; download=", download)
 		gObjectUnref(download)
 		return 0
 	})
@@ -1452,7 +1439,6 @@ func downloadFailedFn() uintptr {
 		return downloadFailedVar
 	}
 	downloadFailedVar = purego.NewCallback(func(download, errorPtr, userData uintptr) uintptr {
-		fmt.Println("[webview] download failed; download=", download)
 		gObjectUnref(download)
 		return 0
 	})
@@ -1480,9 +1466,7 @@ const (
 // (decide-policy signal) already runs on the GTK main thread, so the chooser is
 // run directly here — never block waiting for a dispatched idle or it deadlocks.
 func (p *Platform) showSaveDialog(suggested string) (string, bool) {
-	fmt.Println("[webview] showSaveDialog: opening native save dialog; suggested=", suggested)
 	path := runSaveChooser(p.window, suggested)
-	fmt.Println("[webview] showSaveDialog: returned path=", path)
 	if path == "" {
 		return "", false
 	}
