@@ -574,10 +574,10 @@ func (p *Platform) Run() error {
 		return err
 	}
 	p.windowSettings()
+	// The default Edit menu is installed by buildPlatform via SetMenus; custom
+	// apps append/replace through SetMenu before Run.
 	if p.hasCustomMenus {
 		p.applyMenus(p.pendingMenus)
-	} else {
-		p.setupMainMenu()
 	}
 	// Apply pending title/size/HTML/URL directly (not via dispatch) so the
 	// window is visible before the main loop starts.
@@ -618,88 +618,6 @@ func (p *Platform) Close() error {
 		p.stopRunLoop = true
 	}
 	return nil
-}
-
-// setupMainMenu installs an Edit menu bar with Undo/Redo/Cut/Copy/Paste/Select All.
-func (p *Platform) setupMainMenu() {
-	if gtk4 {
-		p.buildMenubarGTK4([]Menu{{
-			Label: "Edit",
-			Items: []MenuItem{
-				{Label: "Undo", Action: p.execEdit("undo")},
-				{Label: "Redo", Action: p.execEdit("redo")},
-				{Separator: true},
-				{Label: "Cut", Action: p.execEdit("cut")},
-				{Label: "Copy", Action: p.execEdit("copy")},
-				{Label: "Paste", Action: p.execEdit("paste")},
-				{Separator: true},
-				{Label: "Select All", Action: p.execEdit("selectAll")},
-			},
-		}})
-		return
-	}
-	menuBar := gtkMenuBarNew()
-	editItem := gtkMenuItemNewWithLabel("Edit")
-	editMenu := gtkMenuNew()
-
-	accelGroup := gtkAccelGroupNew()
-	gtkWindowAddAccelGroup(p.window, accelGroup)
-
-	gtkMenuItemSetSubmenu(editItem, editMenu)
-	gtkMenuShellAppend(menuBar, editItem)
-
-	// menuActionFn handles activate signals on edit menu items.
-	menuActionFn = purego.NewCallback(func(item, userData uintptr) uintptr {
-		action := menuActionLookup(item)
-		if action == "" || p.webview == 0 {
-			return 0
-		}
-		js := "document.execCommand('" + action + "')"
-		if haveEvaluateJavascript {
-			webkitWebViewEvaluateJavascript(p.webview, js, len(js), 0, 0, 0, 0, 0)
-		} else {
-			webkitWebViewRunJavascript(p.webview, js, 0, 0, 0)
-		}
-		return 0
-	})
-
-	addEditItem := func(label, action string, key uint, mods int) {
-		item := gtkMenuItemNewWithLabel(label)
-		gSignalConnectData(item, gSignalActivate, menuActionFn, 0, 0, 0)
-		menuActionRegister(item, action)
-		gtkWidgetAddAccelerator(item, gSignalActivate, accelGroup, key, mods, gtkAccelVisible)
-		gtkMenuShellAppend(editMenu, item)
-	}
-
-	addEditItem("Undo", "undo", 0x07a, gdkControlMask) // Ctrl+Z
-	addEditItem("Redo", "redo", 0x079, gdkControlMask) // Ctrl+Y
-	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
-	addEditItem("Cut", "cut", 0x078, gdkControlMask)     // Ctrl+X
-	addEditItem("Copy", "copy", 0x063, gdkControlMask)   // Ctrl+C
-	addEditItem("Paste", "paste", 0x076, gdkControlMask) // Ctrl+V
-	gtkMenuShellAppend(editMenu, gtkSeparatorMenuItemNew())
-	addEditItem("Select All", "selectAll", 0x061, gdkControlMask) // Ctrl+A
-
-	p.menuBar = menuBar
-	wireMenuRedraw(editMenu, p.window)
-}
-
-var (
-	menuActionFn    uintptr
-	menuActionMu    sync.Mutex
-	menuActionItems = map[uintptr]string{}
-)
-
-func menuActionRegister(item uintptr, action string) {
-	menuActionMu.Lock()
-	menuActionItems[item] = action
-	menuActionMu.Unlock()
-}
-
-func menuActionLookup(item uintptr) string {
-	menuActionMu.Lock()
-	defer menuActionMu.Unlock()
-	return menuActionItems[item]
 }
 
 // menuRedrawFn repaints the toplevel window when a popup submenu is dismissed,
@@ -817,20 +735,6 @@ func gtk4MenuActivateFn() uintptr {
 }
 
 var gtk4MenuActivate uintptr
-
-func (p *Platform) execEdit(action string) func() {
-	return func() {
-		if p.webview == 0 {
-			return
-		}
-		js := "document.execCommand('" + action + "')"
-		if haveEvaluateJavascript {
-			webkitWebViewEvaluateJavascript(p.webview, js, len(js), 0, 0, 0, 0, 0)
-		} else {
-			webkitWebViewRunJavascript(p.webview, js, 0, 0, 0)
-		}
-	}
-}
 
 // menuCustomCBMap stores custom menu item callbacks (by item pointer).
 var menuCustomCBMu sync.Mutex

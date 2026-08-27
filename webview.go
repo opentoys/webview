@@ -62,6 +62,10 @@ func New(opts Options) (*W, error) {
 	// Platform-specific initialization (e.g. dialog handler) happens in
 	// buildPlatform.
 	w.p = buildPlatform(opts, w)
+	// Install the platform's default menu bar (Edit on macOS/Linux; none on
+	// others). Apps override via SetMenu. DefaultMenus is the single source of
+	// truth, defined per platform.
+	w.SetMenu(DefaultMenus(w)...)
 	return w, nil
 }
 

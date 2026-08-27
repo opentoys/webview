@@ -50,7 +50,6 @@ func buildPlatform(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
-	p.SetMenus(DefaultMenus(w))
 	// Capture <input accept> on click so the native file picker can read it
 	// synchronously before showing the panel.
 	w.bridge.Bind("__accept__", func(v string) {
