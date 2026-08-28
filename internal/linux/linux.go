@@ -147,7 +147,7 @@ var (
 	soupMessageHeadersForeach func(hdrs, cb, userData uintptr)
 
 	// GTK 4 variants.
-	gtk4                    bool
+	haveGtk4                bool // true when the loaded GTK stack is GTK4
 	gtkInitCheck0           func() bool
 	gtkWindowNew0           func() uintptr
 	gtkWindowSetChild       func(window, widget uintptr)
@@ -257,7 +257,7 @@ func ensureInit() error {
 		var gtk, webkit, jsc uintptr
 		wk6, werr := openFirst("libwebkitgtk-6.0.so.4")
 		if werr == nil {
-			gtk4 = true
+			haveGtk4 = true
 			webkit = wk6
 			gtk, err = openFirst("libgtk-4.so.1")
 			if err != nil {
@@ -293,13 +293,11 @@ func ensureInit() error {
 
 		registerShared(glib, gobject, gio, webkit, jsc, gtk)
 
-		var bk gtkBackend
-		if gtk4 {
-			bk = &gtk4Backend{}
+		if haveGtk4 {
+			newgtk4symbols()
 		} else {
-			bk = &gtk3Backend{}
+			newgtk3symbols()
 		}
-		bk.registerSymbols()
 
 		connectDownloadCallbacks()
 		connectDialogCallback()
@@ -319,7 +317,7 @@ func ensureInit() error {
 		messageHandlerFn = purego.NewCallback(func(manager, jsResult, userData uintptr) uintptr {
 			w := lookupPlatform(userData)
 			if w != nil {
-				w.onMessage(w.self.messageValue(jsResult))
+				w.onMessage(w.messageValueFn(w, jsResult))
 			}
 			return 0
 		})
@@ -448,7 +446,7 @@ func cstr(p uintptr) string {
 
 var (
 	regMu     sync.Mutex
-	registry  = map[uintptr]*Platform{}
+	registry  = map[uintptr]*gtk{}
 	engineSeq uintptr
 
 	dispatchMu  sync.Mutex
@@ -456,7 +454,7 @@ var (
 	dispatchSeq uintptr
 )
 
-func registerPlatform(p *Platform) uintptr {
+func registerPlatform(p *gtk) uintptr {
 	regMu.Lock()
 	engineSeq++
 	id := engineSeq
@@ -471,7 +469,7 @@ func unregisterPlatform(id uintptr) {
 	regMu.Unlock()
 }
 
-func lookupPlatform(id uintptr) *Platform {
+func lookupPlatform(id uintptr) *gtk {
 	regMu.Lock()
 	defer regMu.Unlock()
 	return registry[id]
@@ -488,24 +486,28 @@ func dispatchMain(f func()) {
 
 // --- Platform --------------------------------------------------------------
 
-// Platform implements the webview.Platform interface for Linux using GTK and
-// WebKitGTK via purego.
-// gtkBackend is the GTK-version-specific surface. GTK3/GTK4 implement it; the
-// shared Platform delegates all version-dependent work through self so that an
-// embedded struct's overrides stay reachable from shared methods.
-type gtkBackend interface {
-	registerSymbols()
-	createWindow() error
-	buildMenubar(menus []Menu)
-	showWindow()
-	applySizeHint(w, h int, hint SizeHint)
-	savePath(dlg uintptr) string
-	messageValue(arg uintptr) string
-	registerScriptHandler(manager uintptr, name string)
+// Gtk is the public surface implemented by the shared linux backend (and,
+// via embedding, by the GTK3/GTK4 variants). It mirrors webview.Platform.
+type Gtk interface {
+	Run() error
+	Close() error
+	SetTitle(title string) error
+	SetSize(w, h int, hint SizeHint)
+	Navigate(url string) error
+	SetHTML(html string) error
+	Eval(js string) error
+	Init(js string) error
+	InterceptResource(scheme string, handler ResourceHandler)
+	SetMenus(menus []Menu)
+	MainThread(f func())
 }
 
-type Platform struct {
-	self    gtkBackend // version-specific impl (set after ensureInit)
+// gtk is the shared Linux GTK/WebKitGTK backend. GTK3 (gtk3_linux.go) and GTK4
+// (gtk4_linux.go) embed it and supply the version-specific hooks through the
+// func fields below, so shared methods call p.xxxFn() and always reach the
+// variant that constructed them (function fields avoid Go's embedding "this is
+// fixed at the base" pitfall without an interface indirection per call).
+type gtk struct {
 	id      uintptr
 	window  uintptr
 	webview uintptr
@@ -516,6 +518,15 @@ type Platform struct {
 	isWindowShown bool
 	isSizeSet     bool
 	menuBar       uintptr
+
+	// Version-specific hooks, set by the gtk3/gtk4 constructors.
+	createWindowFn          func(*gtk) error
+	buildMenubarFn          func(*gtk, []Menu)
+	showWindowFn            func(*gtk)
+	applySizeHintFn         func(*gtk, int, int, SizeHint)
+	savePathFn              func(*gtk, uintptr) string
+	messageValueFn          func(*gtk, uintptr) string
+	registerScriptHandlerFn func(*gtk, uintptr, string)
 
 	// Callback wiring (set by buildPlatform before Run).
 	MessageFunc func(string)
@@ -543,33 +554,36 @@ type Platform struct {
 	hasCustomMenus bool
 }
 
-// New creates a new Platform instance.
-func New() *Platform {
-	return &Platform{
+// New creates a new GTK backend instance. The concrete GTK3/GTK4 variant is
+// selected in Run() once the libraries are loaded.
+func New() *gtk {
+	return &gtk{
 		schemeHandlers: make(map[string]ResourceHandler),
 	}
 }
 
-// newBackend returns the GTK-version-specific implementation bound to p. It is
-// called after ensureInit has resolved which GTK version is active. The backend
-// embeds *Platform so it can reach shared fields and methods directly.
-func newBackend(p *Platform) gtkBackend {
-	if gtk4 {
-		return &gtk4Backend{Platform: p}
+// selectBackend picks the GTK3 or GTK4 variant (already resolved by ensureInit)
+// and wires its version-specific hooks into this shared backend.
+func (p *gtk) selectBackend() error {
+	if haveGtk4 {
+		return newgtk4(p)
 	}
-	return &gtk3Backend{Platform: p}
+	return newgtk3(p)
 }
 
 // Run creates the window and enters the GTK main loop. Blocks until Close is
 // called or the window is destroyed.
-func (p *Platform) Run() error {
+func (p *gtk) Run() error {
 	if err := ensureInit(); err != nil {
 		return err
 	}
 	uiThreadOnce.Do(runtime.LockOSThread)
 
 	p.id = registerPlatform(p)
-	p.self = newBackend(p)
+	if err := p.selectBackend(); err != nil {
+		unregisterPlatform(p.id)
+		return err
+	}
 	if err := p.windowInit(0); err != nil {
 		unregisterPlatform(p.id)
 		return err
@@ -600,13 +614,13 @@ func (p *Platform) Run() error {
 }
 
 // SetMenus replaces the native menu bar. Call before Run().
-func (p *Platform) SetMenus(menus []Menu) {
+func (p *gtk) SetMenus(menus []Menu) {
 	p.pendingMenus = menus
 	p.hasCustomMenus = len(menus) > 0
 }
 
 // MainThread runs f on the GTK main thread, blocking until it completes.
-func (p *Platform) MainThread(f func()) {
+func (p *gtk) MainThread(f func()) {
 	done := make(chan struct{})
 	dispatchMain(func() {
 		f()
@@ -616,7 +630,7 @@ func (p *Platform) MainThread(f func()) {
 }
 
 // Close destroys the window and signals the main loop to stop.
-func (p *Platform) Close() error {
+func (p *gtk) Close() error {
 	if p.window != 0 {
 		dispatchMain(func() { gtkWindowClose(p.window) })
 	} else {
@@ -639,8 +653,8 @@ var soupForeachCB uintptr
 
 // applyMenus builds and installs a menu bar from the given Menu slice. The
 // concrete GTK3/GTK4 implementation lives in each backend's buildMenubar.
-func (p *Platform) applyMenus(menus []Menu) {
-	p.self.buildMenubar(menus)
+func (p *gtk) applyMenus(menus []Menu) {
+	p.buildMenubarFn(p, menus)
 }
 
 // parseGtkShortcut parses "Ctrl+Z" into (gdk_keyval, GdkModifierType).
@@ -667,12 +681,12 @@ func parseGtkShortcut(s string) (uint, int) {
 	return key, mods
 }
 
-func (p *Platform) windowInit(window uintptr) error {
+func (p *gtk) windowInit(window uintptr) error {
 	if window != 0 {
 		p.window = window
 		p.ownsWindow = false
 	} else {
-		if err := p.self.createWindow(); err != nil {
+		if err := p.createWindowFn(p); err != nil {
 			return err
 		}
 	}
@@ -684,7 +698,7 @@ func (p *Platform) windowInit(window uintptr) error {
 
 	gSignalConnectData(p.manager, "script-message-received::webviewBridge",
 		messageHandlerFn, p.id, 0, 0)
-	p.self.registerScriptHandler(p.manager, "webviewBridge")
+	p.registerScriptHandlerFn(p, p.manager, "webviewBridge")
 
 	if hasDownloadSupport {
 		gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
@@ -694,7 +708,7 @@ func (p *Platform) windowInit(window uintptr) error {
 	return nil
 }
 
-func (p *Platform) windowSettings() {
+func (p *gtk) windowSettings() {
 	settings := webkitWebViewGetSettings(p.webview)
 	webkitSettingsSetJavascriptCanAccessClipboard(settings, true)
 	if p.Debug {
@@ -703,13 +717,13 @@ func (p *Platform) windowSettings() {
 	}
 }
 
-func (p *Platform) onWindowDestroy() {
+func (p *gtk) onWindowDestroy() {
 	unregisterPlatform(p.id)
 	p.window = 0
 	dispatchMain(func() { p.stopRunLoop = true })
 }
 
-func (p *Platform) destroy() {
+func (p *gtk) destroy() {
 	if p.window != 0 && p.ownsWindow {
 		gSignalHandlersDisconnectMatched(p.window, gSignalMatchData, 0, 0, 0, 0, p.id)
 		gtkWindowClose(p.window)
@@ -727,7 +741,7 @@ func (p *Platform) destroy() {
 }
 
 // applyPending applies title/size/HTML/URL set before Run.
-func (p *Platform) applyPending() {
+func (p *gtk) applyPending() {
 	p.mu.Lock()
 	title := p.pendingTitle
 	html := p.pendingHTML
@@ -754,7 +768,7 @@ func (p *Platform) applyPending() {
 }
 
 // SetTitle updates the window title.
-func (p *Platform) SetTitle(title string) error {
+func (p *gtk) SetTitle(title string) error {
 	p.mu.Lock()
 	if p.window == 0 {
 		p.pendingTitle = title
@@ -767,7 +781,7 @@ func (p *Platform) SetTitle(title string) error {
 }
 
 // SetSize updates the window size with the given hint.
-func (p *Platform) SetSize(width, height int, hint SizeHint) {
+func (p *gtk) SetSize(width, height int, hint SizeHint) {
 	p.mu.Lock()
 	if p.window == 0 {
 		p.pendingW = width
@@ -781,14 +795,14 @@ func (p *Platform) SetSize(width, height int, hint SizeHint) {
 	p.applySize(width, height, hint)
 }
 
-func (p *Platform) applySize(width, height int, hint SizeHint) {
+func (p *gtk) applySize(width, height int, hint SizeHint) {
 	gtkWindowSetResizable(p.window, hint != SizeFixed)
-	p.self.applySizeHint(width, height, hint)
+	p.applySizeHintFn(p, width, height, hint)
 	p.windowShow()
 }
 
 // Navigate loads the given URL.
-func (p *Platform) Navigate(url string) error {
+func (p *gtk) Navigate(url string) error {
 	p.mu.Lock()
 	if p.webview == 0 {
 		p.pendingURL = url
@@ -805,7 +819,7 @@ func (p *Platform) Navigate(url string) error {
 }
 
 // SetHTML loads HTML content directly.
-func (p *Platform) SetHTML(html string) error {
+func (p *gtk) SetHTML(html string) error {
 	p.mu.Lock()
 	if p.webview == 0 {
 		p.pendingHTML = html
@@ -819,7 +833,7 @@ func (p *Platform) SetHTML(html string) error {
 }
 
 // Eval evaluates JavaScript in the webview.
-func (p *Platform) Eval(js string) error {
+func (p *gtk) Eval(js string) error {
 	if p.webview == 0 {
 		return nil
 	}
@@ -836,27 +850,27 @@ func (p *Platform) Eval(js string) error {
 
 // EvalHost queues JS to run on the GTK main thread without blocking. Safe from
 // any goroutine.
-func (p *Platform) EvalHost(js string) {
+func (p *gtk) EvalHost(js string) {
 	dispatchMain(func() { p.Eval(js) })
 }
 
 // Init injects JavaScript that runs at the start of every new page load.
-func (p *Platform) Init(js string) error {
+func (p *gtk) Init(js string) error {
 	p.pushUserScript(js)
 	return nil
 }
 
 // InterceptResource registers a resource handler for the given URL scheme.
 // Must be called before Run(). scheme is the URL scheme without "://".
-func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
+func (p *gtk) InterceptResource(scheme string, handler ResourceHandler) {
 	p.schemeHandlers[scheme] = handler
 }
 
-func (p *Platform) windowShow() {
+func (p *gtk) windowShow() {
 	if p.isWindowShown {
 		return
 	}
-	p.self.showWindow()
+	p.showWindowFn(p)
 	if p.ownsWindow {
 		gtkWidgetGrabFocus(p.webview)
 		gtkWindowPresent(p.window)
@@ -868,12 +882,12 @@ func (p *Platform) windowShow() {
 
 var userScriptSrcs []string
 
-func (p *Platform) pushUserScript(src string) {
+func (p *gtk) pushUserScript(src string) {
 	userScriptSrcs = append(userScriptSrcs, src)
 	p.rebuildScripts()
 }
 
-func (p *Platform) rebuildScripts() {
+func (p *gtk) rebuildScripts() {
 	if p.manager == 0 {
 		return
 	}
@@ -908,7 +922,7 @@ func bindScript(names []string) string {
 
 // --- message routing -------------------------------------------------------
 
-func (p *Platform) onMessage(body string) {
+func (p *gtk) onMessage(body string) {
 	if p.MessageFunc != nil {
 		p.MessageFunc(body)
 	}
@@ -918,7 +932,7 @@ func (p *Platform) onMessage(body string) {
 
 // registerSchemes wires each ResourceHandler onto the WebKitWebContext and
 // marks the scheme as a secure context. Called from Run before the main loop.
-func (p *Platform) registerSchemes() error {
+func (p *gtk) registerSchemes() error {
 	if len(p.schemeHandlers) == 0 {
 		return nil
 	}
@@ -940,7 +954,7 @@ func (p *Platform) registerSchemes() error {
 	}
 
 	webkitSonames := []string{"libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37"}
-	if gtk4 {
+	if haveGtk4 {
 		webkitSonames = []string{"libwebkitgtk-6.0.so.4"}
 	}
 	webkit, err := openFirst(webkitSonames...)
@@ -1350,7 +1364,7 @@ const (
 // cancels. Blocks the caller until the dialog is dismissed. The caller
 // (decide-policy signal) already runs on the GTK main thread, so the chooser is
 // run directly here — never block waiting for a dispatched idle or it deadlocks.
-func (p *Platform) showSaveDialog(suggested string) (string, bool) {
+func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	dlg := gtkFileChooserNativeNew("", p.window, gtkFileChooserActionSave, "_Save", "_Cancel")
 	if dlg == 0 {
 		return "", false
@@ -1362,7 +1376,7 @@ func (p *Platform) showSaveDialog(suggested string) (string, bool) {
 	if runNativeDialog(dlg) != gtkResponseAccept {
 		return "", false
 	}
-	path := p.self.savePath(dlg)
+	path := p.savePathFn(p, dlg)
 	if path == "" {
 		return "", false
 	}

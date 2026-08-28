@@ -3,13 +3,26 @@ package linux
 import "github.com/ebitengine/purego"
 
 // GTK3-specific implementation: classic GtkMenuBar + redraw workarounds.
-
-type gtk3Backend struct {
-	*Platform
+type gtk3 struct {
+	*gtk
 }
 
-// registerSymbols binds the GTK3-only C functions (absent in libgtk-4).
-func (b *gtk3Backend) registerSymbols() {
+// newgtk3 wires up the GTK3 version of every function-field hook and registers
+// the GTK3-only purego symbols. Returns nil on success; non-nil only if the
+// library handle is missing (in which case Run panics downstream).
+func newgtk3(p *gtk) error {
+	newgtk3symbols()
+	p.createWindowFn = pgtk3CreateWindow
+	p.buildMenubarFn = pgtk3BuildMenubar
+	p.showWindowFn = pgtk3ShowWindow
+	p.applySizeHintFn = pgtk3ApplySizeHint
+	p.savePathFn = pgtk3SavePath
+	p.messageValueFn = pgtk3MessageValue
+	p.registerScriptHandlerFn = pgtk3RegisterScriptHandler
+	return nil
+}
+
+func newgtk3symbols() {
 	gtk := libGTK
 	purego.RegisterLibFunc(&gtkInitCheck, gtk, "gtk_init_check")
 	purego.RegisterLibFunc(&gtkWindowNew, gtk, "gtk_window_new")
@@ -43,21 +56,18 @@ func (b *gtk3Backend) registerSymbols() {
 	purego.RegisterLibFunc(&webkitJavascriptResultGetJSValue, libWebKit, "webkit_javascript_result_get_js_value")
 }
 
-func (b *gtk3Backend) createWindow() error {
+func pgtk3CreateWindow(p *gtk) error {
 	if !gtkInitCheck(0, 0) {
 		return errNoDisplay
 	}
-	p := b.Platform
 	p.window = gtkWindowNew(gtkWindowToplevel)
 	gtkWindowSetPosition(p.window, 1) // GTK_WIN_POS_CENTER
 	return nil
 }
 
-// buildMenubar builds a classic GtkMenuBar from the given menu slice.
 var customMenuActionFn uintptr
 
-func (b *gtk3Backend) buildMenubar(menus []Menu) {
-	p := b.Platform
+func pgtk3BuildMenubar(p *gtk, menus []Menu) {
 	menuCustomCBMu.Lock()
 	menuCustomCBMap = map[uintptr]func(){}
 	menuCustomCBMu.Unlock()
@@ -108,8 +118,7 @@ func (b *gtk3Backend) buildMenubar(menus []Menu) {
 	p.menuBar = menuBar
 }
 
-func (b *gtk3Backend) showWindow() {
-	p := b.Platform
+func pgtk3ShowWindow(p *gtk) {
 	box := gtkVboxNew(false, 0)
 	if p.menuBar != 0 {
 		// Menubar is fixed height (no expand/fill).
@@ -121,21 +130,21 @@ func (b *gtk3Backend) showWindow() {
 	gtkWidgetShowAll(p.window)
 }
 
-func (b *gtk3Backend) applySizeHint(width, height int, hint SizeHint) {
+func pgtk3ApplySizeHint(p *gtk, width, height int, hint SizeHint) {
 	switch hint {
 	case SizeMin:
 		// Set minimum size; per-axis size-request may be missing on stripped
 		// builds, so reuse set_default_size which is present on both.
-		gtkWindowSetDefaultSize(b.Platform.window, width, height)
+		gtkWindowSetDefaultSize(p.window, width, height)
 	case SizeMax:
 		g := gdkGeometry{MaxWidth: int32(width), MaxHeight: int32(height)}
-		gtkWindowSetGeometryHints(b.Platform.window, 0, &g, gdkHintMaxSize)
+		gtkWindowSetGeometryHints(p.window, 0, &g, gdkHintMaxSize)
 	default: // SizeNone, SizeFixed
-		gtkWindowResize(b.Platform.window, width, height)
+		gtkWindowResize(p.window, width, height)
 	}
 }
 
-func (b *gtk3Backend) savePath(dlg uintptr) string {
+func pgtk3SavePath(p *gtk, dlg uintptr) string {
 	cs := gtkFileChooserGetFilename(dlg) // char*, owned by caller
 	if cs == 0 {
 		return ""
@@ -144,7 +153,7 @@ func (b *gtk3Backend) savePath(dlg uintptr) string {
 	return cstr(cs)
 }
 
-func (b *gtk3Backend) messageValue(arg uintptr) string {
+func pgtk3MessageValue(p *gtk, arg uintptr) string {
 	cs := jscValueToString(webkitJavascriptResultGetJSValue(arg))
 	s := cstr(cs)
 	if cs != 0 {
@@ -153,7 +162,7 @@ func (b *gtk3Backend) messageValue(arg uintptr) string {
 	return s
 }
 
-func (b *gtk3Backend) registerScriptHandler(manager uintptr, name string) {
+func pgtk3RegisterScriptHandler(p *gtk, manager uintptr, name string) {
 	webkitUserContentManagerRegisterHandler(manager, name)
 }
 

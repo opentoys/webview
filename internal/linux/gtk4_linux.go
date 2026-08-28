@@ -8,13 +8,25 @@ import (
 )
 
 // GTK4-specific implementation: GMenu/GAction popover menubar + box packing.
-
-type gtk4Backend struct {
-	*Platform
+type gtk4 struct {
+	*gtk
 }
 
-// registerSymbols binds the GTK4-only C functions (absent in libgtk-3).
-func (b *gtk4Backend) registerSymbols() {
+// newgtk4 wires up the GTK4 version of every function-field hook and registers
+// the GTK4-only purego symbols. Returns nil on success.
+func newgtk4(p *gtk) error {
+	newgtk4symbols()
+	p.createWindowFn = pgtk4CreateWindow
+	p.buildMenubarFn = pgtk4BuildMenubar
+	p.showWindowFn = pgtk4ShowWindow
+	p.applySizeHintFn = pgtk4ApplySizeHint
+	p.savePathFn = pgtk4SavePath
+	p.messageValueFn = pgtk4MessageValue
+	p.registerScriptHandlerFn = pgtk4RegisterScriptHandler
+	return nil
+}
+
+func newgtk4symbols() {
 	gtk := libGTK
 	purego.RegisterLibFunc(&gtkInitCheck0, gtk, "gtk_init_check")
 	purego.RegisterLibFunc(&gtkWindowNew0, gtk, "gtk_window_new")
@@ -29,18 +41,18 @@ func (b *gtk4Backend) registerSymbols() {
 	purego.RegisterLibFunc(&webkitRegisterHandler3, libWebKit, "webkit_user_content_manager_register_script_message_handler")
 }
 
-func (b *gtk4Backend) createWindow() error {
+func pgtk4CreateWindow(p *gtk) error {
 	if !gtkInitCheck0() {
 		return errNoDisplay
 	}
-	b.Platform.window = gtkWindowNew0()
+	p.window = gtkWindowNew0()
 	return nil
 }
 
 // buildMenubar builds a GMenu/GAction popover menu bar (GtkMenuBar is gone in
 // GTK4). Each non-separator item is wired to a GSimpleAction whose "activate"
 // signal dispatches the Go callback stored in gtk4MenuActions.
-func (b *gtk4Backend) buildMenubar(menus []Menu) {
+func pgtk4BuildMenubar(p *gtk, menus []Menu) {
 	gtk4MenuActionMu.Lock()
 	gtk4MenuActions = map[uintptr]func(){}
 	gtk4MenuActionMu.Unlock()
@@ -69,12 +81,11 @@ func (b *gtk4Backend) buildMenubar(menus []Menu) {
 		}
 		gMenuAppendSubmenu(root, m.Label, sub)
 	}
-	gtkWidgetInsertActionGroup(b.Platform.window, "win", group)
-	b.Platform.menuBar = gtkPopoverMenuBarNewFromModel(root)
+	gtkWidgetInsertActionGroup(p.window, "win", group)
+	p.menuBar = gtkPopoverMenuBarNewFromModel(root)
 }
 
-func (b *gtk4Backend) showWindow() {
-	p := b.Platform
+func pgtk4ShowWindow(p *gtk) {
 	box := gtkBoxNew(gtkOrientationVertical, 0)
 	if p.menuBar != 0 {
 		gtkBoxAppend(box, p.menuBar)
@@ -89,16 +100,16 @@ func (b *gtk4Backend) showWindow() {
 	gtkWidgetSetVisible(p.window, true)
 }
 
-func (b *gtk4Backend) applySizeHint(width, height int, hint SizeHint) {
+func pgtk4ApplySizeHint(p *gtk, width, height int, hint SizeHint) {
 	if hint == SizeMax {
 		// GTK4 dropped per-axis geometry hints; only default size remains.
 		return
 	}
 	// SizeMin / SizeNone / SizeFixed all map to default size on GTK4.
-	gtkWindowSetDefaultSize(b.Platform.window, width, height)
+	gtkWindowSetDefaultSize(p.window, width, height)
 }
 
-func (b *gtk4Backend) savePath(dlg uintptr) string {
+func pgtk4SavePath(p *gtk, dlg uintptr) string {
 	file := gtkFileChooserGetFile(dlg) // transfer full
 	if file == 0 {
 		return ""
@@ -111,7 +122,7 @@ func (b *gtk4Backend) savePath(dlg uintptr) string {
 	return cstr(cs)
 }
 
-func (b *gtk4Backend) messageValue(arg uintptr) string {
+func pgtk4MessageValue(p *gtk, arg uintptr) string {
 	cs := jscValueToString(arg)
 	s := cstr(cs)
 	if cs != 0 {
@@ -120,7 +131,7 @@ func (b *gtk4Backend) messageValue(arg uintptr) string {
 	return s
 }
 
-func (b *gtk4Backend) registerScriptHandler(manager uintptr, name string) {
+func pgtk4RegisterScriptHandler(p *gtk, manager uintptr, name string) {
 	webkitRegisterHandler3(manager, name, 0)
 }
 
