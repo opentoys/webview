@@ -104,6 +104,7 @@ var (
 	gtkNativeDialogShow      func(dialog uintptr)
 	gtkNativeDialogHide      func(dialog uintptr)
 	gtkNativeDialogSetModal  func(dialog uintptr, modal bool)
+	gtkNativeDialogRun       func(dialog uintptr) int
 	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
 	gtkFileChooserGetFile    func(chooser uintptr) uintptr // GFile*
 	gFileGetPath             func(file uintptr) uintptr     // char*
@@ -147,12 +148,13 @@ var (
 	webkitWebViewEvaluateJavascript func(webview uintptr, script string, length int, world, source, cancellable, callback, userData uintptr)
 	webkitWebViewRunJavascript      func(webview uintptr, script string, cancellable, callback, userData uintptr)
 
-	// Download via the modern, always-exported API: a web-context
+	// Download via the modern, always-exported API: a network-session
 	// "download-started" callback plus each download's "decide-destination"
 	// signal (which already hands us the suggested filename). The older
 	// response-policy-decision helpers are not exported on every WebKit2GTK
 	// build, so we avoid them.
 	webkitWebViewGetContext                    func(webview uintptr) uintptr
+	webkitNetworkSessionGetDefault             func() uintptr
 	webkitDownloadSetDestination               func(download uintptr, destination string)
 	webkitDownloadCancel                       func(download uintptr)
 	webkitResponsePolicyDecisionGetDownload    func(decision uintptr) uintptr
@@ -330,6 +332,7 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gtkNativeDialogShow, gtk, "gtk_native_dialog_show")
 	purego.RegisterLibFunc(&gtkNativeDialogHide, gtk, "gtk_native_dialog_hide")
 	purego.RegisterLibFunc(&gtkNativeDialogSetModal, gtk, "gtk_native_dialog_set_modal")
+	purego.RegisterLibFunc(&gtkNativeDialogRun, gtk, "gtk_native_dialog_run")
 	purego.RegisterLibFunc(&gtkFileChooserSetCurrentName, gtk, "gtk_file_chooser_set_current_name")
 	purego.RegisterLibFunc(&gtkFileChooserGetFile, gtk, "gtk_file_chooser_get_file")
 	// g_file_get_path lives in libgio (GTK4 save-path result).
@@ -349,6 +352,7 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&webkitUserScriptNew, webkit, "webkit_user_script_new")
 	purego.RegisterLibFunc(&webkitUserScriptUnref, webkit, "webkit_user_script_unref")
 	purego.RegisterLibFunc(&webkitWebViewGetContext, webkit, "webkit_web_view_get_context")
+	purego.RegisterLibFunc(&webkitNetworkSessionGetDefault, webkit, "webkit_network_session_get_default")
 
 	_, e := purego.Dlsym(webkit, "webkit_web_view_evaluate_javascript")
 	if e == nil {
@@ -665,6 +669,16 @@ func (p *gtk) windowInit(window uintptr) error {
 
 	if hasDownloadSupport || hasPolicyDownload {
 		gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
+		// Connect to the network-session download-started signal for native
+		// WebKit downloads (GTK4 path). GTK4's decide-policy returns a
+		// WebKitDownload directly; this signal fires earlier and is the
+		// canonical entry point on webkitgtk-6.0.
+		if hasDownloadSupport && webkitNetworkSessionGetDefault != nil {
+			session := webkitNetworkSessionGetDefault()
+			if session != 0 {
+				gSignalConnectData(session, "download-started", downloadStartedFn(), p.id, 0, 0)
+			}
+		}
 	}
 
 	p.pushUserScript(bootstrapJS(nil))
@@ -1277,9 +1291,10 @@ func downloadDecideDestFn() uintptr {
 
 var (
 	downloadDecidePolicy uintptr
-	downloadDecideDest  uintptr
-	downloadFinishedVar uintptr
-	downloadFailedVar   uintptr
+	downloadDecideDest   uintptr
+	downloadStartedVar   uintptr
+	downloadFinishedVar  uintptr
+	downloadFailedVar    uintptr
 )
 
 func downloadFinishedFn() uintptr {
@@ -1304,10 +1319,31 @@ func downloadFailedFn() uintptr {
 	return downloadFailedVar
 }
 
+// downloadStartedFn handles the WebKitNetworkSession "download-started" signal:
+// (session, download, user_data). We take a reference on the download object
+// and wire up decide-destination / finished / failed callbacks, then let WebKit
+// proceed. Returning TRUE would suppress the default handling — we return 0 to
+// let WebKit continue normally after our hooks are attached.
+func downloadStartedFn() uintptr {
+	if downloadStartedVar != 0 {
+		return downloadStartedVar
+	}
+	downloadStartedVar = purego.NewCallback(func(session, download, userData uintptr) uintptr {
+		gObjectRef(download)
+		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
+		gSignalConnectData(download, "finished", downloadFinishedFn(), download, 0, 0)
+		gSignalConnectData(download, "failed", downloadFailedFn(), download, 0, 0)
+		return 0
+	})
+	return downloadStartedVar
+}
+
 func connectDownloadCallbacks() {
-	// Build callbacks eagerly so the decide-policy hook can reference them.
+	// Build callbacks eagerly so the decide-policy / download-started hooks can
+	// reference them.
 	downloadDecidePolicyFn()
 	downloadDecideDestFn()
+	downloadStartedFn()
 	downloadFinishedFn()
 	downloadFailedFn()
 }
@@ -1334,7 +1370,7 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	if suggested != "" {
 		gtkFileChooserSetCurrentName(dlg, suggested)
 	}
-	if runNativeDialog(dlg) != gtkResponseAccept {
+	if gtkNativeDialogRun(dlg) != gtkResponseAccept {
 		return "", false
 	}
 	path := p.savePathFn(p, dlg)
@@ -1344,66 +1380,6 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	return path, true
 }
 
-// dialogResponseFn reports a single modal dialog's response, keyed by an integer
-// token passed as the signal user_data (only integers cross into C).
-var dialogResponseFn uintptr
-
-type dialogResp struct {
-	response int
-	done     bool
-}
-
-var (
-	dialogRespMu     sync.Mutex
-	dialogRespStates = map[uintptr]*dialogResp{}
-	dialogRespSeq    uintptr
-)
-
-func connectDialogCallback() {
-	if dialogResponseFn != 0 {
-		return
-	}
-	dialogResponseFn = purego.NewCallback(func(dialog, responseID, token uintptr) uintptr {
-		dialogRespMu.Lock()
-		st := dialogRespStates[token]
-		if st != nil {
-			st.response = int(int32(uint32(responseID)))
-			st.done = true
-		}
-		dialogRespMu.Unlock()
-		return 0
-	})
-}
-
-// runNativeDialog shows a GtkNativeDialog modally and pumps the main loop until
-// the user responds, returning the response id. Replaces the GTK4-removed
-// gtk_native_dialog_run with its underlying mechanism (show + "response" +
-// nested iteration).
-func runNativeDialog(dlg uintptr) int {
-	dialogRespMu.Lock()
-	dialogRespSeq++
-	token := dialogRespSeq
-	st := &dialogResp{}
-	dialogRespStates[token] = st
-	dialogRespMu.Unlock()
-	defer func() {
-		dialogRespMu.Lock()
-		delete(dialogRespStates, token)
-		dialogRespMu.Unlock()
-	}()
-
-	gSignalConnectData(dlg, "response", dialogResponseFn, token, 0, 0)
-	gtkNativeDialogSetModal(dlg, true)
-	gtkNativeDialogShow(dlg)
-	for {
-		dialogRespMu.Lock()
-		done := st.done
-		dialogRespMu.Unlock()
-		if done {
-			break
-		}
-		gMainContextIteration(0, true)
-	}
-	gtkNativeDialogHide(dlg)
-	return st.response
-}
+// connectDialogCallback is a no-op stub. gtk_native_dialog_run handles the
+// modal loop internally; no signal wiring needed.
+func connectDialogCallback() {}
