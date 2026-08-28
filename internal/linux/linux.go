@@ -700,7 +700,7 @@ func (p *gtk) windowInit(window uintptr) error {
 		messageHandlerFn, p.id, 0, 0)
 	p.registerScriptHandlerFn(p, p.manager, "webviewBridge")
 
-	if hasDownloadSupport {
+	if hasDownloadSupport || hasPolicyDownload {
 		gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
 	}
 
