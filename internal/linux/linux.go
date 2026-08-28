@@ -1226,13 +1226,15 @@ func downloadDecidePolicyFn() uintptr {
 		if name == "" {
 			name = basenameOf(uri)
 		}
-		go func(url, suggested string) {
-			path, ok := p.showSaveDialog(suggested)
-			if !ok || path == "" {
-				return
-			}
-			fetchAndSave(url, path)
-		}(uri, name)
+		fmt.Fprintf(os.Stderr, "webview: decide-policy self-fetch download uri=%q name=%q\n", uri, name)
+		path, ok := p.showSaveDialog(name)
+		if !ok || path == "" {
+			fmt.Fprintf(os.Stderr, "webview: download cancelled or empty path\n")
+			webkitPolicyDecisionIgnore(decision)
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "webview: download saving to %q\n", path)
+		go fetchAndSave(uri, path)
 		webkitPolicyDecisionIgnore(decision)
 		return 0
 	})
