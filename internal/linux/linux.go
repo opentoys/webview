@@ -4,7 +4,6 @@
 //
 // stack: GTK4 + webkitgtk-6.0
 
-
 package linux
 
 import (
@@ -43,9 +42,9 @@ type MenuItem = types.MenuItem
 const (
 	gtkWindowToplevel = 0
 
-	gPriorityHighIdle   = 100
-	gPriorityInIdle     = -100
-	gSourceRemove       = 0
+	gPriorityHighIdle = 100
+	gPriorityInIdle   = -100
+	gSourceRemove     = 0
 
 	injectTopFrame        = 1 // WEBKIT_USER_CONTENT_INJECT_TOP_FRAME
 	injectAtDocumentStart = 0 // WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START
@@ -62,7 +61,7 @@ const (
 
 	// GTK box orientation (gtk_box_new).
 	gtkOrientationVertical = 1 // GTK_ORIENTATION_VERTICAL
-	gSignalActivate = "activate"
+	gSignalActivate        = "activate"
 )
 
 // gdkGeometry mirrors the C GdkGeometry struct.
@@ -88,40 +87,49 @@ var (
 	gSignalConnectData               func(instance uintptr, signal string, handler, data, destroy uintptr, flags int) uint64
 	gSignalHandlersDisconnectMatched func(instance uintptr, mask int, signalID, detail uint32, closure, fn, data uintptr) uint32
 
-	gtkInitCheck4             func() bool
-	gtkWindowNew4             func() uintptr
-	gtkWindowSetChild         func(window, widget uintptr)
-	gtkWidgetSetVisible       func(widget uintptr, visible bool)
-	gtkWidgetSetHExpand       func(widget uintptr, expand bool)
-	gtkWidgetSetVExpand       func(widget uintptr, expand bool)
-	gtkWindowSetTitle         func(window uintptr, title string)
-	gtkWindowSetResizable     func(window uintptr, resizable bool)
-	gtkWindowSetDefaultSize   func(window uintptr, w, h int)
-	gtkWidgetGrabFocus        func(widget uintptr)
-	gtkWindowPresent          func(window uintptr)
-	gtkWindowClose            func(window uintptr)
+	gtkInitCheck4           func() bool
+	gtkWindowNew4           func() uintptr
+	gtkWindowSetChild       func(window, widget uintptr)
+	gtkWidgetSetVisible     func(widget uintptr, visible bool)
+	gtkWidgetSetHExpand     func(widget uintptr, expand bool)
+	gtkWidgetSetVExpand     func(widget uintptr, expand bool)
+	gtkWindowSetTitle       func(window uintptr, title string)
+	gtkWindowSetResizable   func(window uintptr, resizable bool)
+	gtkWindowSetDefaultSize func(window uintptr, w, h int)
+	gtkWidgetGrabFocus      func(widget uintptr)
+	gtkWindowPresent        func(window uintptr)
+	gtkWindowClose          func(window uintptr)
 	// GTK file chooser (native save dialog for downloads).
-	gtkFileChooserNativeNew  func(title string, parent uintptr, action int, accept, cancel string) uintptr
-	gtkNativeDialogShow      func(dialog uintptr)
-	gtkNativeDialogHide      func(dialog uintptr)
-	gtkNativeDialogSetModal  func(dialog uintptr, modal bool)
-	gtkNativeDialogRun       func(dialog uintptr) int
+	gtkFileChooserNativeNew      func(title string, parent uintptr, action int, accept, cancel string) uintptr
+	gtkNativeDialogShow          func(dialog uintptr)
+	gtkNativeDialogHide          func(dialog uintptr)
+	gtkNativeDialogSetModal      func(dialog uintptr, modal bool)
+	gtkNativeDialogRun           func(dialog uintptr) int
 	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
-	gtkFileChooserGetFile    func(chooser uintptr) uintptr // GFile*
-	gFileGetPath             func(file uintptr) uintptr     // char*
-	gtkBoxNew                func(orientation int, spacing int) uintptr
-	gtkBoxAppend             func(box, child uintptr)
-	gtkWidgetInsertActionGroup func(widget uintptr, groupName string, group uintptr)
+	gtkFileChooserGetFile        func(chooser uintptr) uintptr // GFile*
+	gFileGetPath                 func(file uintptr) uintptr    // char*
+	gtkBoxNew                    func(orientation int, spacing int) uintptr
+	gtkBoxAppend                 func(box, child uintptr)
+	gtkWidgetInsertActionGroup   func(widget uintptr, groupName string, group uintptr)
 
 	// GMenu / GAction for GTK4 menubar.
-	gMenuNew                func() uintptr
-	gMenuAppend             func(menu uintptr, label, detailedAction string)
-	gMenuAppendSubmenu      func(menu uintptr, label string, submenu uintptr)
-	gMenuAppendSection      func(menu uintptr, label string, section uintptr)
-	gSimpleActionNew        func(name string, parameterType uintptr) uintptr
-	gSimpleActionGroupNew   func() uintptr
-	gSimpleActionGroupInsert func(group, action uintptr)
+	gMenuNew                      func() uintptr
+	gMenuAppend                   func(menu uintptr, label, detailedAction string)
+	gMenuAppendSubmenu            func(menu uintptr, label string, submenu uintptr)
+	gMenuAppendSection            func(menu uintptr, label string, section uintptr)
+	gSimpleActionNew              func(name string, parameterType uintptr) uintptr
+	gSimpleActionGroupNew         func() uintptr
+	gSimpleActionGroupInsert      func(group, action uintptr)
 	gtkPopoverMenuBarNewFromModel func(model uintptr) uintptr
+
+	// GTK4 CSS API for menubar border removal.
+	gtkWidgetSetCssClasses       func(widget uintptr, classes uintptr) // GStrv (const char**)
+	gtkCssProviderNew            func() uintptr
+	gtkCssProviderLoadFromData   func(provider uintptr, data uintptr, length int64, err uintptr) bool
+	gtkStyleContextAddClass      func(context uintptr, class_name uintptr)
+	gtkWidgetGetStyleContext     func(widget uintptr) uintptr
+	g_object_unref               func(obj uintptr)
+	g_strfreev                   func(strv uintptr)
 
 	// WebKitGTK URI request header accessor + libsoup foreach (set in
 	// registerSchemes; libsoup 2 vs 3 differ in foreach callback signature).
@@ -154,13 +162,13 @@ var (
 	// signal (which already hands us the suggested filename). The older
 	// response-policy-decision helpers are not exported on every WebKit2GTK
 	// build, so we avoid them.
-	webkitWebViewGetContext                    func(webview uintptr) uintptr
-	webkitNetworkSessionGetDefault             func() uintptr
-	webkitResponsePolicyDecisionGetResponse    func(decision uintptr) uintptr
-	webkitURIResponseGetSuggestedFilename      func(resp uintptr) uintptr
-	webkitURIResponseGetURI                    func(resp uintptr) uintptr
-	webkitPolicyDecisionIgnore                 func(decision uintptr)
-	haveEvaluateJavascript          bool
+	webkitWebViewGetContext                 func(webview uintptr) uintptr
+	webkitNetworkSessionGetDefault          func() uintptr
+	webkitResponsePolicyDecisionGetResponse func(decision uintptr) uintptr
+	webkitURIResponseGetSuggestedFilename   func(resp uintptr) uintptr
+	webkitURIResponseGetURI                 func(resp uintptr) uintptr
+	webkitPolicyDecisionIgnore              func(decision uintptr)
+	haveEvaluateJavascript                  bool
 
 	jscValueToString func(value uintptr) uintptr
 )
@@ -571,7 +579,7 @@ func (p *gtk) Close() error {
 }
 
 var menuCustomCBMu sync.Mutex
-var menuCustomCBMap = map[uintptr]func() {}
+var menuCustomCBMap = map[uintptr]func(){}
 
 // soup3 is true when the loaded WebKitGTK links libsoup 3.
 // webkitgtk-6.0); false for libsoup 2 (webkit2gtk-4.0). The two differ in the
@@ -899,36 +907,36 @@ func (p *gtk) registerSchemes() error {
 		return fmt.Errorf("webview: register schemes: load webkit: %w", err)
 	}
 
-		// Detect libsoup version (2 vs 3) by probing the already-loaded soup
-		// library without loading a new one (RTLD_NOLOAD = 0x4).
-		const rtldNoLoad = 0x4
-		var soupLib uintptr
-		if h, e := purego.Dlopen("libsoup-3.0.so.0", rtldNoLoad); e == nil {
-			soup3 = true
-			soupLib = h
-		} else if h, e := purego.Dlopen("libsoup-2.4.so.1", rtldNoLoad); e == nil {
-			soup3 = false
-			soupLib = h
-		}
-		if soupLib != 0 {
-			purego.RegisterLibFunc(&soupMessageHeadersForeach, soupLib, "soup_message_headers_foreach")
-			// libsoup3 callback: (name, value, user_data).
-			// libsoup2 callback: (hdrs, name, value, user_data).
-			soupForeachCB = purego.NewCallback(func(a, b, c, d uintptr) uintptr {
-				var name, value uintptr
-				if soup3 {
-					name, value = a, b
-				} else {
-					name, value = b, c
-				}
-				h := (*http.Header)(unsafe.Pointer(d))
-				n := cstr(name)
-				if n != "" {
-					h.Add(n, cstr(value))
-				}
-				return 0
-			})
-		}
+	// Detect libsoup version (2 vs 3) by probing the already-loaded soup
+	// library without loading a new one (RTLD_NOLOAD = 0x4).
+	const rtldNoLoad = 0x4
+	var soupLib uintptr
+	if h, e := purego.Dlopen("libsoup-3.0.so.0", rtldNoLoad); e == nil {
+		soup3 = true
+		soupLib = h
+	} else if h, e := purego.Dlopen("libsoup-2.4.so.1", rtldNoLoad); e == nil {
+		soup3 = false
+		soupLib = h
+	}
+	if soupLib != 0 {
+		purego.RegisterLibFunc(&soupMessageHeadersForeach, soupLib, "soup_message_headers_foreach")
+		// libsoup3 callback: (name, value, user_data).
+		// libsoup2 callback: (hdrs, name, value, user_data).
+		soupForeachCB = purego.NewCallback(func(a, b, c, d uintptr) uintptr {
+			var name, value uintptr
+			if soup3 {
+				name, value = a, b
+			} else {
+				name, value = b, c
+			}
+			h := (*http.Header)(unsafe.Pointer(d))
+			n := cstr(name)
+			if n != "" {
+				h.Add(n, cstr(value))
+			}
+			return 0
+		})
+	}
 
 	var (
 		getContext               func(uintptr) uintptr
@@ -957,7 +965,7 @@ func (p *gtk) registerSchemes() error {
 	purego.RegisterLibFunc(&requestGetScheme, webkit, "webkit_uri_scheme_request_get_scheme")
 	purego.RegisterLibFunc(&requestGetHTTPMethod, webkit, "webkit_uri_scheme_request_get_http_method")
 	purego.RegisterLibFunc(&requestGetHTTPBody, webkit, "webkit_uri_scheme_request_get_http_body")
-		purego.RegisterLibFunc(&requestGetHTTPHeaders, webkit, "webkit_uri_scheme_request_get_http_headers")
+	purego.RegisterLibFunc(&requestGetHTTPHeaders, webkit, "webkit_uri_scheme_request_get_http_headers")
 	purego.RegisterLibFunc(&schemeRequestFinish, webkit, "webkit_uri_scheme_request_finish")
 	purego.RegisterLibFunc(&schemeRequestFinishError, webkit, "webkit_uri_scheme_request_finish_error")
 	purego.RegisterLibFunc(&memInputStreamNew, gio, "g_memory_input_stream_new_from_data")
@@ -1109,7 +1117,6 @@ func marshalJSON(msg string) string {
 	data, _ := json.Marshal(msg)
 	return string(data)
 }
-
 
 // --- download interception (native save dialog) ------------------------------
 
@@ -1358,9 +1365,9 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 }
 
 var (
-	dialogRespMu      sync.Mutex
-	dialogRespSeq     int
-	dialogRespStates  = map[int]*dialogResp{}
+	dialogRespMu     sync.Mutex
+	dialogRespSeq    int
+	dialogRespStates = map[int]*dialogResp{}
 )
 
 type dialogResp struct {

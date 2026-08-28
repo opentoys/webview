@@ -3,6 +3,7 @@ package linux
 import (
 	"strconv"
 	"sync"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 )
@@ -38,6 +39,11 @@ func newgtk4symbols() {
 	purego.RegisterLibFunc(&gtkBoxAppend, gtk, "gtk_box_append")
 	purego.RegisterLibFunc(&gtkWidgetInsertActionGroup, gtk, "gtk_widget_insert_action_group")
 	purego.RegisterLibFunc(&gtkPopoverMenuBarNewFromModel, gtk, "gtk_popover_menu_bar_new_from_model")
+	purego.RegisterLibFunc(&gtkWidgetSetCssClasses, gtk, "gtk_widget_set_css_classes")
+	purego.RegisterLibFunc(&gtkCssProviderNew, gtk, "gtk_css_provider_new")
+	purego.RegisterLibFunc(&gtkCssProviderLoadFromData, gtk, "gtk_css_provider_load_from_data")
+	purego.RegisterLibFunc(&gtkStyleContextAddClass, gtk, "gtk_style_context_add_class")
+	purego.RegisterLibFunc(&gtkWidgetGetStyleContext, gtk, "gtk_widget_get_style_context")
 	purego.RegisterLibFunc(&webkitRegisterHandler3, libWebKit, "webkit_user_content_manager_register_script_message_handler")
 }
 
@@ -89,6 +95,7 @@ func pgtk4ShowWindow(p *gtk) {
 	box := gtkBoxNew(gtkOrientationVertical, 0)
 	if p.menuBar != 0 {
 		gtkBoxAppend(box, p.menuBar)
+		removeMenubarBorder(p.menuBar)
 	}
 	// gtk_box_append defaults to no expansion, so the webview collapses to its
 	// minimum size (white screen). Force it to fill the window.
@@ -152,6 +159,31 @@ func gtk4MenuActivateFn() uintptr {
 	})
 	return gtk4MenuActivate
 }
+
+// removeMenubarBorder applies a CSS provider that removes the black border
+// around GtkPopoverMenuBar submenu popovers.
+func removeMenubarBorder(menuBar uintptr) {
+	css := []byte("GtkPopoverMenuBar { border-width: 0; background: transparent; }\x00")
+	provider := gtkCssProviderNew()
+	var gerr uintptr
+	gtkCssProviderLoadFromData(provider, uintptr(unsafe.Pointer(&css[0])), int64(len(css)-1), gerr)
+	if gerr != 0 {
+		g_object_unref(provider)
+		return
+	}
+	ctx := gtkWidgetGetStyleContext(menuBar)
+	gtkStyleContextAddClass(ctx, menuBarClassNamePtr())
+	g_object_unref(provider)
+}
+
+func menuBarClassNamePtr() uintptr {
+	if menuBarClassName == "" {
+		menuBarClassName = "menu-bar\x00"
+	}
+	return *(*uintptr)(unsafe.Pointer(&menuBarClassName))
+}
+
+var menuBarClassName string
 
 var (
 	gtk4MenuActionMu sync.Mutex
