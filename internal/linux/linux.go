@@ -117,7 +117,6 @@ var (
 	gMenuAppend                   func(menu uintptr, label, detailedAction string)
 	gMenuAppendSubmenu            func(menu uintptr, label string, submenu uintptr)
 	gMenuAppendSection            func(menu uintptr, label string, section uintptr)
-	g_type_check_instance_is_a    func(instance, g_type uintptr) bool
 	gSimpleActionNew              func(name string, parameterType uintptr) uintptr
 	gSimpleActionGroupNew         func() uintptr
 	gSimpleActionGroupInsert      func(group, action uintptr)
@@ -170,10 +169,6 @@ var (
 	webkitURIResponseGetURI                 func(resp uintptr) uintptr
 	webkitPolicyDecisionIgnore              func(decision uintptr)
 	haveEvaluateJavascript                  bool
-
-	g_type_from_name             func(name uintptr) uintptr
-	malloc_glib                  func(n uintptr) uintptr
-	free_glib                    func(p uintptr)
 
 	jscValueToString func(value uintptr) uintptr
 )
@@ -273,12 +268,6 @@ func ensureInit() error {
 
 		registerShared(glib, gobject, gio, webkit, jsc, gtk)
 
-		// Look up WebKitResponsePolicyDecision GType for safe decision checking.
-		ctypename := cstringAlloc("WebKitResponsePolicyDecision")
-		gtypeWebKitResponsePolicyDecision = g_type_from_name(ctypename)
-		free_glib(ctypename)
-		fmt.Fprintf(os.Stderr, "webview: WebKitResponsePolicyDecision gtype=%x\n", gtypeWebKitResponsePolicyDecision)
-
 		newgtk4symbols()
 
 		connectDownloadCallbacks()
@@ -326,7 +315,6 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gMenuAppend, gio, "g_menu_append")
 	purego.RegisterLibFunc(&gMenuAppendSubmenu, gio, "g_menu_append_submenu")
 	purego.RegisterLibFunc(&gMenuAppendSection, gio, "g_menu_append_section")
-	purego.RegisterLibFunc(&g_type_check_instance_is_a, gobject, "g_type_check_instance_is_a")
 	purego.RegisterLibFunc(&gSimpleActionNew, gio, "g_simple_action_new")
 	purego.RegisterLibFunc(&gSimpleActionGroupNew, gio, "g_simple_action_group_new")
 	purego.RegisterLibFunc(&gSimpleActionGroupInsert, gio, "g_simple_action_group_insert")
@@ -335,9 +323,6 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gObjectUnref, gobject, "g_object_unref")
 	purego.RegisterLibFunc(&gSignalConnectData, gobject, "g_signal_connect_data")
 	purego.RegisterLibFunc(&gSignalHandlersDisconnectMatched, gobject, "g_signal_handlers_disconnect_matched")
-	purego.RegisterLibFunc(&g_type_from_name, gobject, "g_type_from_name")
-	purego.RegisterLibFunc(&malloc_glib, glib, "g_malloc")
-	purego.RegisterLibFunc(&free_glib, glib, "g_free")
 
 	// GTK shared symbols.
 	purego.RegisterLibFunc(&gtkWindowSetTitle, gtk, "gtk_window_set_title")
@@ -385,14 +370,6 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 		purego.RegisterLibFunc(&webkitWebViewRunJavascript, webkit, "webkit_web_view_run_javascript")
 	}
 
-}
-
-// cstringAlloc allocates a null-terminated copy of s on the GLib heap.
-// Free with free_glib.
-func cstringAlloc(s string) uintptr {
-	b := make([]byte, len(s)+1)
-	copy(b, s)
-	return malloc_glib(uintptr(len(b)))
 }
 
 func cstr(p uintptr) string {
@@ -662,11 +639,13 @@ func (p *gtk) windowInit(window uintptr) error {
 		messageHandlerFn, p.id, 0, 0)
 	p.registerScriptHandlerFn(p, p.manager, "webviewBridge")
 
-	// Always connect decide-policy and download-started. decide-policy may
-	// catch response-type downloads; download-started is the canonical entry
-	// point on modern WebKitGTK builds (catches navigation-type <a download>).
+	// Connect download-started on the network session — this is the canonical
+	// entry point for all downloads on modern WebKitGTK builds (catches both
+	// navigation-type <a download> and response-type downloads). We do NOT use
+	// decide-policy: it fires for every navigation request and calling
+	// get_response() on a WebKitNavigationPolicyDecision crashes with a GLib
+	// assertion. download-started only fires for actual downloads.
 	fmt.Fprintf(os.Stderr, "webview: connect download hooks\n")
-	gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
 	if webkitNetworkSessionGetDefault != nil {
 		session := webkitNetworkSessionGetDefault()
 		fmt.Fprintf(os.Stderr, "webview: download session=%x\n", session)
@@ -1148,54 +1127,16 @@ func marshalJSON(msg string) string {
 // either (a) hand it to WebKit's native download API, or (b) on stripped builds
 // that lack that API, intercept the response, show our native save dialog, and
 // fetch the file ourselves. Otherwise we let WebKit handle navigation as usual.
+// downloadDecidePolicyFn is no longer connected. Downloads are handled
+// exclusively via the network-session "download-started" signal, which only
+// fires for actual downloads and avoids the GLib assertion crash that
+// decide-policy triggers on WebKitNavigationPolicyDecision objects.
+// Kept as a no-op to avoid breaking connectDownloadCallbacks().
 func downloadDecidePolicyFn() uintptr {
 	if downloadDecidePolicy != 0 {
 		return downloadDecidePolicy
 	}
 	downloadDecidePolicy = purego.NewCallback(func(webview, decision, decisionType, userData uintptr) uintptr {
-		// Guard against nil or wrong-type decisions. Even when decisionType
-		// matches our constant, some WebKitGTK builds send mismatched types,
-		// so we verify via GType before calling get_response().
-		if decision == 0 {
-			return 0
-		}
-		if decisionType != webkitPolicyDecisionTypeResponse {
-			return 0
-		}
-		if gtypeWebKitResponsePolicyDecision != 0 &&
-			!g_type_check_instance_is_a(decision, gtypeWebKitResponsePolicyDecision) {
-			return 0
-		}
-		resp := webkitResponsePolicyDecisionGetResponse(decision)
-		// Some WebKitGTK builds return NULL for non-download responses even
-		// when decisionType == Response. Treat that as "not a download".
-		if resp == 0 {
-			return 0
-		}
-		uri := cstr(webkitURIResponseGetURI(resp))
-		p := lookupPlatform(userData)
-		if p == nil {
-			webkitPolicyDecisionIgnore(decision)
-			return 0
-		}
-		// Self-fetch path: detect downloads by suggested filename.
-		if !isDownloadResponse(resp, uri) {
-			return 0
-		}
-		name := cstr(webkitURIResponseGetSuggestedFilename(resp))
-		if name == "" {
-			name = basenameOf(uri)
-		}
-		fmt.Fprintf(os.Stderr, "webview: decide-policy self-fetch uri=%q name=%q\n", uri, name)
-		path, ok := p.showSaveDialog(name)
-		if !ok || path == "" {
-			fmt.Fprintf(os.Stderr, "webview: download cancelled\n")
-			webkitPolicyDecisionIgnore(decision)
-			return 0
-		}
-		fmt.Fprintf(os.Stderr, "webview: self-fetch saving to %q\n", path)
-		go fetchAndSave(uri, path)
-		webkitPolicyDecisionIgnore(decision)
 		return 0
 	})
 	return downloadDecidePolicy
@@ -1368,8 +1309,6 @@ const (
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
 )
-
-var gtypeWebKitResponsePolicyDecision uintptr // set at init via g_type_from_name
 
 // showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
 // thread and returns the chosen path. The second result is false when the user
