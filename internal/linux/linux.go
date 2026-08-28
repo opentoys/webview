@@ -1130,13 +1130,11 @@ func downloadDecidePolicyFn() uintptr {
 		return downloadDecidePolicy
 	}
 	downloadDecidePolicy = purego.NewCallback(func(webview, decision, decisionType, userData uintptr) uintptr {
-		// On some WebKitGTK builds, <a download> fires a navigation decision
-		// (type=0) which is a WebKitNavigationPolicyDecision, not a
-		// WebKitResponsePolicyDecision. Calling get_response() on it triggers
-		// a GLib assertion crash. Skip those — they are handled by the
-		// download-started session signal instead.
-		if decisionType != webkitPolicyDecisionTypeResponse {
-			return 0 // handled by download-started; let WebKit decide
+		// Only handle response-type decisions (type=2). Navigation decisions
+		// (type=0) are for regular page loads and must not touch the decision.
+		// A nil decision or wrong type → let WebKit decide.
+		if decision == 0 || decisionType != webkitPolicyDecisionTypeResponse {
+			return 0
 		}
 		resp := webkitResponsePolicyDecisionGetResponse(decision)
 		if resp == 0 {
@@ -1306,6 +1304,11 @@ func downloadStartedFn() uintptr {
 		return downloadStartedVar
 	}
 	downloadStartedVar = purego.NewCallback(func(session, download, userData uintptr) uintptr {
+		// Guard against nil download (can happen on non-download navigation).
+		if download == 0 {
+			fmt.Fprintf(os.Stderr, "webview: download-started nil download, skip\n")
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "webview: download-started download=%x\n", download)
 		gObjectRef(download)
 		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
