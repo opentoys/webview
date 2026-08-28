@@ -166,23 +166,22 @@ func gtk4MenuActivateFn() uintptr {
 	return gtk4MenuActivate
 }
 
-// applyMenubarBorderFix injects a CSS provider at the display level to remove the
-// black border around popover menus. On non-composited environments (e.g. VMware
-// without 3D acceleration) GtkPopover renders with a solid border; this matches
-// Brave's Linux fix: only inject when gdk_display_is_composited() is false.
+// applyMenubarBorderFix injects a global CSS provider that unconditionally
+// removes the shadow/border around all popovers (including the menu bar
+// submenu popovers). Forced on for all environments.
 func applyMenubarBorderFix() {
-	if gdkDisplayGetDefault == nil || gdkDisplayIsComposited == nil {
+	if gdkDisplayGetDefault == nil {
 		return
 	}
 	display := gdkDisplayGetDefault()
 	if display == 0 {
 		return
 	}
-	if gdkDisplayIsComposited(display) {
-		// Compositor present — native rendering is fine, no fix needed.
-		return
-	}
-	css := []byte("popover contents {" +
+	css := []byte("popover {" +
+		"  box-shadow: none;" +
+		"  border: none;" +
+	"}" +
+		"popover contents {" +
 		"  border-radius: 0;" +
 		"  box-shadow: none;" +
 		"}" +
@@ -199,7 +198,7 @@ func applyMenubarBorderFix() {
 	}
 	gtkStyleContextAddProviderForDisplay(display, provider, gtkStyleProviderPriorityApplication)
 	gObjectUnref(provider)
-	fmt.Fprintf(os.Stderr, "webview: applied non-composited popover border fix\n")
+	fmt.Fprintf(os.Stderr, "webview: applied popover shadow removal\n")
 }
 
 var (
