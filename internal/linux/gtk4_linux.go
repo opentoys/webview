@@ -168,12 +168,12 @@ func removeMenubarBorder(menuBar uintptr) {
 	var gerr uintptr
 	gtkCssProviderLoadFromData(provider, uintptr(unsafe.Pointer(&css[0])), int64(len(css)-1), gerr)
 	if gerr != 0 {
-		g_object_unref(provider)
+		gObjectUnref(provider)
 		return
 	}
 	ctx := gtkWidgetGetStyleContext(menuBar)
 	gtkStyleContextAddClass(ctx, menuBarClassNamePtr())
-	g_object_unref(provider)
+	gObjectUnref(provider)
 }
 
 func menuBarClassNamePtr() uintptr {
