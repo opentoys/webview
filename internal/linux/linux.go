@@ -673,6 +673,7 @@ func (p *gtk) windowInit(window uintptr) error {
 	p.registerScriptHandlerFn(p, p.manager, "webviewBridge")
 
 	if hasDownloadSupport || hasPolicyDownload {
+		fmt.Fprintf(os.Stderr, "webview: connect download hooks: hasDownload=%v hasPolicy=%v\n", hasDownloadSupport, hasPolicyDownload)
 		gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
 		// Connect to the network-session download-started signal for native
 		// WebKit downloads (GTK4 path). GTK4's decide-policy returns a
@@ -680,8 +681,10 @@ func (p *gtk) windowInit(window uintptr) error {
 		// canonical entry point on webkitgtk-6.0.
 		if hasDownloadSupport && webkitNetworkSessionGetDefault != nil {
 			session := webkitNetworkSessionGetDefault()
+			fmt.Fprintf(os.Stderr, "webview: download session=%x\n", session)
 			if session != 0 {
 				gSignalConnectData(session, "download-started", downloadStartedFn(), p.id, 0, 0)
+				fmt.Fprintf(os.Stderr, "webview: connected download-started on session\n")
 			}
 		}
 	}
@@ -1164,11 +1167,14 @@ func downloadDecidePolicyFn() uintptr {
 		return downloadDecidePolicy
 	}
 	downloadDecidePolicy = purego.NewCallback(func(webview, decision, decisionType, userData uintptr) uintptr {
+		fmt.Fprintf(os.Stderr, "webview: decide-policy type=%d\n", decisionType)
 		if decisionType != webkitPolicyDecisionTypeResponse {
+			fmt.Fprintf(os.Stderr, "webview: decide-policy skip (type=%d)\n", decisionType)
 			return 0 // not our call; let WebKit decide
 		}
 		resp := webkitResponsePolicyDecisionGetResponse(decision)
 		if resp == 0 {
+			fmt.Fprintf(os.Stderr, "webview: decide-policy no response\n")
 			return 0 // not a response decision
 		}
 		uri := cstr(webkitURIResponseGetURI(resp))
@@ -1271,17 +1277,21 @@ func downloadDecideDestFn() uintptr {
 		return downloadDecideDest
 	}
 	downloadDecideDest = purego.NewCallback(func(download, suggested, userData uintptr) uintptr {
+		fmt.Fprintf(os.Stderr, "webview: decide-destination download=%x suggested=%x\n", download, suggested)
 		name := "download"
 		if suggested != 0 {
 			if n := cstr(suggested); n != "" {
 				name = n
 			}
 		}
+		fmt.Fprintf(os.Stderr, "webview: decide-destination name=%q\n", name)
 		p := lookupPlatform(userData)
 		if p == nil {
+			fmt.Fprintf(os.Stderr, "webview: decide-destination lookupPlatform nil\n")
 			webkitDownloadCancel(download)
 			return 1 // TRUE: we handled the destination (cancel), stop default
 		}
+		fmt.Fprintf(os.Stderr, "webview: calling showSaveDialog(%q)\n", name)
 		path, ok := p.showSaveDialog(name)
 		if !ok || path == "" {
 			webkitDownloadCancel(download)
@@ -1334,6 +1344,7 @@ func downloadStartedFn() uintptr {
 		return downloadStartedVar
 	}
 	downloadStartedVar = purego.NewCallback(func(session, download, userData uintptr) uintptr {
+		fmt.Fprintf(os.Stderr, "webview: download-started download=%x\n", download)
 		gObjectRef(download)
 		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
 		gSignalConnectData(download, "finished", downloadFinishedFn(), download, 0, 0)
