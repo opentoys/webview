@@ -123,13 +123,15 @@ var (
 	gtkPopoverMenuBarNewFromModel func(model uintptr) uintptr
 
 	// GTK4 CSS API for menubar border removal.
-	gtkWidgetSetCssClasses       func(widget uintptr, classes uintptr) // GStrv (const char**)
 	gtkCssProviderNew            func() uintptr
 	gtkCssProviderLoadFromData   func(provider uintptr, data uintptr, length int64, err uintptr) bool
 	gtkStyleContextAddClass      func(context uintptr, class_name uintptr)
 	gtkWidgetGetStyleContext     func(widget uintptr) uintptr
-	g_object_unref               func(obj uintptr)
-	g_strfreev                   func(strv uintptr)
+	// GDK display + style provider (for compositor-aware border fix).
+	gdkDisplayGetDefault                    func() uintptr
+	gdkDisplayIsComposited                  func(display uintptr) bool
+	gtkStyleContextAddProviderForDisplay    func(display, provider uintptr, priority int)
+	gtkStyleProviderPriorityApplication      int = 600 // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
 
 	// WebKitGTK URI request header accessor + libsoup foreach (set in
 	// registerSchemes; libsoup 2 vs 3 differ in foreach callback signature).
@@ -191,6 +193,7 @@ var (
 	libGTK     uintptr
 	libWebKit  uintptr
 	libJSC     uintptr
+	libGDK     uintptr
 
 	gtkLib uintptr // alias kept for existing references
 )
@@ -264,7 +267,7 @@ func ensureInit() error {
 
 		gtkLib = gtk
 		libGLib, libGObject, libGIO = glib, gobject, gio
-		libGTK, libWebKit, libJSC = gtk, webkit, jsc
+		libGTK, libWebKit, libJSC, libGDK = gtk, webkit, jsc, libGDK
 
 		registerShared(glib, gobject, gio, webkit, jsc, gtk)
 
