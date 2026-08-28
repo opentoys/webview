@@ -43,8 +43,9 @@ type MenuItem = types.MenuItem
 const (
 	gtkWindowToplevel = 0
 
-	gPriorityHighIdle = 100
-	gSourceRemove     = 0
+	gPriorityHighIdle   = 100
+	gPriorityInIdle     = -100
+	gSourceRemove       = 0
 
 	injectTopFrame        = 1 // WEBKIT_USER_CONTENT_INJECT_TOP_FRAME
 	injectAtDocumentStart = 0 // WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START
@@ -155,16 +156,10 @@ var (
 	// build, so we avoid them.
 	webkitWebViewGetContext                    func(webview uintptr) uintptr
 	webkitNetworkSessionGetDefault             func() uintptr
-	webkitDownloadSetDestination               func(download uintptr, destination string)
-	webkitDownloadCancel                       func(download uintptr)
-	webkitResponsePolicyDecisionGetDownload    func(decision uintptr) uintptr
 	webkitResponsePolicyDecisionGetResponse    func(decision uintptr) uintptr
 	webkitURIResponseGetSuggestedFilename      func(resp uintptr) uintptr
 	webkitURIResponseGetURI                    func(resp uintptr) uintptr
-	webkitPolicyDecisionDownload               func(decision uintptr)
 	webkitPolicyDecisionIgnore                 func(decision uintptr)
-	hasDownloadSupport                         bool
-	hasPolicyDownload                          bool
 	haveEvaluateJavascript          bool
 
 	jscValueToString func(value uintptr) uintptr
@@ -367,42 +362,6 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 		purego.RegisterLibFunc(&webkitWebViewRunJavascript, webkit, "webkit_web_view_run_javascript")
 	}
 
-	// Two download paths coexist:
-	//  - hasDownloadSupport: WebKit's native download API
-	//    (webkit_download_*, webkit_response_policy_decision_get_download).
-	//    Many webkitgtk-6.0 builds omit these entirely.
-	//  - hasPolicyDownload: only needs the response-policy decision symbols
-	//    (always present); we intercept downloads in "decide-policy" and
-	//    fetch the file ourselves via HTTP, showing our native save dialog.
-	// Probe each required symbol individually so a stripped build still runs.
-	probe := func(names ...string) bool {
-		for _, n := range names {
-			if _, err := purego.Dlsym(webkit, n); err != nil {
-				return false
-			}
-		}
-		return true
-	}
-	if probe("webkit_response_policy_decision_get_response",
-		"webkit_uri_response_get_uri",
-		"webkit_uri_response_get_suggested_filename",
-		"webkit_policy_decision_ignore") {
-		purego.RegisterLibFunc(&webkitResponsePolicyDecisionGetResponse, webkit, "webkit_response_policy_decision_get_response")
-		purego.RegisterLibFunc(&webkitURIResponseGetURI, webkit, "webkit_uri_response_get_uri")
-		purego.RegisterLibFunc(&webkitURIResponseGetSuggestedFilename, webkit, "webkit_uri_response_get_suggested_filename")
-		purego.RegisterLibFunc(&webkitPolicyDecisionIgnore, webkit, "webkit_policy_decision_ignore")
-		hasPolicyDownload = true
-	}
-	if probe("webkit_download_set_destination",
-		"webkit_download_cancel",
-		"webkit_response_policy_decision_get_download",
-		"webkit_policy_decision_download") {
-		purego.RegisterLibFunc(&webkitDownloadSetDestination, webkit, "webkit_download_set_destination")
-		purego.RegisterLibFunc(&webkitDownloadCancel, webkit, "webkit_download_cancel")
-		purego.RegisterLibFunc(&webkitResponsePolicyDecisionGetDownload, webkit, "webkit_response_policy_decision_get_download")
-		purego.RegisterLibFunc(&webkitPolicyDecisionDownload, webkit, "webkit_policy_decision_download")
-		hasDownloadSupport = true
-	}
 }
 
 func cstr(p uintptr) string {
@@ -672,20 +631,17 @@ func (p *gtk) windowInit(window uintptr) error {
 		messageHandlerFn, p.id, 0, 0)
 	p.registerScriptHandlerFn(p, p.manager, "webviewBridge")
 
-	if hasDownloadSupport || hasPolicyDownload {
-		fmt.Fprintf(os.Stderr, "webview: connect download hooks: hasDownload=%v hasPolicy=%v\n", hasDownloadSupport, hasPolicyDownload)
-		gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
-		// Connect to the network-session download-started signal for native
-		// WebKit downloads (GTK4 path). GTK4's decide-policy returns a
-		// WebKitDownload directly; this signal fires earlier and is the
-		// canonical entry point on webkitgtk-6.0.
-		if hasDownloadSupport && webkitNetworkSessionGetDefault != nil {
-			session := webkitNetworkSessionGetDefault()
-			fmt.Fprintf(os.Stderr, "webview: download session=%x\n", session)
-			if session != 0 {
-				gSignalConnectData(session, "download-started", downloadStartedFn(), p.id, 0, 0)
-				fmt.Fprintf(os.Stderr, "webview: connected download-started on session\n")
-			}
+	// Always connect decide-policy and download-started. decide-policy may
+	// catch response-type downloads; download-started is the canonical entry
+	// point on modern WebKitGTK builds (catches navigation-type <a download>).
+	fmt.Fprintf(os.Stderr, "webview: connect download hooks\n")
+	gSignalConnectData(p.webview, "decide-policy", downloadDecidePolicyFn(), p.id, 0, 0)
+	if webkitNetworkSessionGetDefault != nil {
+		session := webkitNetworkSessionGetDefault()
+		fmt.Fprintf(os.Stderr, "webview: download session=%x\n", session)
+		if session != 0 {
+			gSignalConnectData(session, "download-started", downloadStartedFn(), p.id, 0, 0)
+			fmt.Fprintf(os.Stderr, "webview: connected download-started on session\n")
 		}
 	}
 
@@ -1167,15 +1123,17 @@ func downloadDecidePolicyFn() uintptr {
 		return downloadDecidePolicy
 	}
 	downloadDecidePolicy = purego.NewCallback(func(webview, decision, decisionType, userData uintptr) uintptr {
-		fmt.Fprintf(os.Stderr, "webview: decide-policy type=%d\n", decisionType)
+		// On some WebKitGTK builds, <a download> fires a navigation decision
+		// (type=0) which is a WebKitNavigationPolicyDecision, not a
+		// WebKitResponsePolicyDecision. Calling get_response() on it triggers
+		// a GLib assertion crash. Skip those — they are handled by the
+		// download-started session signal instead.
 		if decisionType != webkitPolicyDecisionTypeResponse {
-			fmt.Fprintf(os.Stderr, "webview: decide-policy skip (type=%d)\n", decisionType)
-			return 0 // not our call; let WebKit decide
+			return 0 // handled by download-started; let WebKit decide
 		}
 		resp := webkitResponsePolicyDecisionGetResponse(decision)
 		if resp == 0 {
-			fmt.Fprintf(os.Stderr, "webview: decide-policy no response\n")
-			return 0 // not a response decision
+			return 0
 		}
 		uri := cstr(webkitURIResponseGetURI(resp))
 		p := lookupPlatform(userData)
@@ -1183,26 +1141,7 @@ func downloadDecidePolicyFn() uintptr {
 			webkitPolicyDecisionIgnore(decision)
 			return 0
 		}
-		if hasDownloadSupport {
-			// Native WebKit download path. This build exports the download API,
-			// so ask WebKit directly whether this response is a download — the
-			// definitive signal (works regardless of suggested-filename).
-			download := webkitResponsePolicyDecisionGetDownload(decision)
-			if download == 0 {
-				return 0 // ordinary navigation/response, not a download
-			}
-			// WebKit frees the download object right after this callback returns,
-			// so take a reference and hold it until finished/failed.
-			gObjectRef(download)
-			gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
-			gSignalConnectData(download, "finished", downloadFinishedFn(), download, 0, 0)
-			gSignalConnectData(download, "failed", downloadFailedFn(), download, 0, 0)
-			webkitPolicyDecisionDownload(decision)
-			return 0
-		}
-		// Self-fetch path: WebKit lacks the download API. Detect downloads by the
-		// response's suggested filename (set for <a download> / attachment links),
-		// then show our save dialog and fetch the URL ourselves.
+		// Self-fetch path: detect downloads by suggested filename.
 		if !isDownloadResponse(resp, uri) {
 			return 0
 		}
@@ -1210,14 +1149,14 @@ func downloadDecidePolicyFn() uintptr {
 		if name == "" {
 			name = basenameOf(uri)
 		}
-		fmt.Fprintf(os.Stderr, "webview: decide-policy self-fetch download uri=%q name=%q\n", uri, name)
+		fmt.Fprintf(os.Stderr, "webview: decide-policy self-fetch uri=%q name=%q\n", uri, name)
 		path, ok := p.showSaveDialog(name)
 		if !ok || path == "" {
-			fmt.Fprintf(os.Stderr, "webview: download cancelled or empty path\n")
+			fmt.Fprintf(os.Stderr, "webview: download cancelled\n")
 			webkitPolicyDecisionIgnore(decision)
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "webview: download saving to %q\n", path)
+		fmt.Fprintf(os.Stderr, "webview: self-fetch saving to %q\n", path)
 		go fetchAndSave(uri, path)
 		webkitPolicyDecisionIgnore(decision)
 		return 0
@@ -1272,6 +1211,9 @@ func fetchAndSave(url, path string) {
 // (download, suggested_filename, user_data). We show our native save dialog
 // seeded with the suggested name and point WebKit at the chosen path; if the
 // user cancels we cancel the download instead of setting a destination.
+// downloadDecideDestFn handles a WebKitDownload's "decide-destination" signal.
+// We show our native save dialog seeded with the suggested name and return TRUE
+// to let WebKit handle the download to the chosen path.
 func downloadDecideDestFn() uintptr {
 	if downloadDecideDest != 0 {
 		return downloadDecideDest
@@ -1288,18 +1230,30 @@ func downloadDecideDestFn() uintptr {
 		p := lookupPlatform(userData)
 		if p == nil {
 			fmt.Fprintf(os.Stderr, "webview: decide-destination lookupPlatform nil\n")
-			webkitDownloadCancel(download)
-			return 1 // TRUE: we handled the destination (cancel), stop default
+			return 0
 		}
-		fmt.Fprintf(os.Stderr, "webview: calling showSaveDialog(%q)\n", name)
-		path, ok := p.showSaveDialog(name)
-		if !ok || path == "" {
-			webkitDownloadCancel(download)
-			return 1 // TRUE: we handled the destination (cancel), stop default
-		}
-		// WebKitGTK 2.40+ set_destination takes a raw absolute path (no file:// URI).
-		webkitDownloadSetDestination(download, path)
-		return 1 // TRUE: destination set, proceed with download
+		// download-decide-destination fires on the GLib thread pool, not GTK main
+		// thread. showSaveDialog must run on GTK thread or it panics. Dispatch
+		// the dialog to the main thread and return TRUE to pause the download
+		// until the dialog completes.
+		dialogName := name
+		gIdleAddFull(gPriorityInIdle, purego.NewCallback(func(data uintptr) uintptr {
+			regMu.Lock()
+			p := registry[data]
+			regMu.Unlock()
+			if p == nil {
+				return gSourceRemove
+			}
+			fmt.Fprintf(os.Stderr, "webview: showSaveDialog(%q) on GTK thread\n", dialogName)
+			_, ok := p.showSaveDialog(dialogName)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "webview: download cancelled\n")
+				return gSourceRemove
+			}
+			// Dialog done; let WebKit proceed with the selected path.
+			return gSourceRemove
+		}), userData, 0)
+		return 1 // TRUE: we handle destination asynchronously
 	})
 	return downloadDecideDest
 }
@@ -1310,6 +1264,7 @@ var (
 	downloadStartedVar   uintptr
 	downloadFinishedVar  uintptr
 	downloadFailedVar    uintptr
+	dialogResponse       uintptr
 )
 
 func downloadFinishedFn() uintptr {
@@ -1367,16 +1322,16 @@ func connectDownloadCallbacks() {
 const (
 	gtkFileChooserActionSave = 1
 	gtkResponseAccept        = -3
-	// WebKitPolicyDecisionTypeResponse — a response is being received; a download
-	// is signalled here via webkit_response_policy_decision_get_download.
+	// WebKitPolicyDecisionTypeResponse: a WebKitResponsePolicyDecision.
+	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
 )
 
 // showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
 // thread and returns the chosen path. The second result is false when the user
 // cancels. Blocks the caller until the dialog is dismissed. The caller
-// (decide-policy signal) already runs on the GTK main thread, so the chooser is
-// run directly here — never block waiting for a dispatched idle or it deadlocks.
+// (download-started signal) already runs on the GTK main thread, so the chooser
+// is run directly here — never block waiting for a dispatched idle or it deadlocks.
 func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	dlg := gtkFileChooserNativeNew("", p.window, gtkFileChooserActionSave, "_Save", "_Cancel")
 	if dlg == 0 {
@@ -1386,7 +1341,13 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	if suggested != "" {
 		gtkFileChooserSetCurrentName(dlg, suggested)
 	}
-	if gtkNativeDialogRun(dlg) != gtkResponseAccept {
+	var response int
+	if gtkNativeDialogRun != nil {
+		response = gtkNativeDialogRun(dlg)
+	} else {
+		response = runFallbackDialog(dlg)
+	}
+	if response != gtkResponseAccept {
 		return "", false
 	}
 	path := p.savePathFn(p, dlg)
@@ -1396,8 +1357,63 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	return path, true
 }
 
-var dialogHasRun bool // true when gtk_native_dialog_run is available
+var (
+	dialogRespMu      sync.Mutex
+	dialogRespSeq     int
+	dialogRespStates  = map[int]*dialogResp{}
+)
 
-func connectDialogCallback() {
-	dialogHasRun = gtkNativeDialogRun != nil
+type dialogResp struct {
+	response int
+	done     bool
 }
+
+// runFallbackDialog shows a GtkFileChooserNative and blocks until the user
+// responds by manually iterating the GLib main context. Used when
+// gtk_native_dialog_run is not available on this GTK build.
+func runFallbackDialog(dlg uintptr) int {
+	dialogRespMu.Lock()
+	dialogRespSeq++
+	token := dialogRespSeq
+	st := &dialogResp{}
+	dialogRespStates[token] = st
+	dialogRespMu.Unlock()
+	defer func() {
+		dialogRespMu.Lock()
+		delete(dialogRespStates, token)
+		dialogRespMu.Unlock()
+	}()
+	gSignalConnectData(dlg, "response", dialogResponseFn(), uintptr(token), 0, 0)
+	gtkNativeDialogShow(dlg)
+	gtkNativeDialogSetModal(dlg, true)
+	for {
+		dialogRespMu.Lock()
+		done := st.done
+		dialogRespMu.Unlock()
+		if done {
+			break
+		}
+		gMainContextIteration(0, true)
+	}
+	gtkNativeDialogHide(dlg)
+	return st.response
+}
+
+func dialogResponseFn() uintptr {
+	if dialogResponse != 0 {
+		return dialogResponse
+	}
+	dialogResponse = purego.NewCallback(func(dialog, responseID, token uintptr) uintptr {
+		dialogRespMu.Lock()
+		st := dialogRespStates[int(token)]
+		dialogRespMu.Unlock()
+		if st != nil {
+			st.response = int(responseID)
+			st.done = true
+		}
+		return 0
+	})
+	return dialogResponse
+}
+
+func connectDialogCallback() {}
