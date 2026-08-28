@@ -28,8 +28,8 @@ func newgtk4(p *gtk) error {
 
 func newgtk4symbols() {
 	gtk := libGTK
-	purego.RegisterLibFunc(&gtkInitCheck0, gtk, "gtk_init_check")
-	purego.RegisterLibFunc(&gtkWindowNew0, gtk, "gtk_window_new")
+	purego.RegisterLibFunc(&gtkInitCheck4, gtk, "gtk_init_check")
+	purego.RegisterLibFunc(&gtkWindowNew4, gtk, "gtk_window_new")
 	purego.RegisterLibFunc(&gtkWindowSetChild, gtk, "gtk_window_set_child")
 	purego.RegisterLibFunc(&gtkWidgetSetVisible, gtk, "gtk_widget_set_visible")
 	purego.RegisterLibFunc(&gtkWidgetSetHExpand, gtk, "gtk_widget_set_hexpand")
@@ -42,10 +42,10 @@ func newgtk4symbols() {
 }
 
 func pgtk4CreateWindow(p *gtk) error {
-	if !gtkInitCheck0() {
+	if !gtkInitCheck4() {
 		return errNoDisplay
 	}
-	p.window = gtkWindowNew0()
+	p.window = gtkWindowNew4()
 	return nil
 }
 

@@ -2,7 +2,7 @@
 
 // Linux WebView backend in pure Go via purego's C-function bindings.
 //
-// stack: GTK4 + webkitgtk-6.0 when present, else GTK3 + webkit2gtk-4.1
+// stack: GTK4 + webkitgtk-6.0
 
 
 package linux
@@ -87,46 +87,26 @@ var (
 	gSignalConnectData               func(instance uintptr, signal string, handler, data, destroy uintptr, flags int) uint64
 	gSignalHandlersDisconnectMatched func(instance uintptr, mask int, signalID, detail uint32, closure, fn, data uintptr) uint32
 
-	gtkInitCheck              func(argc, argv uintptr) bool
-	gtkWindowNew              func(typ int) uintptr
+	gtkInitCheck4             func() bool
+	gtkWindowNew4             func() uintptr
+	gtkWindowSetChild         func(window, widget uintptr)
+	gtkWidgetSetVisible       func(widget uintptr, visible bool)
+	gtkWidgetSetHExpand       func(widget uintptr, expand bool)
+	gtkWidgetSetVExpand       func(widget uintptr, expand bool)
 	gtkWindowSetTitle         func(window uintptr, title string)
 	gtkWindowSetResizable     func(window uintptr, resizable bool)
-	gtkWindowResize           func(window uintptr, w, h int)
-	gtkWidgetSetSizeRequest   func(widget uintptr, w, h int)
-	gtkWindowSetGeometryHints func(window, widget uintptr, geom *gdkGeometry, mask int)
-	gtkContainerAdd           func(container, widget uintptr)
-	gtkContainerRemove        func(container, widget uintptr)
-	gtkWidgetShow             func(widget uintptr)
-	gtkWidgetShowAll          func(widget uintptr)
-	gtkWidgetQueueDraw        func(widget uintptr)
-	gtkWidgetGetToplevel      func(widget uintptr) uintptr
-	gtkWidgetGetWindow        func(widget uintptr) uintptr
-	gdkWindowProcessUpdates   func(window uintptr, invalidateChildren bool)
-	gtkMenuBarNew             func() uintptr
-	gtkMenuNew                func() uintptr
-	gtkMenuItemNewWithLabel   func(label string) uintptr
-	gtkMenuItemSetSubmenu     func(menuItem, submenu uintptr)
-	gtkMenuShellAppend        func(shell, child uintptr)
-	gtkSeparatorMenuItemNew   func() uintptr
-	gtkAccelGroupNew          func() uintptr
-	gtkWindowAddAccelGroup    func(window, accelGroup uintptr)
-	gtkWidgetAddAccelerator   func(widget uintptr, accelSignal string, accelGroup uintptr, accelKey uint, mods, flags int)
-	gtkVboxNew                func(homogeneous bool, spacing int) uintptr
-	gtkBoxPackStart           func(box, child uintptr, expand, fill int, padding uint)
+	gtkWindowSetDefaultSize   func(window uintptr, w, h int)
 	gtkWidgetGrabFocus        func(widget uintptr)
 	gtkWindowPresent          func(window uintptr)
 	gtkWindowClose            func(window uintptr)
-	gtkWindowSetPosition      func(window uintptr, position int)
-
-	// GTK file chooser (native save dialog for downloads) + GTK4 box packing.
+	// GTK file chooser (native save dialog for downloads).
 	gtkFileChooserNativeNew  func(title string, parent uintptr, action int, accept, cancel string) uintptr
 	gtkNativeDialogShow      func(dialog uintptr)
 	gtkNativeDialogHide      func(dialog uintptr)
 	gtkNativeDialogSetModal  func(dialog uintptr, modal bool)
 	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
-	gtkFileChooserGetFilename func(chooser uintptr) uintptr // char* (GTK3)
-	gtkFileChooserGetFile    func(chooser uintptr) uintptr // GFile* (GTK4)
-	gFileGetPath             func(file uintptr) uintptr     // char* (GTK4)
+	gtkFileChooserGetFile    func(chooser uintptr) uintptr // GFile*
+	gFileGetPath             func(file uintptr) uintptr     // char*
 	gtkBoxNew                func(orientation int, spacing int) uintptr
 	gtkBoxAppend             func(box, child uintptr)
 	gtkWidgetInsertActionGroup func(widget uintptr, groupName string, group uintptr)
@@ -146,16 +126,7 @@ var (
 	requestGetHTTPHeaders     func(uintptr) uintptr
 	soupMessageHeadersForeach func(hdrs, cb, userData uintptr)
 
-	// GTK 4 variants.
-	haveGtk4                bool // true when the loaded GTK stack is GTK4
-	gtkInitCheck0           func() bool
-	gtkWindowNew0           func() uintptr
-	gtkWindowSetChild       func(window, widget uintptr)
-	gtkWidgetSetVisible     func(widget uintptr, visible bool)
-	gtkWidgetSetHExpand     func(widget uintptr, expand bool)
-	gtkWidgetSetVExpand     func(widget uintptr, expand bool)
-	gtkWindowSetDefaultSize func(window uintptr, w, h int)
-	webkitRegisterHandler3  func(manager uintptr, name string, world uintptr)
+	// GTK variants.
 
 	webkitWebViewNew                              func() uintptr
 	webkitWebViewGetUserContentManager            func(webview uintptr) uintptr
@@ -167,11 +138,11 @@ var (
 	webkitWebViewLoadHTML                         func(webview uintptr, html string, baseURI uintptr)
 	webkitWebViewGetURI                           func(webview uintptr) uintptr
 	webkitUserContentManagerRegisterHandler       func(manager uintptr, name string)
+	webkitRegisterHandler3                        func(manager uintptr, name string, world uintptr)
 	webkitUserContentManagerAddScript             func(manager, script uintptr)
 	webkitUserContentManagerRemoveAllScripts      func(manager uintptr)
 	webkitUserScriptNew                           func(source string, frames, time int, allow, block uintptr) uintptr
 	webkitUserScriptUnref                         func(script uintptr)
-	webkitJavascriptResultGetJSValue              func(result uintptr) uintptr
 
 	webkitWebViewEvaluateJavascript func(webview uintptr, script string, length int, world, source, cancellable, callback, userData uintptr)
 	webkitWebViewRunJavascript      func(webview uintptr, script string, cancellable, callback, userData uintptr)
@@ -257,7 +228,6 @@ func ensureInit() error {
 		var gtk, webkit, jsc uintptr
 		wk6, werr := openFirst("libwebkitgtk-6.0.so.4")
 		if werr == nil {
-			haveGtk4 = true
 			webkit = wk6
 			gtk, err = openFirst("libgtk-4.so.1")
 			if err != nil {
@@ -293,11 +263,7 @@ func ensureInit() error {
 
 		registerShared(glib, gobject, gio, webkit, jsc, gtk)
 
-		if haveGtk4 {
-			newgtk4symbols()
-		} else {
-			newgtk3symbols()
-		}
+		newgtk4symbols()
 
 		connectDownloadCallbacks()
 		connectDialogCallback()
@@ -353,7 +319,7 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gSignalConnectData, gobject, "g_signal_connect_data")
 	purego.RegisterLibFunc(&gSignalHandlersDisconnectMatched, gobject, "g_signal_handlers_disconnect_matched")
 
-	// Shared across GTK3 (>=3.20) and GTK4.
+	// GTK shared symbols.
 	purego.RegisterLibFunc(&gtkWindowSetTitle, gtk, "gtk_window_set_title")
 	purego.RegisterLibFunc(&gtkWindowSetDefaultSize, gtk, "gtk_window_set_default_size")
 	purego.RegisterLibFunc(&gtkWindowSetResizable, gtk, "gtk_window_set_resizable")
@@ -487,7 +453,7 @@ func dispatchMain(f func()) {
 // --- Platform --------------------------------------------------------------
 
 // Gtk is the public surface implemented by the shared linux backend (and,
-// via embedding, by the GTK3/GTK4 variants). It mirrors webview.Platform.
+// via embedding, by the GTK variants). It mirrors webview.Platform.
 type Gtk interface {
 	Run() error
 	Close() error
@@ -502,7 +468,7 @@ type Gtk interface {
 	MainThread(f func())
 }
 
-// gtk is the shared Linux GTK/WebKitGTK backend. GTK3 (gtk3_linux.go) and GTK4
+// gtk is the shared Linux GTK/WebKitGTK backend.
 // (gtk4_linux.go) embed it and supply the version-specific hooks through the
 // func fields below, so shared methods call p.xxxFn() and always reach the
 // variant that constructed them (function fields avoid Go's embedding "this is
@@ -519,7 +485,7 @@ type gtk struct {
 	isSizeSet     bool
 	menuBar       uintptr
 
-	// Version-specific hooks, set by the gtk3/gtk4 constructors.
+	// Version-specific hooks, set by the gtk4 constructor.
 	createWindowFn          func(*gtk) error
 	buildMenubarFn          func(*gtk, []Menu)
 	showWindowFn            func(*gtk)
@@ -554,7 +520,7 @@ type gtk struct {
 	hasCustomMenus bool
 }
 
-// New creates a new GTK backend instance. The concrete GTK3/GTK4 variant is
+// New creates a new GTK backend instance.
 // selected in Run() once the libraries are loaded.
 func New() *gtk {
 	return &gtk{
@@ -562,13 +528,10 @@ func New() *gtk {
 	}
 }
 
-// selectBackend picks the GTK3 or GTK4 variant (already resolved by ensureInit)
+// selectBackend wires the GTK variant hooks into this shared backend.
 // and wires its version-specific hooks into this shared backend.
 func (p *gtk) selectBackend() error {
-	if haveGtk4 {
-		return newgtk4(p)
-	}
-	return newgtk3(p)
+	return newgtk4(p)
 }
 
 // Run creates the window and enters the GTK main loop. Blocks until Close is
@@ -642,7 +605,7 @@ func (p *gtk) Close() error {
 var menuCustomCBMu sync.Mutex
 var menuCustomCBMap = map[uintptr]func() {}
 
-// soup3 is true when the loaded WebKitGTK links libsoup 3 (webkit2gtk-4.1 /
+// soup3 is true when the loaded WebKitGTK links libsoup 3.
 // webkitgtk-6.0); false for libsoup 2 (webkit2gtk-4.0). The two differ in the
 // soup_message_headers_foreach callback signature.
 var soup3 bool
@@ -652,7 +615,7 @@ var soup3 bool
 var soupForeachCB uintptr
 
 // applyMenus builds and installs a menu bar from the given Menu slice. The
-// concrete GTK3/GTK4 implementation lives in each backend's buildMenubar.
+// GTK menubar implementation.
 func (p *gtk) applyMenus(menus []Menu) {
 	p.buildMenubarFn(p, menus)
 }
@@ -953,11 +916,7 @@ func (p *gtk) registerSchemes() error {
 		return fmt.Errorf("webview: register schemes: load gio: %w", err)
 	}
 
-	webkitSonames := []string{"libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37"}
-	if haveGtk4 {
-		webkitSonames = []string{"libwebkitgtk-6.0.so.4"}
-	}
-	webkit, err := openFirst(webkitSonames...)
+	webkit, err := openFirst("libwebkitgtk-6.0.so.4")
 	if err != nil {
 		return fmt.Errorf("webview: register schemes: load webkit: %w", err)
 	}
@@ -1419,7 +1378,7 @@ func connectDialogCallback() {
 // runNativeDialog shows a GtkNativeDialog modally and pumps the main loop until
 // the user responds, returning the response id. Replaces the GTK4-removed
 // gtk_native_dialog_run with its underlying mechanism (show + "response" +
-// nested iteration), so it works on both GTK3 and GTK4.
+// nested iteration).
 func runNativeDialog(dlg uintptr) int {
 	dialogRespMu.Lock()
 	dialogRespSeq++
