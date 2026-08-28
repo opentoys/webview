@@ -1208,6 +1208,11 @@ func (p *Platform) setup() error {
 
 	// Inject any user scripts accumulated before Run().
 	p.rebuildScriptsLocked()
+	// Re-inject bootstrap with current bound func names (BootstrapFuncs may
+	// have changed via Bind before Run).
+	if p.BoundFuncs != nil {
+		p.injectBootstrapLocked()
+	}
 
 	config := objc.ID(wkWebViewConfigClass).Send(allocSel)
 	config = config.Send(initSel)
@@ -1388,6 +1393,17 @@ func boundFuncNames() []string {
 		return p.BoundFuncs()
 	}
 	return nil
+}
+
+// injectBootstrapLocked adds a WKUserScript that runs the bridge bootstrap at
+// document start. This mirrors the Linux path where pushUserScript fires on
+// every navigation. Caller must hold p.mu.
+func (p *Platform) injectBootstrapLocked() {
+	src := bootstrapJS(boundFuncNames())
+	if src == "" {
+		return
+	}
+	addWKUserScript(p.ucc, src)
 }
 
 // prependBootstrap inserts the bridge bootstrap (webviewBridge + func stubs) as
