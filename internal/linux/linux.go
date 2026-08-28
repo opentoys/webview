@@ -332,8 +332,13 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gtkNativeDialogShow, gtk, "gtk_native_dialog_show")
 	purego.RegisterLibFunc(&gtkNativeDialogHide, gtk, "gtk_native_dialog_hide")
 	purego.RegisterLibFunc(&gtkNativeDialogSetModal, gtk, "gtk_native_dialog_set_modal")
-	purego.RegisterLibFunc(&gtkNativeDialogRun, gtk, "gtk_native_dialog_run")
 	purego.RegisterLibFunc(&gtkFileChooserSetCurrentName, gtk, "gtk_file_chooser_set_current_name")
+	// gtk_native_dialog_run was added in GTK 3.90 / 4.0; some stripped or older
+	// builds omit it. Probe with Dlsym so we can fall back to the manual nested
+	// iteration path below.
+	if _, err := purego.Dlsym(gtk, "gtk_native_dialog_run"); err == nil {
+		purego.RegisterLibFunc(&gtkNativeDialogRun, gtk, "gtk_native_dialog_run")
+	}
 	purego.RegisterLibFunc(&gtkFileChooserGetFile, gtk, "gtk_file_chooser_get_file")
 	// g_file_get_path lives in libgio (GTK4 save-path result).
 	purego.RegisterLibFunc(&gFileGetPath, gio, "g_file_get_path")
@@ -1380,6 +1385,8 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 	return path, true
 }
 
-// connectDialogCallback is a no-op stub. gtk_native_dialog_run handles the
-// modal loop internally; no signal wiring needed.
-func connectDialogCallback() {}
+var dialogHasRun bool // true when gtk_native_dialog_run is available
+
+func connectDialogCallback() {
+	dialogHasRun = gtkNativeDialogRun != nil
+}
