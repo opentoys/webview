@@ -117,6 +117,7 @@ var (
 	gMenuAppend                   func(menu uintptr, label, detailedAction string)
 	gMenuAppendSubmenu            func(menu uintptr, label string, submenu uintptr)
 	gMenuAppendSection            func(menu uintptr, label string, section uintptr)
+	g_type_check_instance_is_a    func(instance, g_type uintptr) bool
 	gSimpleActionNew              func(name string, parameterType uintptr) uintptr
 	gSimpleActionGroupNew         func() uintptr
 	gSimpleActionGroupInsert      func(group, action uintptr)
@@ -169,6 +170,10 @@ var (
 	webkitURIResponseGetURI                 func(resp uintptr) uintptr
 	webkitPolicyDecisionIgnore              func(decision uintptr)
 	haveEvaluateJavascript                  bool
+
+	g_type_from_name             func(name uintptr) uintptr
+	malloc_glib                  func(n uintptr) uintptr
+	free_glib                    func(p uintptr)
 
 	jscValueToString func(value uintptr) uintptr
 )
@@ -268,6 +273,12 @@ func ensureInit() error {
 
 		registerShared(glib, gobject, gio, webkit, jsc, gtk)
 
+		// Look up WebKitResponsePolicyDecision GType for safe decision checking.
+		ctypename := cstringAlloc("WebKitResponsePolicyDecision")
+		gtypeWebKitResponsePolicyDecision = g_type_from_name(ctypename)
+		free_glib(ctypename)
+		fmt.Fprintf(os.Stderr, "webview: WebKitResponsePolicyDecision gtype=%x\n", gtypeWebKitResponsePolicyDecision)
+
 		newgtk4symbols()
 
 		connectDownloadCallbacks()
@@ -315,6 +326,7 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gMenuAppend, gio, "g_menu_append")
 	purego.RegisterLibFunc(&gMenuAppendSubmenu, gio, "g_menu_append_submenu")
 	purego.RegisterLibFunc(&gMenuAppendSection, gio, "g_menu_append_section")
+	purego.RegisterLibFunc(&g_type_check_instance_is_a, gobject, "g_type_check_instance_is_a")
 	purego.RegisterLibFunc(&gSimpleActionNew, gio, "g_simple_action_new")
 	purego.RegisterLibFunc(&gSimpleActionGroupNew, gio, "g_simple_action_group_new")
 	purego.RegisterLibFunc(&gSimpleActionGroupInsert, gio, "g_simple_action_group_insert")
@@ -370,6 +382,14 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 		purego.RegisterLibFunc(&webkitWebViewRunJavascript, webkit, "webkit_web_view_run_javascript")
 	}
 
+}
+
+// cstringAlloc allocates a null-terminated copy of s on the GLib heap.
+// Free with free_glib.
+func cstringAlloc(s string) uintptr {
+	b := make([]byte, len(s)+1)
+	copy(b, s)
+	return malloc_glib(uintptr(len(b)))
 }
 
 func cstr(p uintptr) string {
@@ -1130,13 +1150,22 @@ func downloadDecidePolicyFn() uintptr {
 		return downloadDecidePolicy
 	}
 	downloadDecidePolicy = purego.NewCallback(func(webview, decision, decisionType, userData uintptr) uintptr {
-		// Only handle response-type decisions (type=2). Navigation decisions
-		// (type=0) are for regular page loads and must not touch the decision.
-		// A nil decision or wrong type → let WebKit decide.
-		if decision == 0 || decisionType != webkitPolicyDecisionTypeResponse {
+		// Guard against nil or wrong-type decisions. Even when decisionType
+		// matches our constant, some WebKitGTK builds send mismatched types,
+		// so we verify via GType before calling get_response().
+		if decision == 0 {
+			return 0
+		}
+		if decisionType != webkitPolicyDecisionTypeResponse {
+			return 0
+		}
+		if gtypeWebKitResponsePolicyDecision != 0 &&
+			!g_type_check_instance_is_a(decision, gtypeWebKitResponsePolicyDecision) {
 			return 0
 		}
 		resp := webkitResponsePolicyDecisionGetResponse(decision)
+		// Some WebKitGTK builds return NULL for non-download responses even
+		// when decisionType == Response. Treat that as "not a download".
 		if resp == 0 {
 			return 0
 		}
@@ -1336,6 +1365,8 @@ const (
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
 )
+
+var gtypeWebKitResponsePolicyDecision uintptr // set at init via g_type_from_name
 
 // showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
 // thread and returns the chosen path. The second result is false when the user
