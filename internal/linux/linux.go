@@ -107,7 +107,23 @@ var (
 	gtkNativeDialogRun           func(dialog uintptr) int
 	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
 	gtkFileChooserGetFile        func(chooser uintptr) uintptr // GFile*
+	gtkFileChooserGetFiles       func(chooser uintptr) uintptr // GList* of GFile* (GTK4)
 	gFileGetPath                 func(file uintptr) uintptr    // char*
+	// File chooser (native open dialog for <input type=file>) + filters.
+	gtkFileChooserSetSelectMultiple func(chooser uintptr, selectMultiple bool)
+	gtkFileChooserAddFilter        func(chooser, filter uintptr)
+	gtkFileFilterNew               func() uintptr
+	gtkFileFilterSetName           func(filter uintptr, name string)
+	gtkFileFilterAddMimeType       func(filter uintptr, mimeType string)
+	gtkFileFilterAddPattern        func(filter uintptr, pattern string)
+	webkitFileChooserRequestGetSelectMultiple func(request uintptr) bool
+	webkitFileChooserRequestSelectFiles        func(request, files uintptr)
+	webkitFileChooserRequestCancel             func(request uintptr)
+	gFileNewForPath               func(path string) uintptr // GFile*
+	gListAppend                   func(list, data uintptr) uintptr
+	gListLength                   func(list uintptr) uintptr
+	gListNthData                  func(list uintptr, n uint) uintptr
+	gListFree                     func(list uintptr)
 	gtkBoxNew                    func(orientation int, spacing int) uintptr
 	gtkBoxAppend                 func(box, child uintptr)
 	gtkWidgetInsertActionGroup   func(widget uintptr, groupName string, group uintptr)
@@ -346,8 +362,24 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 		purego.RegisterLibFunc(&gtkNativeDialogRun, gtk, "gtk_native_dialog_run")
 	}
 	purego.RegisterLibFunc(&gtkFileChooserGetFile, gtk, "gtk_file_chooser_get_file")
+	purego.RegisterLibFunc(&gtkFileChooserGetFiles, gtk, "gtk_file_chooser_get_files")
 	// g_file_get_path lives in libgio (GTK4 save-path result).
 	purego.RegisterLibFunc(&gFileGetPath, gio, "g_file_get_path")
+	// <input type=file> open dialog + accept filters.
+	purego.RegisterLibFunc(&gtkFileChooserSetSelectMultiple, gtk, "gtk_file_chooser_set_select_multiple")
+	purego.RegisterLibFunc(&gtkFileChooserAddFilter, gtk, "gtk_file_chooser_add_filter")
+	purego.RegisterLibFunc(&gtkFileFilterNew, gtk, "gtk_file_filter_new")
+	purego.RegisterLibFunc(&gtkFileFilterSetName, gtk, "gtk_file_filter_set_name")
+	purego.RegisterLibFunc(&gtkFileFilterAddMimeType, gtk, "gtk_file_filter_add_mime_type")
+	purego.RegisterLibFunc(&gtkFileFilterAddPattern, gtk, "gtk_file_filter_add_pattern")
+	purego.RegisterLibFunc(&webkitFileChooserRequestGetSelectMultiple, webkit, "webkit_file_chooser_request_get_select_multiple")
+	purego.RegisterLibFunc(&webkitFileChooserRequestSelectFiles, webkit, "webkit_file_chooser_request_select_files")
+	purego.RegisterLibFunc(&webkitFileChooserRequestCancel, webkit, "webkit_file_chooser_request_cancel")
+	purego.RegisterLibFunc(&gFileNewForPath, gio, "g_file_new_for_path")
+	purego.RegisterLibFunc(&gListAppend, glib, "g_list_append")
+	purego.RegisterLibFunc(&gListLength, glib, "g_list_length")
+	purego.RegisterLibFunc(&gListNthData, glib, "g_list_nth_data")
+	purego.RegisterLibFunc(&gListFree, glib, "g_list_free")
 
 	purego.RegisterLibFunc(&webkitWebViewNew, webkit, "webkit_web_view_new")
 	purego.RegisterLibFunc(&webkitWebViewGetUserContentManager, webkit, "webkit_web_view_get_user_content_manager")
@@ -470,6 +502,7 @@ type gtk struct {
 	showWindowFn            func(*gtk)
 	applySizeHintFn         func(*gtk, int, int, SizeHint)
 	savePathFn              func(*gtk, uintptr) string
+	openFilesFn             func(*gtk, uintptr) []string
 	messageValueFn          func(*gtk, uintptr) string
 	registerScriptHandlerFn func(*gtk, uintptr, string)
 
@@ -657,6 +690,9 @@ func (p *gtk) windowInit(window uintptr) error {
 			fmt.Fprintf(os.Stderr, "webview: connected download-started on session\n")
 		}
 	}
+
+	// <input type=file>: show a native open dialog honoring accept.
+	gSignalConnectData(p.webview, "run-file-chooser", runFileChooserFn(), p.id, 0, 0)
 
 	p.pushUserScript(bootstrapJS(nil))
 	return nil
@@ -1306,8 +1342,9 @@ func connectDownloadCallbacks() {
 }
 
 const (
-	gtkFileChooserActionSave = 1
-	gtkResponseAccept        = -3
+	gtkFileChooserActionOpen  = 0
+	gtkFileChooserActionSave  = 1
+	gtkResponseAccept         = -3
 	// WebKitPolicyDecisionTypeResponse: a WebKitResponsePolicyDecision.
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
@@ -1352,6 +1389,21 @@ var (
 type dialogResp struct {
 	response int
 	done     bool
+}
+
+// <input type=file> accept attribute captured by the __accept__ bridge callback
+// (see platform_linux.go). Read synchronously by the run-file-chooser handler
+// before showing the native dialog.
+var (
+	fileAcceptMu sync.Mutex
+	fileAccept   string
+)
+
+// SetFileAccept stores the HTML accept attribute value for the next file input.
+func SetFileAccept(v string) {
+	fileAcceptMu.Lock()
+	fileAccept = v
+	fileAcceptMu.Unlock()
 }
 
 // runFallbackDialog shows a GtkFileChooserNative and blocks until the user
@@ -1403,3 +1455,115 @@ func dialogResponseFn() uintptr {
 }
 
 func connectDialogCallback() {}
+
+// runFileChooserFn handles the WebKitWebView "run-file-chooser" signal
+// (webview, request, user_data). It shows a native GtkFileChooserNative open
+// dialog honoring the <input accept> attribute, then hands the chosen GFiles
+// back to WebKit via webkit_file_chooser_request_select_files. Returning TRUE
+// means we handled the chooser ourselves (suppresses WebKit's default).
+func runFileChooserFn() uintptr {
+	if runFileChooser != 0 {
+		return runFileChooser
+	}
+	runFileChooser = purego.NewCallback(func(webview, request, userData uintptr) uintptr {
+		p := lookupPlatform(userData)
+		if p == nil || request == 0 {
+			return 0
+		}
+		multiple := webkitFileChooserRequestGetSelectMultiple(request)
+		paths, ok := p.showOpenDialog(multiple)
+		if !ok {
+			webkitFileChooserRequestCancel(request)
+			return 1
+		}
+		// Build a GList of GFile* (transfer none) for the request.
+		var list uintptr
+		for _, path := range paths {
+			file := gFileNewForPath(path)
+			list = gListAppend(list, file)
+		}
+		webkitFileChooserRequestSelectFiles(request, list)
+		gListFree(list) // GList container only; WebKit refs each GFile.
+		return 1
+	})
+	return runFileChooser
+}
+
+var runFileChooser uintptr
+
+// showOpenDialog presents a modal GtkFileChooserNative open dialog on the GTK
+// main thread and applies accept filters read from the captured <input accept>
+// attribute. Returns the chosen absolute paths and false on cancel.
+func (p *gtk) showOpenDialog(multiple bool) ([]string, bool) {
+	dlg := gtkFileChooserNativeNew("", p.window, gtkFileChooserActionOpen, "_Open", "_Cancel")
+	if dlg == 0 {
+		return nil, false
+	}
+	defer gObjectUnref(dlg)
+	if multiple {
+		gtkFileChooserSetSelectMultiple(dlg, true)
+	}
+	addAcceptFilter(dlg)
+	var response int
+	if gtkNativeDialogRun != nil {
+		response = gtkNativeDialogRun(dlg)
+	} else {
+		response = runFallbackDialog(dlg)
+	}
+	if response != gtkResponseAccept {
+		return nil, false
+	}
+	if p.openFilesFn == nil {
+		return nil, false
+	}
+	return p.openFilesFn(p, dlg), true
+}
+
+// parseAccept splits an HTML accept attribute value into individual entries.
+// E.g. "image/png,.pdf,.jpg" -> ["image/png", ".pdf", ".jpg"].
+func parseAccept(accept string) []string {
+	if accept == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(accept, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// addAcceptFilter reads the captured accept attribute and adds a single
+// GtkFileFilter built from MIME types, extensions, and wildcards. When empty,
+// no filter is added (all files selectable).
+func addAcceptFilter(dlg uintptr) {
+	fileAcceptMu.Lock()
+	accept := fileAccept
+	fileAccept = ""
+	fileAcceptMu.Unlock()
+	entries := parseAccept(accept)
+	if len(entries) == 0 {
+		return
+	}
+	filter := gtkFileFilterNew()
+	if filter == 0 {
+		return
+	}
+	gtkFileFilterSetName(filter, "Selected files")
+	for _, e := range entries {
+		switch {
+		case strings.HasPrefix(e, "."):
+			gtkFileFilterAddPattern(filter, "*"+e)
+		case strings.Contains(e, "/"):
+			// MIME types incl. wildcards ("image/*") are honored directly.
+			gtkFileFilterAddMimeType(filter, e)
+		default:
+			// Bare extension without dot — normalize.
+			gtkFileFilterAddPattern(filter, "*."+e)
+		}
+	}
+	gtkFileChooserAddFilter(dlg, filter)
+}
+

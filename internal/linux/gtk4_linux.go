@@ -24,6 +24,7 @@ func newgtk4(p *gtk) error {
 	p.showWindowFn = pgtk4ShowWindow
 	p.applySizeHintFn = pgtk4ApplySizeHint
 	p.savePathFn = pgtk4SavePath
+	p.openFilesFn = pgtk4OpenFiles
 	p.messageValueFn = pgtk4MessageValue
 	p.registerScriptHandlerFn = pgtk4RegisterScriptHandler
 	return nil
@@ -51,6 +52,16 @@ func newgtk4symbols() {
 	}
 	purego.RegisterLibFunc(&gtkStyleContextAddProviderForDisplay, gtk, "gtk_style_context_add_provider_for_display")
 	purego.RegisterLibFunc(&webkitRegisterHandler3, libWebKit, "webkit_user_content_manager_register_script_message_handler")
+	// File chooser / filter (input type=file + accept).
+	purego.RegisterLibFunc(&gtkFileChooserSetSelectMultiple, gtk, "gtk_file_chooser_set_select_multiple")
+	purego.RegisterLibFunc(&gtkFileChooserAddFilter, gtk, "gtk_file_chooser_add_filter")
+	purego.RegisterLibFunc(&gtkFileFilterNew, gtk, "gtk_file_filter_new")
+	purego.RegisterLibFunc(&gtkFileFilterSetName, gtk, "gtk_file_filter_set_name")
+	purego.RegisterLibFunc(&gtkFileFilterAddMimeType, gtk, "gtk_file_filter_add_mime_type")
+	purego.RegisterLibFunc(&gtkFileFilterAddPattern, gtk, "gtk_file_filter_add_pattern")
+	purego.RegisterLibFunc(&webkitFileChooserRequestGetSelectMultiple, libWebKit, "webkit_file_chooser_request_get_select_multiple")
+	purego.RegisterLibFunc(&webkitFileChooserRequestSelectFiles, libWebKit, "webkit_file_chooser_request_select_files")
+	purego.RegisterLibFunc(&webkitFileChooserRequestCancel, libWebKit, "webkit_file_chooser_request_cancel")
 }
 
 func pgtk4CreateWindow(p *gtk) error {
@@ -146,6 +157,34 @@ func pgtk4MessageValue(p *gtk, arg uintptr) string {
 
 func pgtk4RegisterScriptHandler(p *gtk, manager uintptr, name string) {
 	webkitRegisterHandler3(manager, name, 0)
+}
+
+// pgtk4OpenFiles reads the chosen files from a GTK4 GtkFileChooserNative. GTK4
+// returns a GList* of GFile* (transfer full); we convert each to a path, free
+// the char*, and unref the GFile.
+func pgtk4OpenFiles(p *gtk, dlg uintptr) []string {
+	files := gtkFileChooserGetFiles(dlg)
+	if files == 0 {
+		return nil
+	}
+	defer gListFree(files)
+	n := int(gListLength(files))
+	var out []string
+	for i := uint(0); i < uint(n); i++ {
+		file := gListNthData(files, i)
+		if file == 0 {
+			continue
+		}
+		cs := gFileGetPath(file)
+		if cs != 0 {
+			if s := cstr(cs); s != "" {
+				out = append(out, s)
+			}
+			gFree(cs)
+		}
+		gObjectUnref(file)
+	}
+	return out
 }
 
 // gtk4MenuActivateFn returns the single activate callback (built once). It looks
