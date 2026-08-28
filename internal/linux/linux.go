@@ -335,6 +335,9 @@ func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
 	purego.RegisterLibFunc(&gObjectUnref, gobject, "g_object_unref")
 	purego.RegisterLibFunc(&gSignalConnectData, gobject, "g_signal_connect_data")
 	purego.RegisterLibFunc(&gSignalHandlersDisconnectMatched, gobject, "g_signal_handlers_disconnect_matched")
+	purego.RegisterLibFunc(&g_type_from_name, gobject, "g_type_from_name")
+	purego.RegisterLibFunc(&malloc_glib, glib, "g_malloc")
+	purego.RegisterLibFunc(&free_glib, glib, "g_free")
 
 	// GTK shared symbols.
 	purego.RegisterLibFunc(&gtkWindowSetTitle, gtk, "gtk_window_set_title")
