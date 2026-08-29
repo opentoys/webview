@@ -86,9 +86,16 @@ type Chrome struct {
 
 	// Set before Run; baked into the --app launch URL so Chrome opens the
 	// real content directly instead of a post-boot round-trip.
-	startURL  string
-	startHTML string
-	started   bool
+	startURL     string
+	startHTML    string
+	pendingTitle string
+	started      bool
+
+	// deferredURL holds a pre-Run scheme URL (app://...) that must NOT be
+	// baked into --app: Chrome would issue it before Fetch.enable is ready
+	// and flash an error page. We launch about:blank instead and navigate
+	// to it after Fetch.enable.
+	deferredURL string
 
 	// Wired by webview.buildChrome before Run.
 	BoundFuncs  func() []string
@@ -167,6 +174,12 @@ func (c *Chrome) Run() error {
 	} else {
 		c.Unlock()
 	}
+	// Pre-Run scheme URLs (app://...) were not baked into --app (that would
+	// race Fetch.enable and flash an error page). Navigate now, with Fetch
+	// live, so the request is intercepted.
+	if c.deferredURL != "" {
+		c.send("Page.navigate", h{"url": c.deferredURL})
+	}
 	c.send("Runtime.addBinding", h{"name": "webviewBridge"})
 	c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": bootstrapJS()})
 	// The initial --app document is created before Run() connects, so
@@ -220,7 +233,7 @@ func (c *Chrome) start() error {
 			}
 			appURL = "file://" + htmlPath
 		} else {
-			appURL = "about:blank"
+			appURL = fmt.Sprintf("data:text/html,%%3Ctitle%%3E %s %%3C%%2Ftitle%%3E", c.pendingTitle)
 		}
 	}
 
@@ -438,13 +451,19 @@ func (c *Chrome) Init(js string) error {
 }
 
 func (c *Chrome) Navigate(url string) error {
-	url = c.rewriteSchemeURL(url)
 	if !c.started {
-		// Bake into the --app launch URL; Chrome opens it directly.
-		c.startURL = url
+		// Don't bake a custom-scheme URL into --app: Chrome would request it
+		// before Fetch.enable is registered and flash an error page. Capture
+		// it for a post-Fetch Page.navigate instead. Non-scheme URLs still
+		// bake so Chrome opens real content directly.
+		if strings.Contains(c.rewriteSchemeURL(url), ".localhost/") {
+			c.deferredURL = c.rewriteSchemeURL(url)
+		} else {
+			c.startURL = url
+		}
 		return nil
 	}
-	_, err := c.send("Page.navigate", h{"url": url})
+	_, err := c.send("Page.navigate", h{"url": c.rewriteSchemeURL(url)})
 	return err
 }
 
@@ -459,6 +478,7 @@ func (c *Chrome) SetHTML(html string) error {
 }
 
 func (c *Chrome) SetTitle(title string) error {
+	c.pendingTitle = title
 	return c.Eval("document.title = " + jsString(title))
 }
 
