@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -436,6 +438,7 @@ func (c *Chrome) Init(js string) error {
 }
 
 func (c *Chrome) Navigate(url string) error {
+	url = c.rewriteSchemeURL(url)
 	if !c.started {
 		// Bake into the --app launch URL; Chrome opens it directly.
 		c.startURL = url
@@ -506,8 +509,12 @@ func (c *Chrome) updateFetch() {
 	c.Lock()
 	patterns := make([]h, 0, len(c.schemeHandlers))
 	for s := range c.schemeHandlers {
+		// Mirror the Windows backend: a custom scheme like app://host/path is
+		// rewritten to https://app.localhost/path, the reserved .localhost
+		// TLD being a secure context Chrome intercepts via Fetch before any
+		// network/cert handshake. Match the rewritten form here.
 		patterns = append(patterns, h{
-			"urlPattern":   s + "://*",
+			"urlPattern":   "https://" + s + ".localhost/*",
 			"resourceType": "",
 			"requestStage": "Request",
 		})
@@ -576,18 +583,39 @@ func jsString(s string) string {
 	return string(b)
 }
 
-func schemeOf(url string) string {
-	if i := indexOf(url, "://"); i >= 0 {
-		return url[:i]
+func schemeOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
 	}
-	return ""
+	if idx := strings.Index(u.Hostname(), "."); idx > 0 {
+		// https://app.localhost/path → "app"
+		return u.Hostname()[:idx]
+	}
+	return u.Scheme
 }
 
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+// rewriteSchemeURL converts scheme://host/path to https://scheme.localhost/path
+// for registered schemes, so Fetch.enable (registered with the *.localhost
+// pattern) intercepts them as a secure context without opening a TCP port.
+// Unregistered URLs pass through unchanged.
+func (c *Chrome) rewriteSchemeURL(rawURL string) string {
+	c.Lock()
+	_, ok := c.schemeHandlers[schemeOf(rawURL)]
+	c.Unlock()
+	if !ok {
+		return rawURL
 	}
-	return -1
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	out := "https://" + u.Scheme + ".localhost/" + strings.TrimPrefix(u.Path, "/")
+	if u.RawQuery != "" {
+		out += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		out += "#" + u.Fragment
+	}
+	return out
 }
