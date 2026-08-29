@@ -25,8 +25,7 @@ func main() {
 
 	w.SetTitle("purego webview counter")
 	w.SetSize(600, 400, webview.SizeNone)
-	// w.Navigate("http://localhost:5173")
-	w.Navigate("https://developer.mozilla.org/zh-CN/docs/Web/API/Permissions_API/Using_the_Permissions_API")
+	w.Navigate("http://10.11.70.23:8083")
 	if err := w.Run(); err != nil {
 		fmt.Println("run:", err)
 	}

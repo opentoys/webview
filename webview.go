@@ -1,6 +1,9 @@
 package webview
 
-import "github.com/opentoys/webview/internal/types"
+import (
+	"github.com/opentoys/webview/internal/chrome"
+	"github.com/opentoys/webview/internal/types"
+)
 
 type SizeHint = types.SizeHint
 
@@ -44,6 +47,9 @@ type Options struct {
 	Debug     bool
 	Incognito bool
 	DataDir   string
+	// Backend selects the rendering backend. Empty uses the platform default
+	// (native). "chrome" drives Chrome/Chromium over the DevTools Protocol.
+	Backend string
 }
 
 // W is defined per-platform:
@@ -60,13 +66,32 @@ type W struct {
 func New(opts Options) (*W, error) {
 	w := &W{bridge: newBridge()}
 	// Platform-specific initialization (e.g. dialog handler) happens in
-	// buildPlatform.
-	w.p = buildPlatform(opts, w)
+	// buildPlatform (or buildChrome for the Chrome backend).
+	if opts.Backend == "chrome" {
+		w.p = buildChrome(opts, w)
+	} else {
+		w.p = buildPlatform(opts, w)
+	}
 	// Install the platform's default menu bar (Edit on macOS/Linux; none on
 	// others). Apps override via SetMenu. DefaultMenus is the single source of
 	// truth, defined per platform.
 	w.SetMenu(DefaultMenus(w)...)
 	return w, nil
+}
+
+// buildChrome creates the Chrome/Chromium backend and wires the message handler
+// to the shared bridge, mirroring buildPlatform for the native backends.
+func buildChrome(opts Options, w *W) Platform {
+	p := chrome.New(chrome.Options{
+		Debug:     opts.Debug,
+		Incognito: opts.Incognito,
+		DataDir:   opts.DataDir,
+	})
+	p.BoundFuncs = w.bridge.funcNames
+	p.MessageFunc = func(body string) {
+		w.bridge.HandleMessage(body, p.EvalHost)
+	}
+	return p
 }
 
 func (w *W) Run() error            { return w.p.Run() }
