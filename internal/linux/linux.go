@@ -89,7 +89,7 @@ var (
 	gtkFileChooserGetFile        func(chooser uintptr) uintptr // GFile*
 	gtkFileChooserGetFiles       func(chooser uintptr) uintptr // GList* of GFile* (GTK4)
 	gFileGetPath                 func(file uintptr) uintptr    // char*
-	// File chooser (native open dialog for <input type=file>) + filters.
+	// File chooser filters.
 	gtkFileChooserSetSelectMultiple           func(chooser uintptr, selectMultiple bool)
 	gtkFileChooserAddFilter                   func(chooser, filter uintptr)
 	gtkFileFilterNew                          func() uintptr
@@ -330,7 +330,6 @@ func registerShared(glib, gobject, gio, webkit, gtk uintptr) {
 	purego.RegisterLibFunc(&gtkFileChooserAddFilter, gtk, "gtk_file_chooser_add_filter")
 	purego.RegisterLibFunc(&gtkFileFilterNew, gtk, "gtk_file_filter_new")
 	purego.RegisterLibFunc(&gtkFileFilterSetName, gtk, "gtk_file_filter_set_name")
-	purego.RegisterLibFunc(&gtkFileFilterAddMimeType, gtk, "gtk_file_filter_add_mime_type")
 	purego.RegisterLibFunc(&gtkFileFilterAddPattern, gtk, "gtk_file_filter_add_pattern")
 	purego.RegisterLibFunc(&webkitFileChooserRequestGetSelectMultiple, webkit, "webkit_file_chooser_request_get_select_multiple")
 	purego.RegisterLibFunc(&webkitFileChooserRequestSelectFiles, webkit, "webkit_file_chooser_request_select_files")
@@ -1423,8 +1422,13 @@ func parseAccept(accept string) []string {
 }
 
 // addAcceptFilter reads the captured accept attribute and adds a single
-// GtkFileFilter built from MIME types, extensions, and wildcards. When empty,
-// no filter is added (all files selectable).
+// GtkFileFilter built from extensions and MIME-type-derived patterns. When
+// empty, no filter is added (all files selectable).
+//
+// gtk_file_filter_add_mime_type depends on the system shared-mime-info
+// database which may be absent or incomplete on some Linux setups. We
+// convert MIME types to file-extension glob patterns instead, which are
+// always reliable.
 func addAcceptFilter(dlg uintptr) {
 	fileAcceptMu.Lock()
 	accept := fileAccept
@@ -1443,8 +1447,11 @@ func addAcceptFilter(dlg uintptr) {
 		switch {
 		case strings.HasPrefix(e, "."):
 			gtkFileFilterAddPattern(filter, "*"+e)
+		case strings.Contains(e, "/*"):
+			for _, ext := range mimeToExtensions(e) {
+				gtkFileFilterAddPattern(filter, ext)
+			}
 		case strings.Contains(e, "/"):
-			// MIME types incl. wildcards ("image/*") are honored directly.
 			gtkFileFilterAddMimeType(filter, e)
 		default:
 			// Bare extension without dot — normalize.
@@ -1452,4 +1459,21 @@ func addAcceptFilter(dlg uintptr) {
 		}
 	}
 	gtkFileChooserAddFilter(dlg, filter)
+}
+
+// mimeToExtensions maps a MIME type (or wildcard like "image/*") to common
+// file-extension glob patterns. Unknown types fall back to "*".
+func mimeToExtensions(mime string) []string {
+	if exts, ok := commonMimes[strings.TrimSuffix(mime, "/*")]; ok {
+		return exts
+	}
+	return []string{"*"}
+}
+
+var commonMimes = map[string][]string{
+	"image":       {"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg", "*.bmp", "*.ico"},
+	"audio":       {"*.mp3", "*.wav", "*.ogg", "*.flac"},
+	"video":       {"*.mp4", "*.webm", "*.ogv"},
+	"application": {"*.pdf", "*.zip", "*.json", "*.xml", "*.js", "*.mjs", "*.cjs"},
+	"text":        {"*.txt", "*.html", "*.htm", "*.css", "*.js", "*.mjs", "*.md", "*.markdown"},
 }

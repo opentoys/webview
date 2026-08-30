@@ -219,7 +219,7 @@ func applyMenubarBorderFix() {
 	css := []byte("popover {" +
 		"  box-shadow: none;" +
 		"  border: none;" +
-	"}" +
+		"}" +
 		"popover contents {" +
 		"  border-radius: 0;" +
 		"  box-shadow: none;" +
