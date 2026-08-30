@@ -10,13 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
-	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -40,8 +38,6 @@ type Menu = types.Menu
 type MenuItem = types.MenuItem
 
 const (
-	gtkWindowToplevel = 0
-
 	gPriorityHighIdle = 100
 	gPriorityInIdle   = -100
 	gSourceRemove     = 0
@@ -49,31 +45,15 @@ const (
 	injectTopFrame        = 1 // WEBKIT_USER_CONTENT_INJECT_TOP_FRAME
 	injectAtDocumentStart = 0 // WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START
 
-	gdkHintMaxSize   = 1 << 2 // GDK_HINT_MAX_SIZE
 	gSignalMatchData = 1 << 4 // G_SIGNAL_MATCH_DATA
 
 	defaultWidth  = 640
 	defaultHeight = 480
 
-	gdkControlMask = 1 << 2 // GDK_CONTROL_MASK
-
-	gtkAccelVisible = 1 << 0 // GTK_ACCEL_VISIBLE
-
 	// GTK box orientation (gtk_box_new).
 	gtkOrientationVertical = 1 // GTK_ORIENTATION_VERTICAL
 	gSignalActivate        = "activate"
 )
-
-// gdkGeometry mirrors the C GdkGeometry struct.
-type gdkGeometry struct {
-	MinWidth, MinHeight   int32
-	MaxWidth, MaxHeight   int32
-	BaseWidth, BaseHeight int32
-	WidthInc, HeightInc   int32
-	MinAspect, MaxAspect  float64
-	WinGravity            int32
-	_                     int32
-}
 
 // --- bound C functions -----------------------------------------------------
 
@@ -165,7 +145,6 @@ var (
 	webkitWebViewLoadURI                          func(webview uintptr, uri string)
 	webkitWebViewLoadHTML                         func(webview uintptr, html string, baseURI uintptr)
 	webkitWebViewGetURI                           func(webview uintptr) uintptr
-	webkitUserContentManagerRegisterHandler       func(manager uintptr, name string)
 	webkitRegisterHandler3                        func(manager uintptr, name string, world uintptr)
 	webkitUserContentManagerAddScript             func(manager, script uintptr)
 	webkitUserContentManagerRemoveAllScripts      func(manager uintptr)
@@ -177,16 +156,10 @@ var (
 
 	// Download via the modern, always-exported API: a network-session
 	// "download-started" callback plus each download's "decide-destination"
-	// signal (which already hands us the suggested filename). The older
-	// response-policy-decision helpers are not exported on every WebKit2GTK
-	// build, so we avoid them.
-	webkitWebViewGetContext                 func(webview uintptr) uintptr
-	webkitNetworkSessionGetDefault          func() uintptr
-	webkitResponsePolicyDecisionGetResponse func(decision uintptr) uintptr
-	webkitURIResponseGetSuggestedFilename   func(resp uintptr) uintptr
-	webkitURIResponseGetURI                 func(resp uintptr) uintptr
-	webkitPolicyDecisionIgnore              func(decision uintptr)
-	haveEvaluateJavascript                  bool
+	// signal (which already hands us the suggested filename).
+	webkitWebViewGetContext        func(webview uintptr) uintptr
+	webkitNetworkSessionGetDefault func() uintptr
+	haveEvaluateJavascript         bool
 
 	jscValueToString func(value uintptr) uintptr
 )
@@ -208,7 +181,6 @@ var (
 	libGIO     uintptr
 	libGTK     uintptr
 	libWebKit  uintptr
-	libJSC     uintptr
 	libGDK     uintptr
 
 	gtkLib uintptr // alias kept for existing references
@@ -253,45 +225,27 @@ func ensureInit() error {
 			return
 		}
 
-		// Prefer GTK4 + webkitgtk-6.0; fall back to GTK3 + webkit2gtk-4.x.
-		// Probe webkit first to avoid loading both GTK3 and GTK4 into one process.
-		var gtk, webkit, jsc uintptr
-		wk6, werr := openFirst("libwebkitgtk-6.0.so.4")
-		if werr == nil {
-			webkit = wk6
-			gtk, err = openFirst("libgtk-4.so.1")
-			if err != nil {
-				initErr = err
-				return
-			}
-			jsc, err = openFirst("libjavascriptcoregtk-6.0.so.1")
-			if err != nil {
-				initErr = err
-				return
-			}
-		} else {
-			gtk, err = openFirst("libgtk-3.so.0")
-			if err != nil {
-				initErr = err
-				return
-			}
-			webkit, err = openFirst("libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37")
-			if err != nil {
-				initErr = err
-				return
-			}
-			jsc, err = openFirst("libjavascriptcoregtk-4.1.so.0", "libjavascriptcoregtk-4.0.so.18")
-			if err != nil {
-				initErr = err
-				return
-			}
+		// GTK4 + webkitgtk-6.0 only; GTK3 is not supported.
+		gtk, err := openFirst("libgtk-4.so.1")
+		if err != nil {
+			initErr = err
+			return
+		}
+		webkit, err := openFirst("libwebkitgtk-6.0.so.4")
+		if err != nil {
+			initErr = err
+			return
+		}
+		jsc, err := openFirst("libjavascriptcoregtk-6.0.so.1")
+		if err != nil {
+			initErr = err
+			return
 		}
 
 		gtkLib = gtk
 		libGLib, libGObject, libGIO = glib, gobject, gio
-		libGTK, libWebKit, libJSC, libGDK = gtk, webkit, jsc, libGDK
 
-		registerShared(glib, gobject, gio, webkit, jsc, gtk)
+		registerShared(glib, gobject, gio, webkit, gtk)
 
 		newgtk4symbols()
 
@@ -332,7 +286,7 @@ func ensureInit() error {
 // GIO, GObject, WebKit2GTK, JSCore). The two download capability flags are
 // probed here since they depend only on WebKit symbols present in every build.
 // Per-GTK-version symbols are registered by the backend's registerSymbols().
-func registerShared(glib, gobject, gio, webkit, jsc, gtk uintptr) {
+func registerShared(glib, gobject, gio, webkit, gtk uintptr) {
 	purego.RegisterLibFunc(&gIdleAddFull, glib, "g_idle_add_full")
 	purego.RegisterLibFunc(&gMainContextIteration, glib, "g_main_context_iteration")
 	purego.RegisterLibFunc(&gFree, glib, "g_free")
@@ -618,12 +572,8 @@ func (p *gtk) Close() error {
 	return nil
 }
 
-var menuCustomCBMu sync.Mutex
-var menuCustomCBMap = map[uintptr]func(){}
-
-// soup3 is true when the loaded WebKitGTK links libsoup 3.
-// webkitgtk-6.0); false for libsoup 2 (webkit2gtk-4.0). The two differ in the
-// soup_message_headers_foreach callback signature.
+// soup3 is true when the loaded WebKitGTK links libsoup 3
+// (webkitgtk-6.0). Detected once in registerSchemes.
 var soup3 bool
 
 // soupForeachCB is the pre-built purego callback for soup_message_headers_foreach,
@@ -634,30 +584,6 @@ var soupForeachCB uintptr
 // GTK menubar implementation.
 func (p *gtk) applyMenus(menus []Menu) {
 	p.buildMenubarFn(p, menus)
-}
-
-// parseGtkShortcut parses "Ctrl+Z" into (gdk_keyval, GdkModifierType).
-func parseGtkShortcut(s string) (uint, int) {
-	var mods int
-	var key uint
-	for _, part := range strings.Split(s, "+") {
-		switch strings.TrimSpace(part) {
-		case "Ctrl", "Control":
-			mods |= gdkControlMask
-		case "Shift":
-			mods |= 1 << 0 // GDK_SHIFT_MASK
-		case "Alt":
-			mods |= 1 << 3 // GDK_MOD1_MASK
-		case "Super", "Cmd", "Meta":
-			mods |= 1 << 6 // GDK_SUPER_MASK
-		default:
-			k := strings.TrimSpace(part)
-			if len(k) == 1 {
-				key = uint(unicode.ToLower(rune(k[0])))
-			}
-		}
-	}
-	return key, mods
 }
 
 func (p *gtk) windowInit(window uintptr) error {
@@ -1183,49 +1109,6 @@ func downloadDecidePolicyFn() uintptr {
 		return 0
 	})
 	return downloadDecidePolicy
-}
-
-// isDownloadResponse reports whether a response should be treated as a download.
-// We follow Content-Disposition: attachment, or any response whose suggested
-// filename is non-empty (WebKit sets it for <a download> / attachment links).
-func isDownloadResponse(resp uintptr, uri string) bool {
-	if resp == 0 {
-		return false
-	}
-	if cstr(webkitURIResponseGetSuggestedFilename(resp)) != "" {
-		return true
-	}
-	// Content-Disposition detection requires the response headers; fall back to
-	// the suggested-filename heuristic above (sufficient for <a download>).
-	_ = uri
-	return false
-}
-
-func basenameOf(uri string) string {
-	for i := len(uri) - 1; i >= 0; i-- {
-		if uri[i] == '/' {
-			return uri[i+1:]
-		}
-	}
-	return uri
-}
-
-// fetchAndSave downloads url to path using Go's net/http.
-func fetchAndSave(url, path string) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	io.Copy(f, resp.Body)
 }
 
 // downloadDecideDestFn handles a WebKitDownload's "decide-destination" signal:
