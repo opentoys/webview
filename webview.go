@@ -1,6 +1,8 @@
 package webview
 
 import (
+	"errors"
+
 	"github.com/opentoys/webview/internal/chrome"
 	"github.com/opentoys/webview/internal/types"
 )
@@ -12,6 +14,24 @@ const (
 	SizeMin   = types.SizeMin
 	SizeMax   = types.SizeMax
 	SizeFixed = types.SizeFixed
+)
+
+// Backend selects the rendering backend. The values match the byte scheme
+// 0x00–0x03 from the design; they are exposed as named string constants.
+// Each backend's environment is probed in New: if the preferred backend is
+// unavailable (returns nil/error), New falls back per the variant below.
+const (
+	// BackendWebview (0x00): the platform-native engine (WebKit/Edge).
+	BackendWebview = ""
+	// BackendChrome (0x01): Chrome/Chromium over the DevTools Protocol.
+	BackendChrome = "chrome"
+	// BackendFallbackWebview (0x02): Chrome when a Chrome/Chromium executable
+	// is found, otherwise native. Fully resolvable at New.
+	BackendFallbackWebview = "fallback-webview"
+	// BackendFallbackChrome (0x03): native first; its libraries load in Run(),
+	// so a missing native backend surfaces there, not at New — Chrome is the
+	// documented runtime fallback only when native truly cannot initialize.
+	BackendFallbackChrome = "fallback-chrome"
 )
 
 type ResourceRequest = types.ResourceRequest
@@ -47,8 +67,10 @@ type Options struct {
 	Debug     bool
 	Incognito bool
 	DataDir   string
-	// Backend selects the rendering backend. Empty uses the platform default
-	// (native). "chrome" drives Chrome/Chromium over the DevTools Protocol.
+	// Backend selects the rendering backend. Empty/"" uses the platform
+	// default (native). BackendChrome drives Chrome over the DevTools
+	// Protocol; the Fallback* variants resolve at New time (see those
+	// constants) by probing each backend's environment.
 	Backend string
 }
 
@@ -65,13 +87,34 @@ type W struct {
 
 func New(opts Options) (*W, error) {
 	w := &W{bridge: newBridge()}
-	// Platform-specific initialization (e.g. dialog handler) happens in
-	// buildPlatform (or buildChrome for the Chrome backend).
-	if opts.Backend == "chrome" {
-		w.p = buildChrome(opts, w)
-	} else {
-		w.p = buildPlatform(opts, w)
+	// Backend selection with environment probing. Each backend's feasibility
+	// is checked here: if the preferred backend is unavailable (buildChrome
+	// returns a nil platform or error), New falls back to the other per the
+	// Backend* variant. Native backends load their libraries only in Run(), so
+	// a missing native engine cannot be detected at New (it surfaces at Run) —
+	// that is why BackendFallbackChrome resolves to native here.
+	var err error
+	switch opts.Backend {
+	case BackendChrome, BackendFallbackWebview:
+		w.p, err = buildChrome(opts, w)
+		if err != nil {
+			return nil, err
+		}
+	case BackendWebview, BackendFallbackChrome: // BackendWebview ("")
+		w.p, err = buildPlatform(opts, w)
 	}
+	if err != nil {
+		switch opts.Backend {
+		case BackendFallbackWebview:
+			w.p, err = buildPlatform(opts, w)
+		case BackendFallbackChrome:
+			w.p, err = buildChrome(opts, w)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	// Install the platform's default menu bar (Edit on macOS/Linux; none on
 	// others). Apps override via SetMenu. DefaultMenus is the single source of
 	// truth, defined per platform.
@@ -80,8 +123,13 @@ func New(opts Options) (*W, error) {
 }
 
 // buildChrome creates the Chrome/Chromium backend and wires the message handler
-// to the shared bridge, mirroring buildPlatform for the native backends.
-func buildChrome(opts Options, w *W) Platform {
+// to the shared bridge, mirroring buildPlatform for the native backends. It
+// probes the Chrome environment: a missing executable is reported as an error
+// so New() can fall back.
+func buildChrome(opts Options, w *W) (Platform, error) {
+	if chrome.ChromeExecutable() == "" {
+		return nil, errors.New("webview: Chrome backend requested but no Chrome/Chromium executable found (set WEBVIEW_CHROME)")
+	}
 	p := chrome.New(chrome.Options{
 		Debug:     opts.Debug,
 		Incognito: opts.Incognito,
@@ -91,7 +139,7 @@ func buildChrome(opts Options, w *W) Platform {
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)
 	}
-	return p
+	return p, nil
 }
 
 func (w *W) Run() error            { return w.p.Run() }

@@ -14,7 +14,7 @@ import (
 // to webviewBridge) and check the page actually loaded the target origin.
 
 func TestNavigateBeforeRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	target := "https://www.baidu.com"
 	loc := make(chan string, 1)
 	p.MessageFunc = func(body string) {

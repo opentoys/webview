@@ -8,6 +8,6 @@ import (
 
 var errUnsupported = errors.New("webview: unsupported platform")
 
-func buildPlatform(opts Options, w *W) Platform {
-	panic("webview: unsupported platform; only darwin and windows are implemented")
+func buildPlatform(opts Options, w *W) (Platform, error) {
+	return nil, errors.New("webview: unsupported platform; only darwin and windows are implemented")
 }

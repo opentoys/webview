@@ -5,7 +5,9 @@
 // dependency is needed.
 //
 // The backend satisfies the webview.Platform interface structurally; webview.New
-// selects it when Options.Backend == "chrome".
+// selects it when Options.Backend == BackendChrome ("chrome"), or — at
+// construction time — when BackendFallbackWebview finds a Chrome/Chromium
+// executable.
 package chrome
 
 import (
@@ -233,7 +235,7 @@ func (c *Chrome) start() error {
 			}
 			appURL = "file://" + htmlPath
 		} else {
-			appURL = fmt.Sprintf("data:text/html,%%3Ctitle%%3E %s %%3C%%2Ftitle%%3E", c.pendingTitle)
+			appURL = "data:text/html," + url.PathEscape(fmt.Sprintf(`<title>%s</title>`, c.pendingTitle))
 		}
 	}
 

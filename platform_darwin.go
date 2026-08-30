@@ -41,8 +41,11 @@ func DefaultMenus(w *W) []Menu {
 	}
 }
 
-func buildPlatform(opts Options, w *W) Platform {
-	p := darwin.New()
+func buildPlatform(opts Options, w *W) (Platform, error) {
+	p, e := darwin.New()
+	if e != nil {
+		return nil, e
+	}
 	p.Debug = opts.Debug
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
@@ -61,5 +64,5 @@ func buildPlatform(opts Options, w *W) Platform {
 			__accept__(el.accept || '');
 		}
 	}, true);`)
-	return p
+	return p, nil
 }

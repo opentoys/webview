@@ -110,23 +110,23 @@ var (
 	gtkFileChooserGetFiles       func(chooser uintptr) uintptr // GList* of GFile* (GTK4)
 	gFileGetPath                 func(file uintptr) uintptr    // char*
 	// File chooser (native open dialog for <input type=file>) + filters.
-	gtkFileChooserSetSelectMultiple func(chooser uintptr, selectMultiple bool)
-	gtkFileChooserAddFilter        func(chooser, filter uintptr)
-	gtkFileFilterNew               func() uintptr
-	gtkFileFilterSetName           func(filter uintptr, name string)
-	gtkFileFilterAddMimeType       func(filter uintptr, mimeType string)
-	gtkFileFilterAddPattern        func(filter uintptr, pattern string)
+	gtkFileChooserSetSelectMultiple           func(chooser uintptr, selectMultiple bool)
+	gtkFileChooserAddFilter                   func(chooser, filter uintptr)
+	gtkFileFilterNew                          func() uintptr
+	gtkFileFilterSetName                      func(filter uintptr, name string)
+	gtkFileFilterAddMimeType                  func(filter uintptr, mimeType string)
+	gtkFileFilterAddPattern                   func(filter uintptr, pattern string)
 	webkitFileChooserRequestGetSelectMultiple func(request uintptr) bool
-	webkitFileChooserRequestSelectFiles        func(request, files uintptr)
-	webkitFileChooserRequestCancel             func(request uintptr)
-	gFileNewForPath               func(path string) uintptr // GFile*
-	gListAppend                   func(list, data uintptr) uintptr
-	gListLength                   func(list uintptr) uintptr
-	gListNthData                  func(list uintptr, n uint) uintptr
-	gListFree                     func(list uintptr)
-	gtkBoxNew                    func(orientation int, spacing int) uintptr
-	gtkBoxAppend                 func(box, child uintptr)
-	gtkWidgetInsertActionGroup   func(widget uintptr, groupName string, group uintptr)
+	webkitFileChooserRequestSelectFiles       func(request, files uintptr)
+	webkitFileChooserRequestCancel            func(request uintptr)
+	gFileNewForPath                           func(path string) uintptr // GFile*
+	gListAppend                               func(list, data uintptr) uintptr
+	gListLength                               func(list uintptr) uintptr
+	gListNthData                              func(list uintptr, n uint) uintptr
+	gListFree                                 func(list uintptr)
+	gtkBoxNew                                 func(orientation int, spacing int) uintptr
+	gtkBoxAppend                              func(box, child uintptr)
+	gtkWidgetInsertActionGroup                func(widget uintptr, groupName string, group uintptr)
 
 	// GMenu / GAction for GTK4 menubar.
 	gMenuNew                      func() uintptr
@@ -139,15 +139,15 @@ var (
 	gtkPopoverMenuBarNewFromModel func(model uintptr) uintptr
 
 	// GTK4 CSS API for menubar border removal.
-	gtkCssProviderNew            func() uintptr
-	gtkCssProviderLoadFromData   func(provider uintptr, data uintptr, length int64, err uintptr) bool
-	gtkStyleContextAddClass      func(context uintptr, class_name uintptr)
-	gtkWidgetGetStyleContext     func(widget uintptr) uintptr
+	gtkCssProviderNew          func() uintptr
+	gtkCssProviderLoadFromData func(provider uintptr, data uintptr, length int64, err uintptr) bool
+	gtkStyleContextAddClass    func(context uintptr, class_name uintptr)
+	gtkWidgetGetStyleContext   func(widget uintptr) uintptr
 	// GDK display + style provider (for compositor-aware border fix).
-	gdkDisplayGetDefault                    func() uintptr
-	gdkDisplayIsComposited                  func(display uintptr) bool
-	gtkStyleContextAddProviderForDisplay    func(display, provider uintptr, priority int)
-	gtkStyleProviderPriorityApplication      int = 600 // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+	gdkDisplayGetDefault                 func() uintptr
+	gdkDisplayIsComposited               func(display uintptr) bool
+	gtkStyleContextAddProviderForDisplay func(display, provider uintptr, priority int)
+	gtkStyleProviderPriorityApplication  int = 600 // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
 
 	// WebKitGTK URI request header accessor + libsoup foreach (set in
 	// registerSchemes; libsoup 2 vs 3 differ in foreach callback signature).
@@ -227,6 +227,12 @@ func openFirst(names ...string) (uintptr, error) {
 		lastErr = err
 	}
 	return 0, fmt.Errorf("webview: none of %v could be loaded: %w", names, lastErr)
+}
+
+// Probe checks whether the native GTK/WebKit environment is available. It is
+// safe to call multiple times; the underlying library load happens once.
+func Probe() error {
+	return ensureInit()
 }
 
 func ensureInit() error {
@@ -534,10 +540,10 @@ type gtk struct {
 
 // New creates a new GTK backend instance.
 // selected in Run() once the libraries are loaded.
-func New() *gtk {
+func New() (*gtk, error) {
 	return &gtk{
 		schemeHandlers: make(map[string]ResourceHandler),
-	}
+	}, ensureInit()
 }
 
 // selectBackend wires the GTK variant hooks into this shared backend.
@@ -549,9 +555,7 @@ func (p *gtk) selectBackend() error {
 // Run creates the window and enters the GTK main loop. Blocks until Close is
 // called or the window is destroyed.
 func (p *gtk) Run() error {
-	if err := ensureInit(); err != nil {
-		return err
-	}
+
 	uiThreadOnce.Do(runtime.LockOSThread)
 
 	p.id = registerPlatform(p)
@@ -1342,9 +1346,9 @@ func connectDownloadCallbacks() {
 }
 
 const (
-	gtkFileChooserActionOpen  = 0
-	gtkFileChooserActionSave  = 1
-	gtkResponseAccept         = -3
+	gtkFileChooserActionOpen = 0
+	gtkFileChooserActionSave = 1
+	gtkResponseAccept        = -3
 	// WebKitPolicyDecisionTypeResponse: a WebKitResponsePolicyDecision.
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
@@ -1566,4 +1570,3 @@ func addAcceptFilter(dlg uintptr) {
 	}
 	gtkFileChooserAddFilter(dlg, filter)
 }
-

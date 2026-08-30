@@ -8,14 +8,14 @@ import (
 )
 
 func TestNewPlatform(t *testing.T) {
-	p := New()
+	p, _ := New()
 	if p == nil {
 		t.Fatal("New() returned nil")
 	}
 }
 
 func TestWindowOpensAndCloses(t *testing.T) {
-	p := New()
+	p, _ := New()
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
 
@@ -34,7 +34,7 @@ func TestWindowOpensAndCloses(t *testing.T) {
 }
 
 func TestTitleBeforeRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.SetTitle("Test Title")
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
@@ -43,7 +43,7 @@ func TestTitleBeforeRun(t *testing.T) {
 }
 
 func TestHTMLBeforeRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.SetHTML("<h1>Hello</h1>")
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
@@ -52,7 +52,7 @@ func TestHTMLBeforeRun(t *testing.T) {
 }
 
 func TestNavigateBeforeRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.Navigate("https://example.com")
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
@@ -61,7 +61,7 @@ func TestNavigateBeforeRun(t *testing.T) {
 }
 
 func TestEvalAfterRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.SetHTML("<html><body></body></html>")
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()

@@ -110,14 +110,15 @@ const (
 )
 
 // New creates a Platform instance.
-func New() *Platform {
+func New() (*Platform, error) {
+	_, err := loadWebView2Loader()
 	return &Platform{
 		runDone:        make(chan struct{}),
 		pendingURL:     "about:blank",
 		schemeHandlers: make(map[string]ResourceHandler),
 		menuCallbacks:  make(map[uintptr]func()),
 		nextMenuCmdID:  cmdCustomBase,
-	}
+	}, err
 }
 
 // SetMenus replaces the native menu bar. Call before Run().

@@ -54,7 +54,7 @@ func TestOpenPanelResult(t *testing.T) {
 // set, without touching the native panel. The handler must call cb (showOpenPanel
 // blocks on a done-channel until cb fires).
 func TestOpenPanelFuncRouting(t *testing.T) {
-	p := New()
+	p, _ := New()
 	called := make(chan OpenPanelParams, 1)
 	p.OpenPanelFunc = func(params OpenPanelParams, cb func([]string, bool)) {
 		called <- params

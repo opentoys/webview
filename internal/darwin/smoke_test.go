@@ -11,7 +11,7 @@ import (
 )
 
 func TestWindowOpens(t *testing.T) {
-	p := New()
+	p, _ := New()
 	done := make(chan struct{})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -25,7 +25,7 @@ func TestWindowOpens(t *testing.T) {
 }
 
 func TestTitleAndHTML(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.SetTitle("hello")
 	p.SetHTML("<html><body><h1 id='t'>old</h1></body></html>")
 	go func() {
@@ -41,7 +41,7 @@ func TestTitleAndHTML(t *testing.T) {
 // it was a silent no-op (window showed white), because the webview doesn't
 // exist until Run() creates it.
 func TestHTMLBeforeRun(t *testing.T) {
-	p := New()
+	p, _ := New()
 	var mu sync.Mutex
 	var got string
 	const want = "pre-run-html"
@@ -77,7 +77,7 @@ func TestHTMLBeforeRun(t *testing.T) {
 }
 
 func TestEval(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.SetHTML("<html><body><h1 id='t'>old</h1></body></html>")
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -92,7 +92,7 @@ func TestScriptMessage(t *testing.T) {
 	var mu sync.Mutex
 	var got string
 	var want = "hello-from-js"
-	p := New()
+	p, _ := New()
 	p.MessageFunc = func(body string) {
 		mu.Lock()
 		got = body
@@ -133,7 +133,7 @@ func TestScriptMessage(t *testing.T) {
 // TestRunReturnsOnWindowClose: closing the window (as the user would) must make
 // Run() return instead of hanging.
 func TestRunReturnsOnWindowClose(t *testing.T) {
-	p := New()
+	p, _ := New()
 	runErr := make(chan error, 1)
 	go func() { runErr <- p.Run() }()
 	// Wait until the window exists, then close it the way the user does:
@@ -173,7 +173,7 @@ func TestRunReturnsOnWindowClose(t *testing.T) {
 // entry point for all platforms), so wire a default-style Edit menu and verify
 // the Edit submenu renders with a Cmd-C key equivalent.
 func TestEditMenuInstalled(t *testing.T) {
-	p := New()
+	p, _ := New()
 	// Menus flow through SetMenus -> applyMenus (the shared entry point for
 	// all platforms), so wire a default-style Edit menu explicitly.
 	p.SetMenus([]Menu{
@@ -236,7 +236,7 @@ func TestEditMenuInstalled(t *testing.T) {
 // data store. WKWebsiteDataStore exposes isPersistent; non-persistent stores
 // report false.
 func TestIncognito(t *testing.T) {
-	p := New()
+	p, _ := New()
 	p.Incognito = true
 	errCh := make(chan error, 1)
 	go func() { errCh <- p.Run() }()
@@ -265,4 +265,3 @@ func TestOpenPanelClassCached(t *testing.T) {
 		t.Fatal("WKOpenPanelParameters class / allowsMultipleSelection selector not cached")
 	}
 }
-

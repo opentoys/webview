@@ -60,7 +60,7 @@ func TestDownloadPolicyConstants(t *testing.T) {
 }
 
 func TestDownloadFuncRouting(t *testing.T) {
-	p := New()
+	p, _ := New()
 	called := make(chan string, 1)
 	p.DownloadFunc = func(name string, cb func(string)) {
 		called <- name
