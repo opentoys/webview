@@ -12,7 +12,7 @@ import (
 func main() {
 	w, err := webview.New(webview.Options{
 		// Debug: true,
-		Backend: "chrome",
+		Backend: webview.BackendFallbackWebview,
 	})
 	if err != nil {
 		panic(err)
@@ -38,6 +38,7 @@ func main() {
 				Body: []byte(`<!doctype html>
 <html>
 <meta charset="UTF-8">
+<title>purego webview counter</title>
 <body style="font-family:system-ui;text-align:center;padding-top:2em">
 			<script src="a.js"></script>
 	<h1>PureGo WebView</h1>

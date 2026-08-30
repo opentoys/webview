@@ -97,9 +97,6 @@ func New(opts Options) (*W, error) {
 	switch opts.Backend {
 	case BackendChrome, BackendFallbackWebview:
 		w.p, err = buildChrome(opts, w)
-		if err != nil {
-			return nil, err
-		}
 	case BackendWebview, BackendFallbackChrome: // BackendWebview ("")
 		w.p, err = buildPlatform(opts, w)
 	}

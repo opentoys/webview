@@ -8,8 +8,8 @@ import (
 
 func main() {
 	w, err := webview.New(webview.Options{
-		Debug:   true,
-		Backend: "chrome",
+		Debug: true,
+		// Backend: webview.BackendFallbackWebview,
 	})
 	if err != nil {
 		panic(err)
