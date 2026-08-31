@@ -11,12 +11,13 @@ import (
 	"sync"
 )
 
+// Logger writes serialized debug events to an io.Writer.
 type Logger struct {
 	w  io.Writer
 	mu sync.Mutex
 }
 
-// New returns a logger that writes to w. A nil writer is treated as io.Discard.
+// New returns a Logger that writes to w. A nil writer is treated as io.Discard.
 func New(w io.Writer) *Logger {
 	if w == nil {
 		w = io.Discard

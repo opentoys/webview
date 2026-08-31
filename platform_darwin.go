@@ -42,13 +42,13 @@ func DefaultMenus(w *W) []Menu {
 	}
 }
 
-func buildPlatform(opts Options, w *W, log *debuglog.Logger) (Platform, error) {
+func buildPlatform(opts Options, w *W, logger *debuglog.Logger) (Platform, error) {
 	p, e := darwin.New()
 	if e != nil {
 		return nil, e
 	}
 	p.Debug = opts.Debug
-	p.Logger = log
+	p.Logger = logger
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
 	p.BoundFuncs = w.bridge.funcNames

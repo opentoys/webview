@@ -85,7 +85,6 @@ func (c *Chrome) readLoop() {
 }
 
 func (c *Chrome) dispatch(m cdpMsg) {
-	c.Logger.Log(BackendName, m.Method, map[string]string{"params": string(m.Params)})
 	if m.ID != 0 {
 		c.Lock()
 		ch, ok := c.pending[m.ID]
