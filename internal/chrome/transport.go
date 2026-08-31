@@ -105,12 +105,20 @@ func (c *Chrome) dispatch(m cdpMsg) {
 		var p struct {
 			SessionID  string `json:"sessionId"`
 			TargetInfo struct {
-				Type string `json:"type"`
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
 			} `json:"targetInfo"`
 		}
 		if json.Unmarshal(m.Params, &p) == nil && p.TargetInfo.Type == "page" {
-			c.sessionID = p.SessionID
-			c.once.Do(func() { close(c.attached) })
+			// The first page is the --app window. Do not replace it when Chrome
+			// later auto-attaches a popup or another page target.
+			c.once.Do(func() {
+				c.Lock()
+				c.sessionID = p.SessionID
+				c.targetID = p.TargetInfo.TargetID
+				c.Unlock()
+				close(c.attached)
+			})
 		}
 	case "Runtime.bindingCalled":
 		var p struct {
@@ -132,8 +140,36 @@ func (c *Chrome) dispatch(m cdpMsg) {
 	case "Fetch.requestPaused":
 		go c.handleFetch(m.Params)
 	case "Target.targetDestroyed", "Target.detachedFromTarget":
-		// App window/page closed: terminate the Chrome process. Run
-		// returns once cmd.Wait() unblocks after the kill.
-		go c.Close()
+		if c.isMainTargetClosed(m.Method, m.Params) {
+			// The app window was closed. Terminate the remaining browser process
+			// so Run returns once cmd.Wait unblocks.
+			go c.Close()
+		}
+	}
+}
+
+// isMainTargetClosed reports whether a Target lifecycle event belongs to the
+// page selected as the app window. Events for browser UI, workers, extensions,
+// and other transient targets are intentionally ignored.
+func (c *Chrome) isMainTargetClosed(method string, params json.RawMessage) bool {
+	var p struct {
+		SessionID string `json:"sessionId"`
+		TargetID  string `json:"targetId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return false
+	}
+	c.Lock()
+	sessionID, targetID := c.sessionID, c.targetID
+	c.Unlock()
+
+	switch method {
+	case "Target.detachedFromTarget":
+		return sessionID != "" && p.SessionID == sessionID ||
+			targetID != "" && p.TargetID == targetID
+	case "Target.targetDestroyed":
+		return targetID != "" && p.TargetID == targetID
+	default:
+		return false
 	}
 }

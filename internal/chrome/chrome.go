@@ -57,6 +57,10 @@ type Chrome struct {
 	// flatten=true, page-domain commands must carry this sessionId; the root
 	// session only handles Target.*/Browser.* domains.
 	sessionID string
+	// targetID identifies the app window's page target. Chrome also attaches
+	// browser UI, workers, extensions, and other transient targets; their
+	// lifecycle events must not close the app.
+	targetID string
 
 	schemeHandlers map[string]types.ResourceHandler
 	tmpDir         string
