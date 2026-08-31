@@ -18,6 +18,16 @@ func rect(x, y, w, h float64) cgRect {
 	return cgRect{X: x, Y: y, W: w, H: h}
 }
 
+// cgSize is the layout of a CoreGraphics CGSize. Like cgRect, it is passed by
+// value through purego's Objective-C bridge.
+type cgSize struct {
+	W, H float64
+}
+
+func size(w, h float64) cgSize {
+	return cgSize{W: w, H: h}
+}
+
 // nsString converts a Go string to an autoreleased NSString.
 func nsString(s string) objc.ID {
 	return objc.ID(nsStringClass).Send(stringWithUTF8Sel, s)

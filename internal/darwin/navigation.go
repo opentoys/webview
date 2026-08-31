@@ -29,6 +29,46 @@ func (p *Platform) SetTitle(title string) error {
 }
 
 func (p *Platform) SetSize(width, height int, hint SizeHint) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	p.mu.Lock()
+	if p.window == 0 {
+		p.pendingW = width
+		p.pendingH = height
+		p.pendingSizeHint = hint
+		p.hasPendingSize = true
+		p.mu.Unlock()
+		return
+	}
+	w := p.window
+	p.mu.Unlock()
+	mainThread(func() {
+		applySizeOnHost(w, width, height, hint)
+	})
+}
+
+// applySizeOnHost applies content-area dimensions and constraints. It must run
+// on the AppKit host thread.
+func applySizeOnHost(window objc.ID, width, height int, hint SizeHint) {
+	if window == 0 {
+		return
+	}
+	dimensions := size(float64(width), float64(height))
+	styleMask := uintptr(styleTitled | styleClosable | styleResizable)
+	if hint == SizeFixed {
+		styleMask &^= styleResizable
+	}
+	window.Send(setStyleMaskSel, styleMask)
+
+	switch hint {
+	case SizeMin:
+		window.Send(setContentMinSizeSel, dimensions)
+	case SizeMax:
+		window.Send(setContentMaxSizeSel, dimensions)
+	default: // SizeNone and SizeFixed set the current content size.
+		window.Send(setContentSizeSel, dimensions)
+	}
 }
 
 func (p *Platform) Navigate(url string) error {

@@ -186,6 +186,10 @@ var (
 	stringWithUTF8Sel                                     objc.SEL
 	bodySel                                               objc.SEL
 	setTitleSel                                           objc.SEL
+	setContentSizeSel                                     objc.SEL
+	setContentMinSizeSel                                  objc.SEL
+	setContentMaxSizeSel                                  objc.SEL
+	setStyleMaskSel                                       objc.SEL
 	loadRequestSel                                        objc.SEL
 	URLWithStringSel                                      objc.SEL
 	requestWithURLSel                                     objc.SEL
@@ -357,6 +361,10 @@ func probe() {
 		stringWithUTF8Sel = objc.RegisterName("stringWithUTF8String:")
 		bodySel = objc.RegisterName("body")
 		setTitleSel = objc.RegisterName("setTitle:")
+		setContentSizeSel = objc.RegisterName("setContentSize:")
+		setContentMinSizeSel = objc.RegisterName("setContentMinSize:")
+		setContentMaxSizeSel = objc.RegisterName("setContentMaxSize:")
+		setStyleMaskSel = objc.RegisterName("setStyleMask:")
 		loadRequestSel = objc.RegisterName("loadRequest:")
 		URLWithStringSel = objc.RegisterName("URLWithString:")
 		requestWithURLSel = objc.RegisterName("requestWithURL:")

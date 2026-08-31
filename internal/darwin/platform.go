@@ -105,6 +105,11 @@ type Platform struct {
 	// pendingTitle is set by SetTitle before the window exists and applied in
 	// setup(), so a title set before Run() is not lost.
 	pendingTitle string
+	// Pending size state is applied before setup() shows the window.
+	pendingW        int
+	pendingH        int
+	pendingSizeHint SizeHint
+	hasPendingSize  bool
 	// pendingHTML is set by SetHTML before the webview exists and loaded in
 	// setup(), so HTML set before Run() is not silently dropped.
 	pendingHTML string

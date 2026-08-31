@@ -42,6 +42,16 @@ func (p *Platform) setup() error {
 	p.mu.Unlock()
 	w.Send(setDelegateSel, delegate)
 
+	// Apply a size configured before Run while the window is still hidden.
+	p.mu.Lock()
+	width, height := p.pendingW, p.pendingH
+	hint, hasSize := p.pendingSizeHint, p.hasPendingSize
+	p.hasPendingSize = false
+	p.mu.Unlock()
+	if hasSize {
+		applySizeOnHost(w, width, height, hint)
+	}
+
 	// UCC receives script messages. addScriptMessageHandler:name: does not retain
 	// the handler, so keep both the UCC and handler alive on the Platform.
 	ucc := objc.ID(wkUCCClass).Send(allocSel)
