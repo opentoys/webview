@@ -6,8 +6,9 @@ import "encoding/json"
 
 // bootstrapJS builds the bridge bootstrap script using chrome.webview.postMessage.
 // Identical protocol to darwin (JSON {id,name,args}) but different transport:
-//   darwin:  window.webkit.messageHandlers.webviewBridge.postMessage(...)
-//   windows: window.chrome.webview.postMessage(...)
+//
+//	darwin:  window.webkit.messageHandlers.webviewBridge.postMessage(...)
+//	windows: window.chrome.webview.postMessage(...)
 func bootstrapJS(names []string) string {
 	s := `window.webviewBridge = {
   _pending: {}, _next: 0,

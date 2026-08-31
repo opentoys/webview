@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 func (p *Platform) SetTitle(title string) error {
@@ -79,6 +80,7 @@ func (p *Platform) Navigate(url string) error {
 		// once setup() creates the webview.
 		p.pendingURL = url
 		p.mu.Unlock()
+		p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "queued"})
 		return nil
 	}
 	p.mu.Unlock()
@@ -88,6 +90,7 @@ func (p *Platform) Navigate(url string) error {
 		req := objc.ID(nsURLRequestClass).Send(requestWithURLSel, nsURL)
 		wv.Send(loadRequestSel, req)
 	})
+	p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "started"})
 	return nil
 }
 

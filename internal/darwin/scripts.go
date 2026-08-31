@@ -4,7 +4,11 @@ package darwin
 
 // HTML loading, JavaScript evaluation, and user-script injection.
 
-import "github.com/ebitengine/purego/objc"
+import (
+	"strconv"
+
+	"github.com/ebitengine/purego/objc"
+)
 
 func (p *Platform) SetHTML(html string) error {
 	p.mu.Lock()
@@ -14,6 +18,7 @@ func (p *Platform) SetHTML(html string) error {
 		// once setup() creates the webview.
 		p.pendingHTML = html
 		p.mu.Unlock()
+		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "queued"})
 		return nil
 	}
 	p.mu.Unlock()
@@ -23,6 +28,7 @@ func (p *Platform) SetHTML(html string) error {
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
 		wv.Send(loadHTMLStringSel, str, objc.ID(0))
 	})
+	p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})
 	return nil
 }
 

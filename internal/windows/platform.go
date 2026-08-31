@@ -6,12 +6,16 @@ package windows
 
 import (
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
 )
+
+const BackendName string = "webview"
 
 // Re-export shared types from types.
 type SizeHint = types.SizeHint
@@ -49,6 +53,7 @@ type Platform struct {
 
 	// Options.
 	Debug     bool
+	Logger    *debuglog.Logger
 	Incognito bool
 	DataDir   string
 
@@ -143,10 +148,12 @@ func (p *Platform) MainThread(f func()) {
 
 // Run blocks until the window is closed.
 func (p *Platform) Run() error {
+	p.Logger.Log(BackendName, "run_start", nil)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	if err := p.setup(); err != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "setup", "error": debuglog.Error(err)})
 		return err
 	}
 
@@ -174,6 +181,7 @@ func (p *Platform) Run() error {
 
 // Close destroys the window, causing Run() to return.
 func (p *Platform) Close() error {
+	p.Logger.Log(BackendName, "close_requested", nil)
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -227,9 +235,11 @@ func (p *Platform) Navigate(url string) error {
 	if p.ready.Load() == 0 {
 		p.pendingURL = url
 		p.pendingHTML = ""
+		p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "queued"})
 		return nil
 	}
 	p.webview.Navigate(p.rewriteSchemeURL(url))
+	p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "started"})
 	return nil
 }
 
@@ -239,9 +249,11 @@ func (p *Platform) SetHTML(html string) error {
 	if p.ready.Load() == 0 {
 		p.pendingHTML = html
 		p.pendingURL = ""
+		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "queued"})
 		return nil
 	}
 	p.webview.NavigateToString(html)
+	p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})
 	return nil
 }
 

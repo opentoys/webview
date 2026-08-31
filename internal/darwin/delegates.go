@@ -227,6 +227,13 @@ func registerDelegateClasses() {
 		}
 		callBlock(decisionHandler, policy)
 	}
+	// A completion callback is intentionally limited to the phase: WKNavigation
+	// can expose full request URLs and those must not reach the debug log.
+	didFinishNavigation := func(id objc.ID, cmd objc.SEL, webView objc.ID, navigation objc.ID) {
+		if p := activePlatform; p != nil {
+			p.Logger.Log(BackendName, "navigate", map[string]string{"phase": "completed"})
+		}
+	}
 
 	// Response-stage handoff: when the policy above returns Download, WebKit
 	// calls this with the navigation response (not the action) to finish the
@@ -249,6 +256,7 @@ func registerDelegateClasses() {
 			{Cmd: objc.RegisterName("webView:navigationAction:didBecomeDownload:"), Fn: downloadDidBecome},
 			{Cmd: objc.RegisterName("webView:navigationResponse:didBecomeDownload:"), Fn: downloadDidBecomeFromResponse},
 			{Cmd: objc.RegisterName("webView:decidePolicyForNavigationResponse:decisionHandler:"), Fn: decidePolicyForNavigationResponse},
+			{Cmd: objc.RegisterName("webView:didFinishNavigation:"), Fn: didFinishNavigation},
 			{Cmd: objc.RegisterName("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"), Fn: decideDestination},
 			{Cmd: objc.RegisterName("downloadDidFinish:"), Fn: downloadDidFinish},
 			{Cmd: objc.RegisterName("download:didFailWithError:"), Fn: downloadDidFail},

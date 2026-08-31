@@ -8,7 +8,12 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
+)
+
+const (
+	BackendName string = "chrome"
 )
 
 // h is a shorthand for a JSON object map used in CDP params.
@@ -67,6 +72,7 @@ type Chrome struct {
 	stderrLog      *os.File
 
 	Debug      bool
+	Logger     *debuglog.Logger
 	Incognito  bool
 	DataDir    string
 	Executable string

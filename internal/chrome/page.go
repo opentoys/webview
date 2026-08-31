@@ -2,8 +2,10 @@ package chrome
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
+	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
 )
 
@@ -37,9 +39,16 @@ func (c *Chrome) Navigate(url string) error {
 		} else {
 			c.startURL = url
 		}
+		c.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "queued"})
 		return nil
 	}
 	_, err := c.send("Page.navigate", h{"url": c.rewriteSchemeURL(url)})
+	fields := map[string]string{"url": debuglog.URL(url), "phase": "started"}
+	if err != nil {
+		fields["phase"] = "failed"
+		fields["error"] = debuglog.Error(err)
+	}
+	c.Logger.Log(BackendName, "navigate", fields)
 	return err
 }
 
@@ -47,10 +56,18 @@ func (c *Chrome) SetHTML(html string) error {
 	if !c.started {
 		// Baked into a data-dir file and loaded via --app at launch.
 		c.startHTML = html
+		c.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "queued"})
 		return nil
 	}
 	expr := "document.open();document.write(" + jsString(html) + ");document.close();"
-	return c.Eval(expr)
+	err := c.Eval(expr)
+	fields := map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"}
+	if err != nil {
+		fields["phase"] = "failed"
+		fields["error"] = debuglog.Error(err)
+	}
+	c.Logger.Log(BackendName, "load_html", fields)
+	return err
 }
 
 func (c *Chrome) SetTitle(title string) error {

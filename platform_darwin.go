@@ -4,6 +4,7 @@ package webview
 
 import (
 	"github.com/opentoys/webview/internal/darwin"
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 // CmdOrCtrl is "Cmd" on macOS, intended for use in MenuItem.Shortcut.
@@ -41,12 +42,13 @@ func DefaultMenus(w *W) []Menu {
 	}
 }
 
-func buildPlatform(opts Options, w *W) (Platform, error) {
+func buildPlatform(opts Options, w *W, log *debuglog.Logger) (Platform, error) {
 	p, e := darwin.New()
 	if e != nil {
 		return nil, e
 	}
 	p.Debug = opts.Debug
+	p.Logger = log
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
 	p.BoundFuncs = w.bridge.funcNames

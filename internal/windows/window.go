@@ -178,6 +178,7 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case WM_DESTROY:
 		// Only clean up for the main window, not the widget child window.
 		if hwnd == p.hwnd {
+			p.Logger.Log(BackendName, "closed", nil)
 			pPostQuitMessage.Call(0)
 			pCoUninitialize.Call()
 			close(p.runDone)

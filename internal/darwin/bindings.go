@@ -14,6 +14,8 @@ import (
 	"github.com/opentoys/webview/internal/types"
 )
 
+const BackendName string = "webview"
+
 var (
 	errNoWindow  = errors.New("darwin: failed to alloc NSWindow")
 	errNoWebView = errors.New("darwin: failed to alloc WKWebView")

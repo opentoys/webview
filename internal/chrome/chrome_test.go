@@ -2,8 +2,13 @@ package chrome
 
 import (
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/opentoys/webview/internal/debuglog"
+	"github.com/opentoys/webview/internal/types"
 )
 
 func TestBootstrapJSRegistersBindingTransport(t *testing.T) {
@@ -22,6 +27,32 @@ func TestBootstrapJSRegistersBindingTransport(t *testing.T) {
 	// transport must call the native CDP binding (a plain function call).
 	if !strings.Contains(s, "transport(") {
 		t.Errorf("bootstrapJS must call the native binding fn; got:\n%s", s)
+	}
+}
+
+func TestDispatchDebugLogIsSummaryOnly(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Chrome{Logger: debuglog.New(w), Debug: true, attached: make(chan struct{}), schemeHandlers: map[string]types.ResourceHandler{"app": func(types.ResourceRequest, func(*types.ResourceResponse)) {}}}
+	c.dispatch(cdpMsg{Method: "Runtime.consoleAPICalled", Params: json.RawMessage(`{"type":"log","args":[{"value":"const secret = 'do not print'"}]}`)})
+	c.dispatch(cdpMsg{Method: "Fetch.requestPaused", Params: json.RawMessage(`{"request":{"method":"GET","url":"app://host/index.html?token=private"}}`)})
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, want := range []string{`"backend":"chrome"`, `"event":"dispatch"`, `"cdp_event":"Runtime.consoleAPICalled"`, `"params_bytes":"`, `"url":"app://host/index.html"`, `"intercepted":"true"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("debug log missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"do not print", "token=private", `{"request"`} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("debug log leaked %q: %s", forbidden, got)
+		}
 	}
 }
 

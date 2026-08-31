@@ -2,8 +2,11 @@ package webview
 
 import (
 	"errors"
+	"io"
+	"os"
 
 	"github.com/opentoys/webview/internal/chrome"
+	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
 )
 
@@ -87,6 +90,10 @@ type W struct {
 
 func New(opts Options) (*W, error) {
 	w := &W{bridge: newBridge()}
+	log := debuglog.New(io.Discard)
+	if opts.Debug {
+		log = debuglog.New(os.Stdout)
+	}
 	// Backend selection with environment probing. Each backend's feasibility
 	// is checked here: if the preferred backend is unavailable (buildChrome
 	// returns a nil platform or error), New falls back to the other per the
@@ -96,16 +103,16 @@ func New(opts Options) (*W, error) {
 	var err error
 	switch opts.Backend {
 	case BackendChrome, BackendFallbackWebview:
-		w.p, err = buildChrome(opts, w)
+		w.p, err = buildChrome(opts, w, log)
 	case BackendWebview, BackendFallbackChrome: // BackendWebview ("")
-		w.p, err = buildPlatform(opts, w)
+		w.p, err = buildPlatform(opts, w, log)
 	}
 	if err != nil {
 		switch opts.Backend {
 		case BackendFallbackWebview:
-			w.p, err = buildPlatform(opts, w)
+			w.p, err = buildPlatform(opts, w, log)
 		case BackendFallbackChrome:
-			w.p, err = buildChrome(opts, w)
+			w.p, err = buildChrome(opts, w, log)
 		}
 	}
 	if err != nil {
@@ -123,7 +130,7 @@ func New(opts Options) (*W, error) {
 // to the shared bridge, mirroring buildPlatform for the native backends. It
 // probes the Chrome environment: a missing executable is reported as an error
 // so New() can fall back.
-func buildChrome(opts Options, w *W) (Platform, error) {
+func buildChrome(opts Options, w *W, log *debuglog.Logger) (Platform, error) {
 	if chrome.ChromeExecutable() == "" {
 		return nil, errors.New("webview: Chrome backend requested but no Chrome/Chromium executable found (set WEBVIEW_CHROME)")
 	}
@@ -132,6 +139,7 @@ func buildChrome(opts Options, w *W) (Platform, error) {
 		Incognito: opts.Incognito,
 		DataDir:   opts.DataDir,
 	})
+	p.Logger = log
 	p.BoundFuncs = w.bridge.funcNames
 	p.MessageFunc = func(body string) {
 		w.bridge.HandleMessage(body, p.EvalHost)

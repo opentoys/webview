@@ -6,8 +6,10 @@ package darwin
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 func (p *Platform) setupDataStore() objc.ID {
@@ -107,6 +109,7 @@ func (p *Platform) setup() error {
 	p.mu.Lock()
 	p.webview = wv
 	p.mu.Unlock()
+	p.Logger.Log(BackendName, "ready", nil)
 
 	// WKUIDelegate handles JS alert/confirm/prompt.
 	uiDelegate := objc.ID(uiDelegateClass).Send(allocSel)
@@ -163,6 +166,7 @@ func (p *Platform) setup() error {
 		html = prependBootstrap(html)
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
 		wv.Send(loadHTMLStringSel, str, objc.ID(0))
+		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})
 	}
 
 	// Apply a URL set before Run() (the webview now exists). Tighter priority
@@ -177,6 +181,7 @@ func (p *Platform) setup() error {
 		nsURL := objc.ID(nsURLClass).Send(URLWithStringSel, str)
 		req := objc.ID(nsURLRequestClass).Send(requestWithURLSel, nsURL)
 		wv.Send(loadRequestSel, req)
+		p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "started"})
 	}
 	return nil
 }

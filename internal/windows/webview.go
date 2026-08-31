@@ -7,13 +7,17 @@ package windows
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"unsafe"
+
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 // --- COM callback implementations ---
 
 func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Environment) uintptr {
 	if errorCode != S_OK || env == nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "webview_environment", "error": "initialization failed"})
 		return 0
 	}
 	p.env = env
@@ -23,6 +27,7 @@ func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Envir
 
 func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCoreWebView2Controller) uintptr {
 	if errorCode != S_OK || controller == nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "webview_controller", "error": "initialization failed"})
 		return 0
 	}
 
@@ -112,6 +117,7 @@ func (p *Platform) initWebView() {
 
 	// Mark ready so SetTitle/SetSize/SetHTML apply immediately.
 	p.ready.Store(1)
+	p.Logger.Log(BackendName, "ready", nil)
 
 	// Defer navigation to the next message-loop iteration.
 	// AddScriptToExecuteOnDocumentCreated may be async internally;
@@ -131,8 +137,10 @@ func (p *Platform) navigatePending() {
 
 	if html != "" {
 		p.webview.NavigateToString(html)
+		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})
 	} else if url != "" {
 		p.webview.Navigate(p.rewriteSchemeURL(url))
+		p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "started"})
 	}
 }
 
@@ -200,6 +208,11 @@ func (p *Platform) InvokeDownloadStarting(sender *iCoreWebView2, args *iCoreWebV
 // InvokeNavigationCompleted is called after each page navigation finishes.
 // It injects the bootstrap JS so bound functions are available on the page.
 func (p *Platform) InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess bool) uintptr {
+	phase := "completed"
+	if !isSuccess {
+		phase = "failed"
+	}
+	p.Logger.Log(BackendName, "navigate", map[string]string{"phase": phase})
 	// Inject the bootstrap JS after each navigation.
 	var names []string
 	if p.BoundFuncs != nil {

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 var (
@@ -92,7 +93,8 @@ type Platform struct {
 
 	// Debug enables WebKit Inspector (right-click → Inspect Element) on macOS
 	// and dev tools on Windows. Set via Options.Debug.
-	Debug bool
+	Debug  bool
+	Logger *debuglog.Logger
 	// Incognito makes the webview use a non-persistent (in-memory) website data
 	// store: no cookies/cache/localStorage written to disk.
 	Incognito bool
@@ -152,17 +154,21 @@ func (p *Platform) SetMenus(menus []Menu) {
 func (p *Platform) MainThread(f func()) { mainThread(f) }
 
 func (p *Platform) Run() error {
+	p.Logger.Log(BackendName, "run_start", nil)
 	startAppHost()
 	var setupErr error
 	mainThread(func() { setupErr = p.setup() })
 	if setupErr != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "setup", "error": debuglog.Error(setupErr)})
 		return setupErr
 	}
 	<-p.runDone
+	p.Logger.Log(BackendName, "closed", nil)
 	return nil
 }
 
 func (p *Platform) Close() error {
+	p.Logger.Log(BackendName, "close_requested", nil)
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -202,6 +208,7 @@ func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
 // mainThread orderOut would deadlock. Sets closed=true so a subsequent Close()
 // does not try to orderOut: a window that is already being destroyed.
 func (p *Platform) signalExit() {
+	p.Logger.Log(BackendName, "close_requested", nil)
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()

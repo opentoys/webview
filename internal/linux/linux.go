@@ -5,13 +5,15 @@
 package linux
 
 import (
-	"fmt"
-	"os"
 	"runtime"
+	"strconv"
 	"sync"
 
+	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
 )
+
+const BackendName string = "webview"
 
 // Re-export shared types from types.
 type SizeHint = types.SizeHint
@@ -77,6 +79,7 @@ type gtk struct {
 
 	// Options.
 	Debug     bool
+	Logger    *debuglog.Logger
 	Incognito bool
 	DataDir   string
 
@@ -127,19 +130,23 @@ func newgtk4(p *gtk) error {
 // Run creates the window and enters the GTK main loop. Blocks until Close is
 // called or the window is destroyed.
 func (p *gtk) Run() error {
+	p.Logger.Log(BackendName, "run_start", nil)
 
 	uiThreadOnce.Do(runtime.LockOSThread)
 
 	p.id = registerPlatform(p)
 	if err := p.selectBackend(); err != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "gtk_initialize", "error": debuglog.Error(err)})
 		unregisterPlatform(p.id)
 		return err
 	}
 	if err := p.windowInit(0); err != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "window_create", "error": debuglog.Error(err)})
 		unregisterPlatform(p.id)
 		return err
 	}
 	if err := p.registerSchemes(); err != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "scheme_register", "error": debuglog.Error(err)})
 		p.destroy()
 		return err
 	}
@@ -152,6 +159,7 @@ func (p *gtk) Run() error {
 	// Apply pending title/size/HTML/URL directly (not via dispatch) so the
 	// window is visible before the main loop starts.
 	p.applyPending()
+	p.Logger.Log(BackendName, "ready", nil)
 	if !p.isSizeSet {
 		p.applySize(defaultWidth, defaultHeight, SizeNone)
 	}
@@ -182,6 +190,7 @@ func (p *gtk) MainThread(f func()) {
 
 // Close destroys the window and signals the main loop to stop.
 func (p *gtk) Close() error {
+	p.Logger.Log(BackendName, "close_requested", nil)
 	if p.window != 0 {
 		dispatchMain(func() { gtkWindowClose(p.window) })
 	} else {
@@ -221,13 +230,10 @@ func (p *gtk) windowInit(window uintptr) error {
 	// decide-policy: it fires for every navigation request and calling
 	// get_response() on a WebKitNavigationPolicyDecision crashes with a GLib
 	// assertion. download-started only fires for actual downloads.
-	fmt.Fprintf(os.Stderr, "webview: connect download hooks\n")
 	if webkitNetworkSessionGetDefault != nil {
 		session := webkitNetworkSessionGetDefault()
-		fmt.Fprintf(os.Stderr, "webview: download session=%x\n", session)
 		if session != 0 {
 			gSignalConnectData(session, "download-started", downloadStartedFn(), p.id, 0, 0)
-			fmt.Fprintf(os.Stderr, "webview: connected download-started on session\n")
 		}
 	}
 
@@ -248,6 +254,7 @@ func (p *gtk) windowSettings() {
 }
 
 func (p *gtk) onWindowDestroy() {
+	p.Logger.Log(BackendName, "closed", nil)
 	unregisterPlatform(p.id)
 	p.window = 0
 	dispatchMain(func() { p.stopRunLoop = true })
@@ -338,6 +345,7 @@ func (p *gtk) Navigate(url string) error {
 		p.pendingURL = url
 		p.pendingHTML = ""
 		p.mu.Unlock()
+		p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "queued"})
 		return nil
 	}
 	p.mu.Unlock()
@@ -345,6 +353,7 @@ func (p *gtk) Navigate(url string) error {
 		url = "about:blank"
 	}
 	webkitWebViewLoadURI(p.webview, url)
+	p.Logger.Log(BackendName, "navigate", map[string]string{"url": debuglog.URL(url), "phase": "started"})
 	return nil
 }
 
@@ -355,10 +364,12 @@ func (p *gtk) SetHTML(html string) error {
 		p.pendingHTML = html
 		p.pendingURL = ""
 		p.mu.Unlock()
+		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "queued"})
 		return nil
 	}
 	p.mu.Unlock()
 	webkitWebViewLoadHTML(p.webview, html, 0)
+	p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})
 	return nil
 }
 

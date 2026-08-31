@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/opentoys/webview/internal/debuglog"
 )
 
 // defaultChromeArgs are the stability flags shared by all Chrome invocations.
@@ -39,7 +41,9 @@ var defaultChromeArgs = []string{
 // New creates a Chrome backend. Chrome is launched lazily in Run.
 // Run launches Chrome and blocks until the window is closed.
 func (c *Chrome) Run() error {
+	c.Logger.Log(BackendName, "run_start", nil)
 	if err := c.start(); err != nil {
+		c.Logger.Log(BackendName, "error", map[string]string{"operation": "start", "error": debuglog.Error(err)})
 		return err
 	}
 	c.started = true
@@ -79,8 +83,11 @@ func (c *Chrome) Run() error {
 	// installer polls until the native binding appears, then wraps it.
 	c.Eval(bootstrapJS())
 	c.injectBridge()
+	c.Logger.Log(BackendName, "ready", nil)
 
-	return c.cmd.Wait()
+	err := c.cmd.Wait()
+	c.Logger.Log(BackendName, "closed", nil)
+	return err
 }
 
 func (c *Chrome) start() error {
@@ -178,6 +185,7 @@ func (c *Chrome) buildArgs(dir, appURL string) []string {
 
 // Close kills the Chrome process. Run returns once it exits.
 func (c *Chrome) Close() error {
+	c.Logger.Log(BackendName, "close_requested", nil)
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 	}
