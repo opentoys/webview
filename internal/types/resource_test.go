@@ -13,7 +13,7 @@ func TestMayHaveRequestBody(t *testing.T) {
 		want    bool
 	}{
 		{"GET", "GET", nil, false},
-		{"explicit empty POST", "POST", http.Header{"Content-Length": {"0"}}, false},
+		{"explicit empty POST", "POST", http.Header{"Content-Length": {"0"}}, true},
 		{"streamed blob", "POST", nil, true},
 		{"multipart file", "PUT", http.Header{"Content-Type": {"multipart/form-data; boundary=x"}}, true},
 		{"DELETE without body", "DELETE", nil, false},

@@ -3,7 +3,12 @@
 package darwin
 
 import (
+	"bytes"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -173,6 +178,111 @@ func TestCustomSchemeSupportsOPFS(t *testing.T) {
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("timed out waiting for custom-scheme page")
+	}
+}
+
+// TestResourceHandlerFetchUpload verifies that custom-scheme fetch requests
+// preserve Blob bytes and multipart FormData, including File content and name.
+func TestResourceHandlerFetchUpload(t *testing.T) {
+	p, _ := New()
+	done := make(chan string, 1)
+	uploads := make(chan ResourceRequest, 2)
+	p.MessageFunc = func(body string) { done <- body }
+	p.InterceptResource("webviewupload", func(req ResourceRequest, respond func(*ResourceResponse)) {
+		if strings.HasSuffix(req.URL, "/index.html") {
+			respond(&ResourceResponse{
+				Headers: http.Header{"Content-Type": {"text/html"}},
+				Body: []byte(`<script>
+					(async () => {
+						try {
+						await fetch('webviewupload://host/blob', {
+							method: 'POST', body: new Blob([Uint8Array.of(0, 255, 128, 65)])
+						});
+						const form = new FormData();
+						form.append('note', 'hello');
+						form.append('file', new File([Uint8Array.of(66, 0, 255)], 'payload.bin', {
+							type: 'application/octet-stream'
+						}));
+						await fetch('webviewupload://host/form', {method: 'POST', body: form});
+						window.webkit.messageHandlers.webviewBridge.postMessage('uploads-complete');
+						} catch (error) {
+						window.webkit.messageHandlers.webviewBridge.postMessage('uploads-error:' + error);
+						}
+					})();
+				</script>`),
+			})
+			return
+		}
+		uploads <- req
+		respond(&ResourceResponse{StatusCode: http.StatusOK, Headers: http.Header{}})
+	})
+	if err := p.Navigate("webviewupload://host/index.html"); err != nil {
+		t.Fatalf("Navigate() = %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- p.Run() }()
+	defer func() {
+		p.Close()
+		if err := <-runErr; err != nil {
+			t.Errorf("Run() = %v", err)
+		}
+	}()
+	select {
+	case got := <-done:
+		if got != "uploads-complete" {
+			t.Fatalf("page completion = %q", got)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("timed out waiting for uploads")
+	}
+
+	requests := map[string]ResourceRequest{}
+	for range 2 {
+		select {
+		case req := <-uploads:
+			requests[req.URL] = req
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for ResourceHandler upload")
+		}
+	}
+
+	blob := requests["webviewupload://host/blob"]
+	if want := []byte{0, 255, 128, 65}; !bytes.Equal(blob.Body, want) {
+		t.Fatalf("Blob body = %x, want %x", blob.Body, want)
+	}
+
+	form := requests["webviewupload://host/form"]
+	mediaType, params, err := mime.ParseMediaType(form.Headers.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+		t.Fatalf("FormData Content-Type = %q, params = %v, err = %v", form.Headers.Get("Content-Type"), params, err)
+	}
+	r := multipart.NewReader(bytes.NewReader(form.Body), params["boundary"])
+	parts := map[string][]byte{}
+	filenames := map[string]string{}
+	for {
+		part, err := r.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read multipart FormData: %v", err)
+		}
+		data, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read multipart part: %v", err)
+		}
+		parts[part.FormName()] = data
+		filenames[part.FormName()] = part.FileName()
+	}
+	if got := string(parts["note"]); got != "hello" {
+		t.Fatalf("FormData note = %q", got)
+	}
+	if got, want := parts["file"], []byte{66, 0, 255}; !bytes.Equal(got, want) {
+		t.Fatalf("FormData file = %x, want %x", got, want)
+	}
+	if filenames["file"] != "payload.bin" {
+		t.Fatalf("FormData filename = %q", filenames["file"])
 	}
 }
 

@@ -62,6 +62,9 @@ func registerDelegateClasses() {
 		}
 		body := objc.ID(message).Send(bodySel)
 		text := goString(body)
+		if p.handleFetchShimMessage(text) {
+			return
+		}
 		p.MessageFunc(text)
 	}
 	messageHandlerClass, err = objc.RegisterClass(
@@ -366,17 +369,23 @@ func registerDelegateClasses() {
 					bodyGo = make([]byte, bodyLen)
 					copy(bodyGo, unsafe.Slice((*byte)(unsafe.Pointer(httpBody.Send(objc.RegisterName("bytes")))), bodyLen))
 				}
-			} else if stream := objc.ID(req).Send(objc.RegisterName("HTTPBodyStream")); stream != 0 {
-				stream.Send(objc.RegisterName("open"))
-				buf := make([]byte, 4096)
-				for {
-					n := int64(stream.Send(objc.RegisterName("read:maxLength:"), unsafe.Pointer(&buf[0]), uintptr(len(buf))))
-					if n <= 0 {
-						break
+			}
+			// NSURLRequest can expose an empty HTTPBody alongside a populated
+			// HTTPBodyStream for Blob/File uploads, so fall back whenever no bytes
+			// were obtained rather than only when HTTPBody itself is nil.
+			if len(bodyGo) == 0 {
+				if stream := objc.ID(req).Send(objc.RegisterName("HTTPBodyStream")); stream != 0 {
+					stream.Send(objc.RegisterName("open"))
+					buf := make([]byte, 4096)
+					for {
+						n := int64(stream.Send(objc.RegisterName("read:maxLength:"), unsafe.Pointer(&buf[0]), uintptr(len(buf))))
+						if n <= 0 {
+							break
+						}
+						bodyGo = append(bodyGo, buf[:int(n)]...)
 					}
-					bodyGo = append(bodyGo, buf[:int(n)]...)
+					stream.Send(objc.RegisterName("close"))
 				}
-				stream.Send(objc.RegisterName("close"))
 			}
 		}
 

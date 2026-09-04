@@ -101,6 +101,11 @@ func (p *Platform) setup() error {
 
 	// Inject any user scripts accumulated before Run().
 	p.rebuildScriptsLocked()
+	// WKURLSchemeTask drops POST bodies for some Blob/File fetches. Install a
+	// document-start shim for registered schemes before any page code runs.
+	if len(p.schemeHandlers) > 0 {
+		addWKUserScript(ucc, fetchShimScript(p.schemeHandlers))
+	}
 	// Re-inject bootstrap with current bound func names (BootstrapFuncs may
 	// have changed via Bind before Run).
 	if p.BoundFuncs != nil {

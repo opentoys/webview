@@ -31,6 +31,14 @@ func MayHaveRequestBody(method string, headers http.Header) bool {
 		return false
 	}
 
+	// WebKit may advertise Content-Length: 0 for a Blob whose bytes are only
+	// available through HTTPBodyStream. POST/PUT/PATCH must therefore remain
+	// conservative regardless of the headers.
+	switch strings.ToUpper(method) {
+	case "POST", "PUT", "PATCH":
+		return true
+	}
+
 	if length := headers.Get("Content-Length"); length != "" {
 		if n, err := strconv.ParseInt(length, 10, 64); err == nil {
 			return n > 0
@@ -40,12 +48,5 @@ func MayHaveRequestBody(method string, headers http.Header) bool {
 		return true
 	}
 
-	// Fetch permits an empty Content-Type and an unknown body size for these
-	// methods, so retain the conservative read for them.
-	switch strings.ToUpper(method) {
-	case "POST", "PUT", "PATCH":
-		return true
-	default:
-		return false
-	}
+	return false
 }
