@@ -11,6 +11,30 @@ import (
 	"github.com/opentoys/webview/internal/types"
 )
 
+func TestBuildArgsOffscreen(t *testing.T) {
+	base := (&Chrome{}).buildArgs("/tmp/profile", "about:blank")
+	for _, arg := range []string{
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+	} {
+		if strings.Contains(strings.Join(base, "\n"), arg) {
+			t.Errorf("default Chrome args unexpectedly contain %q", arg)
+		}
+	}
+
+	offscreen := (&Chrome{Offscreen: true}).buildArgs("/tmp/profile", "about:blank")
+	for _, arg := range []string{
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+	} {
+		if !strings.Contains(strings.Join(offscreen, "\n"), arg) {
+			t.Errorf("offscreen Chrome args missing %q", arg)
+		}
+	}
+}
+
 func TestBootstrapJSRegistersBindingTransport(t *testing.T) {
 	s := bootstrapJS()
 	for _, want := range []string{

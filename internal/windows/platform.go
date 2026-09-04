@@ -56,6 +56,10 @@ type Platform struct {
 	Logger    *debuglog.Logger
 	Incognito bool
 	DataDir   string
+	// Offscreen keeps the WebView2 controller active while the parent window is
+	// minimized or occluded.
+	Offscreen       bool
+	offscreenActive bool
 
 	// COM callback objects (prevent GC).
 	envCompletedHandler     *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler

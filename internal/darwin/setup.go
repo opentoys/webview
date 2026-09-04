@@ -19,9 +19,41 @@ func (p *Platform) setupDataStore() objc.ID {
 	return objc.ID(wkDataStoreClass).Send(defaultDataStoreSel)
 }
 
+// beginOffscreenActivity prevents App Nap from throttling the process while a
+// caller intentionally renders content without a visible window. It is ended
+// when Run returns.
+func (p *Platform) beginOffscreenActivity() {
+	if !p.Offscreen || p.offscreenActivity != 0 {
+		return
+	}
+	processInfo := objc.ID(objc.GetClass("NSProcessInfo")).Send(objc.RegisterName("processInfo"))
+	if processInfo == 0 {
+		return
+	}
+	// NSActivityUserInitiatedAllowingIdleSystemSleep: resist App Nap without
+	// preventing the user's Mac from sleeping.
+	const nsActivityUserInitiatedAllowingIdleSystemSleep = 0x00FFFFFF
+	p.offscreenActivity = processInfo.Send(
+		objc.RegisterName("beginActivityWithOptions:reason:"),
+		nsActivityUserInitiatedAllowingIdleSystemSleep,
+		nsString("webview offscreen rendering"),
+	)
+}
+
+func (p *Platform) endOffscreenActivity() {
+	if p.offscreenActivity == 0 {
+		return
+	}
+	objc.ID(objc.GetClass("NSProcessInfo")).Send(
+		objc.RegisterName("processInfo"),
+	).Send(objc.RegisterName("endActivity:"), p.offscreenActivity)
+	p.offscreenActivity = 0
+}
+
 // setup creates the NSWindow and WKWebView, then shows them. Runs on the host
 // thread (called via mainThread from Run).
 func (p *Platform) setup() error {
+	p.beginOffscreenActivity()
 	// Route script messages of the (process-global) handler class to this
 	// platform. Called on the host thread; the didReceiveMessage handler
 	// closure reads activePlatform on the same thread, so no lock is needed.
@@ -81,7 +113,11 @@ func (p *Platform) setup() error {
 	// Website data store: incognito (non-persistent), custom dir, or default.
 	config.Send(setWebsiteDataStoreSel, p.setupDataStore())
 	// Register custom URL scheme handlers on the configuration.
-	// Must happen before WKWebView is created.
+	// Must happen before WKWebView is created. WebKit treats a scheme
+	// registered through WKURLSchemeHandler as a secure context, so pages
+	// loaded from it report window.isSecureContext == true. Do not spoof
+	// that read-only browser value in injected JavaScript: doing so would not
+	// grant the secure-context-only web APIs.
 	for scheme, handler := range p.schemeHandlers {
 		schemeHandlerInstances[scheme] = handler
 		inst := objc.ID(schemeHandlerClass).Send(allocSel)

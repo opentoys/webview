@@ -82,6 +82,7 @@ type gtk struct {
 	Logger    *debuglog.Logger
 	Incognito bool
 	DataDir   string
+	Offscreen bool
 
 	// Pending state applied in setup when window/webview are created.
 	mu           sync.Mutex

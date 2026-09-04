@@ -14,6 +14,13 @@ import (
 )
 
 func (p *Platform) setup() error {
+	if p.Offscreen {
+		// WebView2's controller already remains visible while the parent window
+		// is minimized. Keep this UI thread eligible to run so its renderer does
+		// not get suspended by Windows' background power policy.
+		pSetThreadExecutionState.Call(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+		p.offscreenActive = true
+	}
 	// COM initialization (STA).
 	r, _, err := pCoInitializeEx.Call(0, COINIT_APARTMENTTHREADED)
 	if r != S_OK && r != 1 { // S_FALSE = already initialized
@@ -137,6 +144,11 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_SIZE:
 		p.resizeWidget()
+		if wParam == SIZE_MINIMIZED && p.Offscreen && p.controller != nil {
+			// Do not let a minimized parent mark the WebView2 controller hidden:
+			// IsVisible=false suppresses rendering and event delivery.
+			p.controller.PutIsVisible(true)
+		}
 		return 0
 	case WM_APP:
 		if fn := p.dispatch.pop(); fn != nil {
@@ -178,6 +190,10 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case WM_DESTROY:
 		// Only clean up for the main window, not the widget child window.
 		if hwnd == p.hwnd {
+			if p.offscreenActive {
+				pSetThreadExecutionState.Call(ES_CONTINUOUS)
+				p.offscreenActive = false
+			}
 			p.Logger.Log(BackendName, "closed", nil)
 			pPostQuitMessage.Call(0)
 			pCoUninitialize.Call()

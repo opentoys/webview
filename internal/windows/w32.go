@@ -31,6 +31,7 @@ var (
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
 	pGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
+	pSetThreadExecutionState  = kernel32.NewProc("SetThreadExecutionState")
 	pGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	pPostMessageW             = user32.NewProc("PostMessageW")
 	pCreateMenu               = user32.NewProc("CreateMenu")
@@ -56,6 +57,14 @@ const (
 // ShowWindow commands.
 const SW_SHOW = 5
 
+// SetThreadExecutionState flags. An offscreen renderer must remain scheduled
+// when its window is minimized or not visible; ES_CONTINUOUS is restored on
+// teardown so this never leaks past the webview lifetime.
+const (
+	ES_CONTINUOUS      = 0x80000000
+	ES_SYSTEM_REQUIRED = 0x00000001
+)
+
 // Window messages.
 const (
 	WM_SIZE    = 0x0005
@@ -64,6 +73,8 @@ const (
 	WM_COMMAND = 0x0111
 	WM_APP     = 0x8000
 )
+
+const SIZE_MINIMIZED = 1
 
 // Menu constants.
 const (

@@ -101,6 +101,10 @@ type Platform struct {
 	// DataDir sets the persistent website data store directory (cookies, cache,
 	// localStorage). Empty = WebKit default. Ignored when Incognito is set.
 	DataDir string
+	// Offscreen keeps the process out of App Nap while the window is minimized
+	// or occluded, allowing WebKit rendering and timers to continue.
+	Offscreen         bool
+	offscreenActivity objc.ID
 
 	mu     sync.Mutex
 	closed bool
@@ -163,6 +167,7 @@ func (p *Platform) Run() error {
 		return setupErr
 	}
 	<-p.runDone
+	mainThread(p.endOffscreenActivity)
 	p.Logger.Log(BackendName, "closed", nil)
 	return nil
 }

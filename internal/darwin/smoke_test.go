@@ -3,6 +3,7 @@
 package darwin
 
 import (
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +128,51 @@ func TestScriptMessage(t *testing.T) {
 	p.Close()
 	if err := <-errCh; err != nil {
 		t.Fatalf("Run() = %v", err)
+	}
+}
+
+// TestCustomSchemeSupportsOPFS verifies that a document served through a
+// WKURLSchemeHandler has both a secure context and an origin-backed OPFS. This
+// must be exercised in WebKit rather than faked by overwriting isSecureContext.
+func TestCustomSchemeSupportsOPFS(t *testing.T) {
+	p, _ := New()
+	got := make(chan string, 1)
+	p.MessageFunc = func(body string) { got <- body }
+	p.InterceptResource("webviewtest", func(_ ResourceRequest, respond func(*ResourceResponse)) {
+		respond(&ResourceResponse{
+			Headers: http.Header{"Content-Type": {"text/html"}},
+			Body: []byte(`<script>
+				(async () => {
+					try {
+						await navigator.storage.getDirectory();
+						window.webkit.messageHandlers.webviewBridge.postMessage(String(window.isSecureContext) + ':opfs-ok');
+					} catch (error) {
+						window.webkit.messageHandlers.webviewBridge.postMessage(String(window.isSecureContext) + ':' + error.name);
+					}
+				})();
+			</script>`),
+		})
+	})
+	if err := p.Navigate("webviewtest://host/"); err != nil {
+		t.Fatalf("Navigate() = %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- p.Run() }()
+	defer func() {
+		p.Close()
+		if err := <-runErr; err != nil {
+			t.Errorf("Run() = %v", err)
+		}
+	}()
+
+	select {
+	case secure := <-got:
+		if secure != "true:opfs-ok" {
+			t.Fatalf("custom-scheme OPFS result = %q, want true:opfs-ok", secure)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("timed out waiting for custom-scheme page")
 	}
 }
 

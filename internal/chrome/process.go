@@ -16,8 +16,6 @@ import (
 // defaultChromeArgs are the stability flags shared by all Chrome invocations.
 var defaultChromeArgs = []string{
 	"--disable-background-networking",
-	"--disable-background-timer-throttling",
-	"--disable-backgrounding-occluded-windows",
 	"--disable-breakpad",
 	"--disable-client-side-phishing-detection",
 	"--disable-default-apps",
@@ -28,7 +26,6 @@ var defaultChromeArgs = []string{
 	"--disable-ipc-flooding-protection",
 	"--disable-popup-blocking",
 	"--disable-prompt-on-repost",
-	"--disable-renderer-backgrounding",
 	"--disable-sync",
 	"--disable-translate",
 	"--metrics-recording-only",
@@ -172,6 +169,15 @@ func (c *Chrome) start() error {
 
 func (c *Chrome) buildArgs(dir, appURL string) []string {
 	args := append([]string{}, defaultChromeArgs...)
+	if c.Offscreen {
+		// Keep Chromium's renderer and timers active when the app window is
+		// minimized, occluded, or otherwise not visible.
+		args = append(args,
+			"--disable-background-timer-throttling",
+			"--disable-backgrounding-occluded-windows",
+			"--disable-renderer-backgrounding",
+		)
+	}
 	args = append(args, "--remote-debugging-pipe")
 	// at launch (baked-in URL) instead of navigating post-boot.
 	args = append(args, "--app="+appURL)

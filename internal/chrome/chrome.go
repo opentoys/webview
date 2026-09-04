@@ -41,6 +41,7 @@ type Options struct {
 	Debug     bool
 	Incognito bool
 	DataDir   string
+	Offscreen bool
 	// Executable overrides ChromeExecutable() when non-empty.
 	Executable string
 }
@@ -75,6 +76,7 @@ type Chrome struct {
 	Logger     *debuglog.Logger
 	Incognito  bool
 	DataDir    string
+	Offscreen  bool
 	Executable string
 
 	// Set before Run; baked into the --app launch URL so Chrome opens the
@@ -105,6 +107,7 @@ func New(opts Options) *Chrome {
 		Debug:      opts.Debug,
 		Incognito:  opts.Incognito,
 		DataDir:    opts.DataDir,
+		Offscreen:  opts.Offscreen,
 		Executable: opts.Executable,
 	}
 }

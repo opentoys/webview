@@ -70,6 +70,9 @@ type Options struct {
 	Debug     bool
 	Incognito bool
 	DataDir   string
+	// Offscreen keeps the renderer active while its window is minimized or
+	// occluded. It is false by default, preserving normal power saving.
+	Offscreen bool
 	// Backend selects the rendering backend. Empty/"" uses the platform
 	// default (native). BackendChrome drives Chrome over the DevTools
 	// Protocol; the Fallback* variants resolve at New time (see those
@@ -139,6 +142,7 @@ func buildChrome(opts Options, w *W, logger *debuglog.Logger) (Platform, error) 
 		Debug:     opts.Debug,
 		Incognito: opts.Incognito,
 		DataDir:   opts.DataDir,
+		Offscreen: opts.Offscreen,
 	})
 	p.Logger = logger
 	p.BoundFuncs = w.bridge.funcNames
