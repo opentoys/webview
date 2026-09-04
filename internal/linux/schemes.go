@@ -163,9 +163,8 @@ func (p *gtk) registerSchemes() error {
 
 		// Extract HTTP body from GInputStream (nil for GET/HEAD).
 		var body []byte
-		switch method {
-		case "GET", "HEAD", "TRACE", "OPTIONS":
-		default:
+		headers := extractRequestHeaders(request)
+		if MayHaveRequestBody(method, headers) {
 			if stream := requestGetHTTPBody(request); stream != 0 {
 				buf := make([]byte, 4096)
 				for {
@@ -180,7 +179,7 @@ func (p *gtk) registerSchemes() error {
 			}
 		}
 
-		sr := ResourceRequest{URL: url, Method: method, Headers: extractRequestHeaders(request), Body: body}
+		sr := ResourceRequest{URL: url, Method: method, Headers: headers, Body: body}
 		var resp *ResourceResponse
 		handler(sr, func(r *ResourceResponse) {
 			resp = r

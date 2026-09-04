@@ -35,6 +35,30 @@ func TestBuildArgsOffscreen(t *testing.T) {
 	}
 }
 
+func TestHandleFetchPreservesBinaryPostDataEntries(t *testing.T) {
+	var got types.ResourceRequest
+	c := &Chrome{schemeHandlers: map[string]types.ResourceHandler{
+		"app": func(req types.ResourceRequest, respond func(*types.ResourceResponse)) {
+			got = req
+		},
+	}}
+	c.handleFetch(json.RawMessage(`{
+		"requestId":"request-1",
+		"request":{
+			"url":"https://app.localhost/upload",
+			"method":"POST",
+			"headers":{"Content-Type":"multipart/form-data; boundary=x"},
+			"postDataEntries":[{"bytes":"AP+AQUJD"}]
+		}
+	}`))
+	if want := []byte{0x00, 0xff, 0x80, 'A', 'B', 'C'}; string(got.Body) != string(want) {
+		t.Fatalf("request body = %x, want %x", got.Body, want)
+	}
+	if got.Headers.Get("Content-Type") != "multipart/form-data; boundary=x" {
+		t.Fatalf("Content-Type = %q", got.Headers.Get("Content-Type"))
+	}
+}
+
 func TestBootstrapJSRegistersBindingTransport(t *testing.T) {
 	s := bootstrapJS()
 	for _, want := range []string{

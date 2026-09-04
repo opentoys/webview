@@ -42,10 +42,13 @@ func (c *Chrome) handleFetch(params json.RawMessage) {
 	var p struct {
 		RequestID string `json:"requestId"`
 		Request   struct {
-			URL      string            `json:"url"`
-			Method   string            `json:"method"`
-			Headers  map[string]string `json:"headers"`
-			PostData string            `json:"postData"`
+			URL             string            `json:"url"`
+			Method          string            `json:"method"`
+			Headers         map[string]string `json:"headers"`
+			PostData        string            `json:"postData"`
+			PostDataEntries []struct {
+				Bytes string `json:"bytes"`
+			} `json:"postDataEntries"`
 		} `json:"request"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -60,11 +63,28 @@ func (c *Chrome) handleFetch(params json.RawMessage) {
 		return
 	}
 
+	body := []byte(p.Request.PostData)
+	if len(p.Request.PostDataEntries) > 0 {
+		body = body[:0]
+		for _, entry := range p.Request.PostDataEntries {
+			// CDP's `binary` fields are encoded as base64 in JSON. Unlike the
+			// deprecated postData string, this preserves File, Blob, and the
+			// binary parts of multipart FormData exactly.
+			chunk, err := base64.StdEncoding.DecodeString(entry.Bytes)
+			if err != nil {
+				// A malformed entry must not silently turn into a partial upload.
+				body = nil
+				break
+			}
+			body = append(body, chunk...)
+		}
+	}
+
 	req := types.ResourceRequest{
 		URL:     p.Request.URL,
 		Method:  p.Request.Method,
 		Headers: http.Header{},
-		Body:    []byte(p.Request.PostData),
+		Body:    body,
 	}
 	for k, v := range p.Request.Headers {
 		req.Headers.Set(k, v)

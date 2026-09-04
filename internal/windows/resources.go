@@ -70,9 +70,7 @@ func (p *Platform) InvokeWebResourceRequested(sender *iCoreWebView2, args *iCore
 		Method:  method,
 		Headers: headers,
 	}
-	switch method {
-	case "GET", "HEAD", "TRACE", "OPTIONS":
-	default:
+	if MayHaveRequestBody(method, headers) {
 		sr.Body = req.GetContent().ReadAll()
 	}
 

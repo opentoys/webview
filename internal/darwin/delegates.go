@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/types"
 )
 
 func registerDelegateClasses() {
@@ -353,18 +354,29 @@ func registerDelegateClasses() {
 		// Store task to prevent GC; get numeric ID for the closure.
 		taskID := activeSchemeTasks.put(task)
 
-		// Get HTTP body. Only body-bearing methods (POST/PUT/PATCH/DELETE)
-		// can carry one; skip the lookup for GET/HEAD/TRACE/OPTIONS.
+		// Get HTTP body. File/Blob-backed fetches may arrive as an
+		// HTTPBodyStream rather than HTTPBody, so read both forms. FormData is
+		// passed through unchanged as multipart bytes and its boundary remains
+		// available in Content-Type.
 		var bodyGo []byte
-		switch methodGo {
-		case "GET", "HEAD", "TRACE", "OPTIONS":
-		default:
+		if types.MayHaveRequestBody(methodGo, headersGo) {
 			if httpBody := objc.ID(req).Send(objc.RegisterName("HTTPBody")); httpBody != 0 {
 				bodyLen := int(httpBody.Send(objc.RegisterName("length")))
 				if bodyLen > 0 {
 					bodyGo = make([]byte, bodyLen)
 					copy(bodyGo, unsafe.Slice((*byte)(unsafe.Pointer(httpBody.Send(objc.RegisterName("bytes")))), bodyLen))
 				}
+			} else if stream := objc.ID(req).Send(objc.RegisterName("HTTPBodyStream")); stream != 0 {
+				stream.Send(objc.RegisterName("open"))
+				buf := make([]byte, 4096)
+				for {
+					n := int64(stream.Send(objc.RegisterName("read:maxLength:"), unsafe.Pointer(&buf[0]), uintptr(len(buf))))
+					if n <= 0 {
+						break
+					}
+					bodyGo = append(bodyGo, buf[:int(n)]...)
+				}
+				stream.Send(objc.RegisterName("close"))
 			}
 		}
 
