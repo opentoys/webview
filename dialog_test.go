@@ -23,6 +23,7 @@ func (p *dialogPlatformStub) SetMenus([]Menu)                           {}
 func (p *dialogPlatformStub) MainThread(f func())                       { f() }
 func (p *dialogPlatformStub) ChooseFile() (string, error)               { return p.file, p.fileErr }
 func (p *dialogPlatformStub) ChooseDir() (string, error)                { return p.dir, p.dirErr }
+func (p *dialogPlatformStub) SetFilesDropped(func([]string)) error      { return nil }
 
 func TestChoosePathForwarding(t *testing.T) {
 	p := &dialogPlatformStub{file: "/tmp/file.txt", dirErr: ErrDialogCancelled}

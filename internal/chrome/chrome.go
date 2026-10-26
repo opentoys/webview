@@ -4,6 +4,7 @@ package chrome
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"sync"
@@ -11,6 +12,9 @@ import (
 	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
 )
+
+// ErrDropUnsupported reports that the CDP backend has no native host window.
+var ErrDropUnsupported = errors.New("webview: native file drops are unsupported by the Chrome/Chromium backend")
 
 const (
 	BackendName string = "chrome"
@@ -110,4 +114,12 @@ func New(opts Options) *Chrome {
 		Offscreen:  opts.Offscreen,
 		Executable: opts.Executable,
 	}
+}
+
+// SetFilesDropped is unsupported because Chrome is controlled through CDP.
+func (c *Chrome) SetFilesDropped(fn func([]string)) error {
+	if fn != nil {
+		return ErrDropUnsupported
+	}
+	return nil
 }

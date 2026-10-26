@@ -271,6 +271,29 @@ w.MainThread(func() {
 })
 ```
 
+### Native file drops
+
+`OnFilesDropped` receives local files and directories dropped onto the window
+content area (as cleaned absolute paths):
+
+```go
+if err := w.OnFilesDropped(func(paths []string) {
+	for _, path := range paths {
+		fmt.Println(path)
+	}
+}); err != nil {
+	log.Fatal(err)
+}
+```
+
+Register or replace the handler before or during `Run`. While enabled, native
+handling consumes local-file drops, so the page does not receive its
+`dragover`/`drop` event. Callbacks are asynchronous and strictly serial, never
+blocking the UI thread. Order and duplicates are retained; URLs, text, virtual
+files, and items without a local path are ignored. Pass `nil` to unregister and
+restore browser behaviour. A non-nil handler on the Chrome/Chromium backend
+returns `webview.ErrDropUnsupported`.
+
 ## Universal app shell: `cmd/app`
 
 `cmd/app` loads an application from `app.data`, a zip archive in the current directory. If the archive is absent, it falls back to the `data/` directory. Both sources use the same layout:

@@ -87,6 +87,10 @@ type gtk struct {
 	Incognito bool
 	DataDir   string
 	Offscreen bool
+	// filesDropped is installed by the public W dispatcher. The GTK4 adapter
+	// owns the actual controller and keeps this backend independent of Go API
+	// lifetime management.
+	filesDropped func([]string)
 
 	// Pending state applied in setup when window/webview are created.
 	mu           sync.Mutex
@@ -210,6 +214,18 @@ func (p *gtk) Close() error {
 	return nil
 }
 
+// SetFilesDropped configures the GTK drop target. It may be called before
+// Run; installation is deferred until the WebKit widget exists.
+func (p *gtk) SetFilesDropped(fn func([]string)) error {
+	p.mu.Lock()
+	p.filesDropped = fn
+	p.mu.Unlock()
+	if p.webview != 0 {
+		return p.setDropTarget(fn)
+	}
+	return nil
+}
+
 // applyMenus builds and installs a menu bar from the given Menu slice. The
 // GTK menubar implementation.
 func (p *gtk) applyMenus(menus []Menu) {
@@ -230,6 +246,9 @@ func (p *gtk) windowInit(window uintptr) error {
 	p.webview = webkitWebViewNew()
 	gObjectRefSink(p.webview)
 	p.manager = webkitWebViewGetUserContentManager(p.webview)
+	if err := p.setDropTarget(p.filesDropped); err != nil {
+		return err
+	}
 
 	gSignalConnectData(p.manager, "script-message-received::webviewBridge",
 		messageHandlerFn, p.id, 0, 0)

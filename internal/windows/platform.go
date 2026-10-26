@@ -60,6 +60,7 @@ type Platform struct {
 	// minimized or occluded.
 	Offscreen       bool
 	offscreenActive bool
+	filesDropped    func([]string)
 
 	// COM callback objects (prevent GC).
 	envCompletedHandler     *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
@@ -194,6 +195,18 @@ func (p *Platform) Close() error {
 	p.closed = true
 	p.mu.Unlock()
 	pPostMessageW.Call(p.hwnd, WM_CLOSE, 0, 0)
+	return nil
+}
+
+// SetFilesDropped configures the host drop target. It is retained before
+// WebView2 initializes and installed by initWebView once the widget exists.
+func (p *Platform) SetFilesDropped(fn func([]string)) error {
+	p.mu.Lock()
+	p.filesDropped = fn
+	p.mu.Unlock()
+	if p.ready.Load() != 0 {
+		return p.setDropTarget(fn)
+	}
 	return nil
 }
 

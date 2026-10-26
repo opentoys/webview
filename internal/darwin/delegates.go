@@ -29,6 +29,42 @@ func registerDelegateClasses() {
 			p.signalExit()
 		}
 	}
+	// NSDraggingDestination. The window is deliberately the drop target so a
+	// registered native handler consumes a file drop before WKWebView turns it
+	// into DOM dragover/drop events.
+	draggingEntered := func(id objc.ID, cmd objc.SEL, sender objc.ID) uintptr {
+		if p := activePlatform; p != nil && p.fileDropEnabled() {
+			return 1 // NSDragOperationCopy
+		}
+		return 0
+	}
+	prepareForDragOperation := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
+		return activePlatform != nil && activePlatform.fileDropEnabled()
+	}
+	draggingUpdated := func(id objc.ID, cmd objc.SEL, sender objc.ID) uintptr {
+		if p := activePlatform; p != nil && p.fileDropEnabled() {
+			return 1 // NSDragOperationCopy
+		}
+		return 0
+	}
+	performDragOperation := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
+		p := activePlatform
+		if p == nil || !p.fileDropEnabled() {
+			return false
+		}
+		paths := p.pathsFromDraggingPasteboard(sender.Send(objc.RegisterName("draggingPasteboard")))
+		if len(paths) == 0 {
+			return false
+		}
+		p.mu.Lock()
+		fn := p.filesDropped
+		p.mu.Unlock()
+		if fn != nil {
+			fn(paths)
+			return true
+		}
+		return false
+	}
 	// applicationShouldTerminateAfterLastWindowClosed: keeps the app alive after
 	// the last window closes so Run() only returns via Close().
 	terminateAfterLastWindowClosed := func(id objc.ID, cmd objc.SEL, app objc.ID) bool {
@@ -44,10 +80,50 @@ func registerDelegateClasses() {
 			{Cmd: objc.RegisterName("windowShouldClose:"), Fn: windowShouldClose},
 			{Cmd: objc.RegisterName("windowWillClose:"), Fn: windowWillClose},
 			{Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"), Fn: terminateAfterLastWindowClosed},
+			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
+			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
+			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: draggingUpdated},
+			{Cmd: objc.RegisterName("performDragOperation:"), Fn: performDragOperation},
 		},
 	)
 	if err != nil {
 		probeErr = fmt.Errorf("webview: register class: %w", err)
+		return
+	}
+
+	// Drops are dispatched to the view under the cursor, not an NSWindow
+	// delegate. This container sits directly above WKWebView and implements
+	// NSDraggingDestination for native file drops.
+	fileDropViewClass, err = objc.RegisterClass(
+		"GoWebviewFileDropView",
+		nsViewClass,
+		nil,
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
+			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
+			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: draggingUpdated},
+			{Cmd: objc.RegisterName("performDragOperation:"), Fn: performDragOperation},
+		},
+	)
+	if err != nil {
+		probeErr = fmt.Errorf("webview: register file drop view class: %w", err)
+		return
+	}
+	fileDropWebViewClass, err = objc.RegisterClass(
+		"GoWebviewFileDropWebView",
+		wkWebViewClass,
+		nil,
+		nil,
+		[]objc.MethodDef{
+			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
+			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: draggingUpdated},
+			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
+			{Cmd: objc.RegisterName("performDragOperation:"), Fn: performDragOperation},
+		},
+	)
+	if err != nil {
+		probeErr = fmt.Errorf("webview: register file drop webview class: %w", err)
 		return
 	}
 

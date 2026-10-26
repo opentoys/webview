@@ -163,6 +163,8 @@ var (
 	nsURLRequestClass      objc.Class
 	nsWindowClass          objc.Class
 	nsViewClass            objc.Class
+	fileDropViewClass      objc.Class
+	fileDropWebViewClass   objc.Class
 	nsAppClass             objc.Class
 	nsAutoreleasePoolClass objc.Class
 	wkUCCClass             objc.Class

@@ -77,6 +77,8 @@ func mainThread(fn func()) {
 type Platform struct {
 	window           objc.ID
 	webview          objc.ID
+	dropView         objc.ID // NSView subclass that receives native file drops.
+	webviewDragTypes objc.ID // original WKWebView registration, restored on disable.
 	delegate         objc.ID
 	uiDelegate       objc.ID // WKUIDelegate instance; kept alive for the webview.
 	downloadDelegate objc.ID // WKNavigationDelegate+WKDownloadDelegate instance.
@@ -144,6 +146,7 @@ type Platform struct {
 
 	// pendingMenus stores menus set via SetMenus before Run().
 	pendingMenus []Menu
+	filesDropped func([]string)
 }
 
 func New() (*Platform, error) {
@@ -168,6 +171,23 @@ func (p *Platform) MainThread(f func()) { mainThread(f) }
 
 func (p *Platform) ChooseFile() (string, error) { return p.choosePath(false) }
 func (p *Platform) ChooseDir() (string, error)  { return p.choosePath(true) }
+
+// SetFilesDropped installs (or removes) this window's native file-drop
+// receiver. It is safe before Run: setup applies the pending configuration.
+func (p *Platform) SetFilesDropped(fn func([]string)) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("webview: cannot register file drop handler after Close")
+	}
+	p.filesDropped = fn
+	w := p.dropView
+	p.mu.Unlock()
+	if w != 0 {
+		mainThread(func() { p.applyFileDropTarget(w, fn != nil) })
+	}
+	return nil
+}
 
 func (p *Platform) choosePath(directory bool) (string, error) {
 	p.mu.Lock()

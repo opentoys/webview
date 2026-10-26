@@ -51,6 +51,11 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 // initWebView finishes WebView2 setup after the controller-completed callback
 // has returned. It runs on the UI thread via the message loop.
 func (p *Platform) initWebView() {
+	if err := p.setDropTarget(p.filesDropped); err != nil {
+		p.Logger.Log(BackendName, "error", map[string]string{"operation": "file_drop", "error": err.Error()})
+		_ = p.Close()
+		return
+	}
 	// Register WebMessageReceived handler.
 	var msgTok eventToken
 	p.webview.AddWebMessageReceived(p.msgReceivedHandler, &msgTok)

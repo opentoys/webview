@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/opentoys/webview/internal/chrome"
 	"github.com/opentoys/webview/internal/debuglog"
@@ -63,6 +65,9 @@ var (
 	ErrDialogCancelled = types.ErrDialogCancelled
 	// ErrDialogUnsupported is returned by backends without host-native choosers.
 	ErrDialogUnsupported = types.ErrDialogUnsupported
+	// ErrDropUnsupported is returned when a backend cannot receive native file
+	// drops. The Chrome/Chromium backend deliberately has no host window hook.
+	ErrDropUnsupported = errors.New("webview: native file drops are unsupported by this backend")
 )
 
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
@@ -82,6 +87,9 @@ type Platform interface {
 	MainThread(f func())
 	ChooseFile() (string, error)
 	ChooseDir() (string, error)
+	// SetFilesDropped installs the native drop target. The callback must return
+	// promptly; it only hands an immutable batch to W's dispatcher.
+	SetFilesDropped(func([]string)) error
 }
 
 // Options configures the webview. Field semantics are per-platform; each
@@ -109,6 +117,18 @@ type Options struct {
 type W struct {
 	p      Platform
 	bridge *bridge
+
+	dropMu     sync.Mutex
+	dropFn     func([]string)
+	dropClosed bool
+	dropQueue  []dropEvent
+	dropWake   chan struct{}
+	dropOnce   sync.Once
+}
+
+type dropEvent struct {
+	fn    func([]string)
+	paths []string
 }
 
 func New(opts Options) (*W, error) {
@@ -172,8 +192,14 @@ func buildChrome(opts Options, w *W, logger *debuglog.Logger) (Platform, error) 
 	return p, nil
 }
 
-func (w *W) Run() error            { return w.p.Run() }
-func (w *W) Close() error          { return w.p.Close() }
+func (w *W) Run() error { return w.p.Run() }
+func (w *W) Close() error {
+	w.dropMu.Lock()
+	w.dropClosed = true
+	w.dropFn = nil
+	w.dropMu.Unlock()
+	return w.p.Close()
+}
 func (w *W) SetTitle(title string) { w.p.SetTitle(title) }
 func (w *W) SetSize(width, height int, hint types.SizeHint) {
 	w.p.SetSize(width, height, hint)
@@ -213,4 +239,89 @@ func (w *W) SetMenu(menus ...Menu) {
 // (e.g., native dialogs, window manipulation).
 func (w *W) MainThread(f func()) {
 	w.p.MainThread(f)
+}
+
+// OnFilesDropped receives local files and directories dropped on the native
+// window content area. While installed it consumes these drops before the web
+// page sees them. fn is invoked asynchronously, in drop order, and never on a
+// platform UI thread. Passing nil removes the handler and restores the
+// browser's normal drag-and-drop behaviour.
+func (w *W) OnFilesDropped(fn func(paths []string)) error {
+	w.dropMu.Lock()
+	defer w.dropMu.Unlock()
+	if w.dropClosed {
+		return errors.New("webview: cannot register file drop handler after Close")
+	}
+	if err := w.p.SetFilesDropped(w.captureFilesDropped(fn)); err != nil {
+		if errors.Is(err, chrome.ErrDropUnsupported) {
+			return ErrDropUnsupported
+		}
+		return err
+	}
+	w.dropFn = fn
+	return nil
+}
+
+// captureFilesDropped returns nil when drops are disabled, allowing platforms
+// to restore their normal browser behaviour without knowing W's state.
+func (w *W) captureFilesDropped(fn func([]string)) func([]string) {
+	if fn == nil {
+		return nil
+	}
+	return w.filesDropped
+}
+
+// filesDropped is called by a platform UI implementation. It makes all data
+// independent of native object lifetimes and snapshots the handler at capture
+// time, then hands it to a single worker.
+func (w *W) filesDropped(paths []string) {
+	clean := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || !filepath.IsAbs(path) {
+			continue
+		}
+		clean = append(clean, filepath.Clean(path))
+	}
+	if len(clean) == 0 {
+		return
+	}
+	w.dropMu.Lock()
+	if w.dropClosed || w.dropFn == nil {
+		w.dropMu.Unlock()
+		return
+	}
+	e := dropEvent{fn: w.dropFn, paths: clean}
+	w.dropOnce.Do(func() {
+		w.dropWake = make(chan struct{}, 1)
+		go w.runDropQueue()
+	})
+	w.dropQueue = append(w.dropQueue, e)
+	wake := w.dropWake
+	w.dropMu.Unlock()
+	// Coalesce wakeups. The queue itself is protected by dropMu and is never
+	// bounded, so this cannot hold up a native UI callback.
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *W) runDropQueue() {
+	for range w.dropWake {
+		for {
+			w.dropMu.Lock()
+			if len(w.dropQueue) == 0 {
+				w.dropMu.Unlock()
+				break
+			}
+			e := w.dropQueue[0]
+			w.dropQueue[0] = dropEvent{}
+			w.dropQueue = w.dropQueue[1:]
+			closed := w.dropClosed
+			w.dropMu.Unlock()
+			if !closed {
+				e.fn(append([]string(nil), e.paths...))
+			}
+		}
+	}
 }

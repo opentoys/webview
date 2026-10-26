@@ -283,6 +283,22 @@ w.MainThread(func() {
 })
 ```
 
+### 原生文件拖放
+
+`OnFilesDropped` 接收拖入窗口内容区域的本地文件和目录（路径为绝对、清理后的路径）：
+
+```go
+if err := w.OnFilesDropped(func(paths []string) {
+	for _, path := range paths {
+		fmt.Println(path)
+	}
+}); err != nil {
+	log.Fatal(err)
+}
+```
+
+可在 `Run` 前或运行期间注册/替换。启用时原生层独占本地文件拖放，网页的 `dragover`/`drop` 不会收到该操作；回调异步且严格串行，不会阻塞 UI 线程。`paths` 保留拖入顺序和重复项，忽略 URL、文本、虚拟文件及没有本地路径的项目。使用 `w.OnFilesDropped(nil)` 注销并恢复浏览器默认行为。Chrome/Chromium 后端注册非空处理器会返回 `webview.ErrDropUnsupported`。
+
 ## 通用应用外壳 `cmd/app`
 
 `cmd/app` 从当前目录的 `app.data` zip 文件加载应用；找不到 zip 时回退到 `data/` 目录。两种数据源使用相同结构：

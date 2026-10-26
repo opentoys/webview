@@ -137,7 +137,7 @@ func (p *Platform) setup() error {
 		// Private preference that exposes the "Inspect Element" context menu item.
 		prefs.Send(setValueForKeySel, yesNum, nsString("developerExtrasEnabled"))
 	}
-	wv := objc.ID(wkWebViewClass).Send(allocSel)
+	wv := objc.ID(fileDropWebViewClass).Send(allocSel)
 	if wv == 0 {
 		return errNoWebView
 	}
@@ -167,16 +167,25 @@ func (p *Platform) setup() error {
 
 	// Wrap the webview in a container NSView so the Web Inspector pane can be
 	// added as a sibling (matches reference cocoa_webkit.hh set_up_widget).
-	widget := objc.ID(nsViewClass).Send(allocSel)
+	// A subclass is required for NSDraggingDestination; window delegates do
+	// not receive drops targeted at a WKWebView child view.
+	widget := objc.ID(fileDropViewClass).Send(allocSel)
 	if widget == 0 {
 		return errors.New("darwin: failed to alloc NSView")
 	}
 	widget = widget.Send(initWithFrameOnlySel, rect(0, 0, 800, 600))
+	p.dropView = widget
 	widget.Send(setAutoresizesSubviewsSel, true)
 	wv.Send(setAutoresizingMaskSel, webviewAutoresizingMask)
 	widget.Send(addSubviewSel, wv)
 
 	w.Send(setContentViewSel, widget)
+	// Register only after the view belongs to its NSWindow. In particular,
+	// WKWebView may otherwise rebuild its view hierarchy and reclaim the drop
+	// registration during attachment.
+	if p.filesDropped != nil {
+		p.applyFileDropTarget(widget, true)
+	}
 	w.Send(centerSel)
 	w.Send(makeKeyAndOrderFrontSel, 0)
 	// Make webview first responder so it receives keyboard/mouse events.

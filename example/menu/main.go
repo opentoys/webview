@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/opentoys/webview"
 )
@@ -50,6 +51,15 @@ func main() {
 
 	w.SetMenu(menus...)
 
+	w.Bind("opendir", w.ChooseDir)
+
+	if err := w.OnFilesDropped(func(paths []string) {
+		w.Eval(`alert("` + strings.Join(paths, ",") + `")`)
+		fmt.Println(paths)
+	}); err != nil {
+		panic(err)
+	}
+
 	w.SetHTML(`<!DOCTYPE html>
 <html>
 <head>
@@ -61,6 +71,8 @@ func main() {
 </head>
 <body>
   <h3>Native Menu API Demo</h3>
+  <button onclick="opendir().then(v => alert(v))"
+		style="font-size:1.2em;padding:0.5em 1em">Choose Dir</button>
   <p>Uses <code>DefaultMenus(w)</code> for the Edit menu and appends File + Help.
      Shortcuts use <code>webview.CmdOrCtrl</code> (Cmd on macOS, Ctrl elsewhere).</p>
   <textarea id="box">Type here to test Cut/Copy/Paste/Undo/Redo.</textarea>
