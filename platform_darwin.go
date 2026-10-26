@@ -12,12 +12,10 @@ import (
 const CmdOrCtrl = "Cmd"
 
 // DefaultMenus returns the platform's default menu bar.
-// On macOS this is an Edit menu with Undo, Redo, Cut, Copy, Paste, Select All
-// (all wired to document.execCommand via the given webview).
+// On macOS this is an Edit menu with Undo, Redo, Cut, Copy, Paste, Select All.
+// Editing commands use AppKit's responder chain so WKWebView handles them as
+// native actions (including paste, without the web clipboard permission flow).
 func DefaultMenus(w *W) []Menu {
-	edit := func(cmd string) func() {
-		return func() { w.Eval("document.execCommand('" + cmd + "')") }
-	}
 	return []Menu{
 		{
 			Items: []MenuItem{
@@ -29,14 +27,14 @@ func DefaultMenus(w *W) []Menu {
 		{
 			Label: "Edit",
 			Items: []MenuItem{
-				{Label: "Undo", Shortcut: CmdOrCtrl + "+Z", Action: edit("undo")},
-				{Label: "Redo", Shortcut: CmdOrCtrl + "+Shift+Z", Action: edit("redo")},
+				{Label: "Undo", Shortcut: CmdOrCtrl + "+Z", Role: MenuItemRoleUndo},
+				{Label: "Redo", Shortcut: CmdOrCtrl + "+Shift+Z", Role: MenuItemRoleRedo},
 				{Separator: true},
-				{Label: "Cut", Shortcut: CmdOrCtrl + "+X", Action: edit("cut")},
-				{Label: "Copy", Shortcut: CmdOrCtrl + "+C", Action: edit("copy")},
-				{Label: "Paste", Shortcut: CmdOrCtrl + "+V", Action: edit("paste")},
+				{Label: "Cut", Shortcut: CmdOrCtrl + "+X", Role: MenuItemRoleCut},
+				{Label: "Copy", Shortcut: CmdOrCtrl + "+C", Role: MenuItemRoleCopy},
+				{Label: "Paste", Shortcut: CmdOrCtrl + "+V", Role: MenuItemRolePaste},
 				{Separator: true},
-				{Label: "Select All", Shortcut: CmdOrCtrl + "+A", Action: edit("selectAll")},
+				{Label: "Select All", Shortcut: CmdOrCtrl + "+A", Role: MenuItemRoleSelectAll},
 			},
 		},
 	}

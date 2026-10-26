@@ -34,10 +34,17 @@ func (p *Platform) applyMenus(menus []Menu) {
 				submenu.Send(addItemSel, objc.ID(nsMenuItemClass).Send(separatorItemSel))
 				continue
 			}
+			action := menuItemSelectedSel
+			nativeAction := menuRoleAction(mi.Role)
+			if nativeAction != "" {
+				action = objc.RegisterName(nativeAction)
+			}
 			item := objc.ID(nsMenuItemClass).Send(allocSel)
-			item = item.Send(initWithTitleSel, nsString(mi.Label), menuItemSelectedSel, nsString(""))
-			item.Send(setTargetSel, handler)
-			item.Send(setTagSel, tag)
+			item = item.Send(initWithTitleSel, nsString(mi.Label), action, nsString(""))
+			if nativeAction == "" {
+				item.Send(setTargetSel, handler)
+				item.Send(setTagSel, tag)
+			}
 
 			if mi.Shortcut != "" {
 				key, mods := parseShortcut(mi.Shortcut)
@@ -81,6 +88,25 @@ func parseShortcut(s string) (string, uintptr) {
 		}
 	}
 	return key, mods
+}
+
+func menuRoleAction(role MenuItemRole) string {
+	switch role {
+	case MenuItemRoleUndo:
+		return "undo:"
+	case MenuItemRoleRedo:
+		return "redo:"
+	case MenuItemRoleCut:
+		return "cut:"
+	case MenuItemRoleCopy:
+		return "copy:"
+	case MenuItemRolePaste:
+		return "paste:"
+	case MenuItemRoleSelectAll:
+		return "selectAll:"
+	default:
+		return ""
+	}
 }
 
 // setupDataStore returns the WKWebsiteDataStore for the platform: a non-

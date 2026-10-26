@@ -43,6 +43,17 @@ type ResourceHandler = types.ResourceHandler
 
 type Menu = types.Menu
 type MenuItem = types.MenuItem
+type MenuItemRole = types.MenuItemRole
+
+const (
+	MenuItemRoleNone      = types.MenuItemRoleNone
+	MenuItemRoleUndo      = types.MenuItemRoleUndo
+	MenuItemRoleRedo      = types.MenuItemRoleRedo
+	MenuItemRoleCut       = types.MenuItemRoleCut
+	MenuItemRoleCopy      = types.MenuItemRoleCopy
+	MenuItemRolePaste     = types.MenuItemRolePaste
+	MenuItemRoleSelectAll = types.MenuItemRoleSelectAll
+)
 
 type FileFilter = types.FileFilter
 type FileDialogOptions = types.FileDialogOptions

@@ -36,6 +36,16 @@ type ResourceResponse = types.ResourceResponse
 type ResourceHandler = types.ResourceHandler
 type Menu = types.Menu
 type MenuItem = types.MenuItem
+type MenuItemRole = types.MenuItemRole
+
+const (
+	MenuItemRoleUndo      = types.MenuItemRoleUndo
+	MenuItemRoleRedo      = types.MenuItemRoleRedo
+	MenuItemRoleCut       = types.MenuItemRoleCut
+	MenuItemRoleCopy      = types.MenuItemRoleCopy
+	MenuItemRolePaste     = types.MenuItemRolePaste
+	MenuItemRoleSelectAll = types.MenuItemRoleSelectAll
+)
 
 // NSApplicationActivationPolicyRegular = 0.
 const activationRegular = 0
