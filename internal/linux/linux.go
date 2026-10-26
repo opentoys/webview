@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/opentoys/webview/internal/debuglog"
 	"github.com/opentoys/webview/internal/types"
@@ -47,6 +49,8 @@ type Gtk interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
+	ChooseFile() (string, error)
+	ChooseDir() (string, error)
 }
 
 // gtk is the shared Linux GTK/WebKitGTK backend. The GTK4 adapters supply the
@@ -99,6 +103,7 @@ type gtk struct {
 
 	pendingMenus   []Menu
 	hasCustomMenus bool
+	uiTID          atomic.Int64
 }
 
 // New creates a new GTK backend instance. The GTK implementation is selected
@@ -134,6 +139,7 @@ func (p *gtk) Run() error {
 	p.Logger.Log(BackendName, "run_start", nil)
 
 	uiThreadOnce.Do(runtime.LockOSThread)
+	p.uiTID.Store(int64(syscall.Gettid()))
 
 	p.id = registerPlatform(p)
 	if err := p.selectBackend(); err != nil {
@@ -181,6 +187,10 @@ func (p *gtk) SetMenus(menus []Menu) {
 
 // MainThread runs f on the GTK main thread, blocking until it completes.
 func (p *gtk) MainThread(f func()) {
+	if p.uiTID.Load() != 0 && p.uiTID.Load() == int64(syscall.Gettid()) {
+		f()
+		return
+	}
 	done := make(chan struct{})
 	dispatchMain(func() {
 		f()

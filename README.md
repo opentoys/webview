@@ -130,11 +130,29 @@ w, err := webview.New(webview.Options{
 | `Init(js) error` | 注册每次页面加载前执行的 JavaScript |
 | `Bind(name, fn) error` | 将 Go 函数暴露给 JavaScript |
 | `Unbind(name)` | 删除已绑定的函数 |
+| `ChooseFile() (string, error)` | 阻塞并使用系统原生对话框选择一个文件 |
+| `ChooseDir() (string, error)` | 阻塞并使用系统原生对话框选择一个目录 |
 | `SetMenu(menus...)` | 替换原生菜单栏 |
 | `MainThread(fn)` | 在 UI 线程执行函数并等待完成 |
 | `InterceptResource(scheme, handler)` | 注册自定义 URL Scheme 处理器；应在 `Run` 前调用 |
 
 `SetTitle`、`SetSize`、`Navigate`、`SetHTML` 和 `Init` 均可在 `Run` 前调用。
+
+### 文件与目录选择
+
+`ChooseFile` 和 `ChooseDir` 会阻塞到用户选择或取消，并返回绝对路径。它们必须在窗口运行后调用，可安全地从普通后台 goroutine 或 `Bind` 回调调用。取消时路径为空，错误可用 `errors.Is(err, webview.ErrDialogCancelled)` 判断。Chrome/Chromium 后端返回 `webview.ErrDialogUnsupported`。
+
+```go
+if err := w.Bind("chooseFile", func() (string, error) {
+	path, err := w.ChooseFile()
+	if errors.Is(err, webview.ErrDialogCancelled) {
+		return "", nil
+	}
+	return path, err
+}); err != nil {
+	log.Fatal(err)
+}
+```
 
 ### 窗口尺寸
 

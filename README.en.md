@@ -130,11 +130,17 @@ Backend probing happens during `New`. Some native shared libraries are not loade
 | `Init(js) error` | Register JavaScript to run before every page load |
 | `Bind(name, fn) error` | Expose a Go function to JavaScript |
 | `Unbind(name)` | Remove a binding |
+| `ChooseFile() (string, error)` | Block in a native dialog and select one file |
+| `ChooseDir() (string, error)` | Block in a native dialog and select one directory |
 | `SetMenu(menus...)` | Replace the native menu bar |
 | `MainThread(fn)` | Run a function on the UI thread and wait for it |
 | `InterceptResource(scheme, handler)` | Register a custom URL scheme handler; call before `Run` |
 
 `SetTitle`, `SetSize`, `Navigate`, `SetHTML`, and `Init` may be called before `Run`.
+
+### Choosing files and directories
+
+`ChooseFile` and `ChooseDir` block until the user selects a path or cancels, and return an absolute path. Call them after the window starts; they are safe from a background goroutine or a `Bind` callback. Cancellation returns an empty path and an error matching `webview.ErrDialogCancelled`. The Chrome/Chromium backend returns `webview.ErrDialogUnsupported`.
 
 ### Window size
 

@@ -58,6 +58,13 @@ const (
 type FileFilter = types.FileFilter
 type FileDialogOptions = types.FileDialogOptions
 
+var (
+	// ErrDialogCancelled is returned when a native chooser is dismissed.
+	ErrDialogCancelled = types.ErrDialogCancelled
+	// ErrDialogUnsupported is returned by backends without host-native choosers.
+	ErrDialogUnsupported = types.ErrDialogUnsupported
+)
+
 // SizeHint, ResourceRequest, ResourceResponse, ResourceHandler are type aliases
 // from types, re-exported per-platform in platform_*.go files.
 
@@ -73,6 +80,8 @@ type Platform interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
+	ChooseFile() (string, error)
+	ChooseDir() (string, error)
 }
 
 // Options configures the webview. Field semantics are per-platform; each
@@ -173,6 +182,12 @@ func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
 func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
 func (w *W) Eval(js string) error      { return w.p.Eval(js) }
 func (w *W) Init(js string) error      { return w.p.Init(js) }
+
+// ChooseFile blocks in a native chooser and returns one absolute file path.
+func (w *W) ChooseFile() (string, error) { return w.p.ChooseFile() }
+
+// ChooseDir blocks in a native chooser and returns one absolute directory path.
+func (w *W) ChooseDir() (string, error) { return w.p.ChooseDir() }
 
 func (w *W) Bind(name string, fn any) error {
 	return w.bridge.Bind(name, fn)

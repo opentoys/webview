@@ -5,16 +5,20 @@ package darwin
 // Platform lifecycle and AppKit host-thread dispatch.
 
 import (
+	"fmt"
+	"path/filepath"
 	"runtime"
 	"sync"
 
 	"github.com/ebitengine/purego/objc"
 	"github.com/opentoys/webview/internal/debuglog"
+	"github.com/opentoys/webview/internal/types"
 )
 
 var (
-	hostOnce  sync.Once
-	hostReady chan struct{} // closed once the host loop is running
+	hostOnce   sync.Once
+	hostReady  chan struct{} // closed once the host loop is running
+	hostThread objc.ID
 )
 
 // startAppHost launches the single AppKit host thread if not already running,
@@ -35,6 +39,7 @@ func startAppHost() {
 func hostLoop() {
 	runtime.LockOSThread()
 	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
+	hostThread = objc.ID(nsThreadClass).Send(currentThreadSel)
 	if app == 0 {
 		panic("darwin: no shared NSApplication")
 	}
@@ -56,6 +61,10 @@ func mainThread(fn func()) {
 	select {
 	case <-hostReady:
 	default:
+		return
+	}
+	if objc.ID(nsThreadClass).Send(currentThreadSel) == hostThread {
+		fn()
 		return
 	}
 	commandChan <- fn
@@ -156,6 +165,42 @@ func (p *Platform) SetMenus(menus []Menu) {
 
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
+
+func (p *Platform) ChooseFile() (string, error) { return p.choosePath(false) }
+func (p *Platform) ChooseDir() (string, error)  { return p.choosePath(true) }
+
+func (p *Platform) choosePath(directory bool) (string, error) {
+	p.mu.Lock()
+	ready := p.window != 0 && !p.closed
+	p.mu.Unlock()
+	if !ready {
+		return "", fmt.Errorf("webview: choose path: window is not running")
+	}
+	var path string
+	var err error
+	mainThread(func() {
+		panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
+		if panel == 0 {
+			err = fmt.Errorf("webview: choose path: failed to create NSOpenPanel")
+			return
+		}
+		panel.Send(setCanChooseFilesSel, !directory)
+		panel.Send(setCanChooseDirectoriesSel, directory)
+		panel.Send(setAllowsMultipleSelectionSel, false)
+		if panel.Send(runModalSel) != 1 {
+			err = types.ErrDialogCancelled
+			return
+		}
+		url := panel.Send(panelURLSel)
+		path = goString(url.Send(pathSel))
+		if path == "" {
+			err = fmt.Errorf("webview: choose path: NSOpenPanel returned no filesystem path")
+			return
+		}
+		path, err = filepath.Abs(path)
+	})
+	return path, err
+}
 
 func (p *Platform) Run() error {
 	p.Logger.Log(BackendName, "run_start", nil)

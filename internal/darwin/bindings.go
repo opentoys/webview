@@ -185,6 +185,7 @@ var (
 	nsDictionaryClass      objc.Class
 	nsAlertClass           objc.Class
 	nsTextFieldClass       objc.Class
+	nsThreadClass          objc.Class
 	nsErrorClass           objc.Class
 	wkUserScriptClass      objc.Class
 )
@@ -295,6 +296,8 @@ var (
 	setAccessoryViewSel                                   objc.SEL
 	nsTextFieldSel                                        objc.SEL
 	stringValueSel                                        objc.SEL
+	currentThreadSel                                      objc.SEL
+	pathSel                                               objc.SEL
 	setInitialFirstResponderSel                           objc.SEL
 	windowSel                                             objc.SEL
 	errorWithDomainSel                                    objc.SEL // [NSError errorWithDomain:code:userInfo:]
@@ -363,6 +366,7 @@ func probe() {
 		nsDictionaryClass = objc.GetClass("NSDictionary")
 		nsAlertClass = objc.GetClass("NSAlert")
 		nsTextFieldClass = objc.GetClass("NSTextField")
+		nsThreadClass = objc.GetClass("NSThread")
 		nsErrorClass = objc.GetClass("NSError")
 		wkUserScriptClass = objc.GetClass("WKUserScript")
 
@@ -470,6 +474,8 @@ func probe() {
 		setAccessoryViewSel = objc.RegisterName("setAccessoryView:")
 		nsTextFieldSel = objc.RegisterName("textFieldWithString:")
 		stringValueSel = objc.RegisterName("stringValue")
+		currentThreadSel = objc.RegisterName("currentThread")
+		pathSel = objc.RegisterName("path")
 		setInitialFirstResponderSel = objc.RegisterName("setInitialFirstResponder:")
 		windowSel = objc.RegisterName("window")
 		errorWithDomainSel = objc.RegisterName("errorWithDomain:code:userInfo:")

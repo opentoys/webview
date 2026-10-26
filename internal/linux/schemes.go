@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/opentoys/webview/internal/types"
 )
 
 // --- scheme handling -------------------------------------------------------
@@ -164,7 +165,7 @@ func (p *gtk) registerSchemes() error {
 		// Extract HTTP body from GInputStream (nil for GET/HEAD).
 		var body []byte
 		headers := extractRequestHeaders(request)
-		if MayHaveRequestBody(method, headers) {
+		if types.MayHaveRequestBody(method, headers) {
 			if stream := requestGetHTTPBody(request); stream != 0 {
 				buf := make([]byte, 4096)
 				for {

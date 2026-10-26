@@ -3,20 +3,64 @@
 package linux
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/ebitengine/purego"
+	"github.com/opentoys/webview/internal/types"
 )
 
 const (
-	gtkFileChooserActionOpen = 0
-	gtkFileChooserActionSave = 1
-	gtkResponseAccept        = -3
+	gtkFileChooserActionOpen         = 0
+	gtkFileChooserActionSave         = 1
+	gtkFileChooserActionSelectFolder = 2
+	gtkResponseAccept                = -3
 	// WebKitPolicyDecisionTypeResponse: a WebKitResponsePolicyDecision.
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
 )
+
+func (p *gtk) ChooseFile() (string, error) { return p.choosePath(gtkFileChooserActionOpen) }
+func (p *gtk) ChooseDir() (string, error)  { return p.choosePath(gtkFileChooserActionSelectFolder) }
+
+func (p *gtk) choosePath(action int) (string, error) {
+	if p.window == 0 || p.uiTID.Load() == 0 {
+		return "", fmt.Errorf("webview: choose path: window is not running")
+	}
+	var path string
+	var err error
+	p.MainThread(func() {
+		dlg := gtkFileChooserNativeNew("", p.window, action, "_Open", "_Cancel")
+		if dlg == 0 {
+			err = fmt.Errorf("webview: choose path: failed to create GTK dialog")
+			return
+		}
+		defer gObjectUnref(dlg)
+		var response int
+		if gtkNativeDialogRun != nil {
+			response = gtkNativeDialogRun(dlg)
+		} else {
+			response = runFallbackDialog(dlg)
+		}
+		if response != gtkResponseAccept {
+			err = types.ErrDialogCancelled
+			return
+		}
+		if p.savePathFn == nil {
+			err = fmt.Errorf("webview: choose path: GTK path conversion is unavailable")
+			return
+		}
+		path = p.savePathFn(p, dlg)
+		if path == "" {
+			err = fmt.Errorf("webview: choose path: GTK returned no filesystem path")
+			return
+		}
+		path, err = filepath.Abs(path)
+	})
+	return path, err
+}
 
 // showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
 // thread and returns the chosen path. The second result is false when the user

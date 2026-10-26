@@ -39,6 +39,7 @@ var (
 	pAppendMenuW              = user32.NewProc("AppendMenuW")
 	pSetMenu                  = user32.NewProc("SetMenu")
 	pCoInitializeEx           = ole32.NewProc("CoInitializeEx")
+	pCoCreateInstance         = ole32.NewProc("CoCreateInstance")
 	pCoUninitialize           = ole32.NewProc("CoUninitialize")
 	pCoTaskMemFree            = ole32.NewProc("CoTaskMemFree")
 	pCreateStreamOnHGlobal    = ole32.NewProc("CreateStreamOnHGlobal")

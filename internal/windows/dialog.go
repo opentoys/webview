@@ -3,12 +3,103 @@
 package windows
 
 import (
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/opentoys/webview/internal/types"
 )
+
+const (
+	clsctxInprocServer = 1
+	fosPickFolders     = 0x20
+	fosForceFilesystem = 0x40
+	fosPathMustExist   = 0x800
+	fosFileMustExist   = 0x1000
+	sigdnFileSysPath   = 0x80058000
+	errorCancelledHR   = 0x800704C7
+)
+
+var (
+	clsidFileOpenDialog = GUID{0xDC1C5A9C, 0xE88A, 0x4DDE, [8]byte{0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}}
+	iidFileOpenDialog   = GUID{0xD57C7288, 0xD4AD, 0x4768, [8]byte{0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32, 0xD9, 0x60}}
+)
+
+type fileOpenDialog struct{ vtbl *fileOpenDialogVtbl }
+type fileOpenDialogVtbl struct {
+	_IUnknownVtbl
+	Show, SetFileTypes, SetFileTypeIndex, GetFileTypeIndex                                     ComProc
+	Advise, Unadvise, SetOptions, GetOptions                                                   ComProc
+	SetDefaultFolder, SetFolder, GetFolder, GetCurrentSelection                                ComProc
+	SetFileName, GetFileName, SetTitle, SetOkButtonLabel, SetFileNameLabel                     ComProc
+	GetResult, AddPlace, SetDefaultExtension, Close, SetClientGuid, ClearClientData, SetFilter ComProc
+}
+
+type shellItem struct{ vtbl *shellItemVtbl }
+type shellItemVtbl struct {
+	_IUnknownVtbl
+	BindToHandler, GetParent, GetDisplayName, GetAttributes, Compare ComProc
+}
+
+func failedHRESULT(hr uintptr) bool { return uint32(hr)&0x80000000 != 0 }
+
+func (p *Platform) ChooseFile() (string, error) { return p.choosePath(false) }
+func (p *Platform) ChooseDir() (string, error)  { return p.choosePath(true) }
+
+func (p *Platform) choosePath(directory bool) (string, error) {
+	p.mu.Lock()
+	ready := p.hwnd != 0 && !p.closed
+	p.mu.Unlock()
+	if !ready {
+		return "", fmt.Errorf("webview: choose path: window is not running")
+	}
+	var path string
+	var err error
+	p.MainThread(func() { path, err = p.choosePathUI(directory) })
+	return path, err
+}
+
+func (p *Platform) choosePathUI(directory bool) (string, error) {
+	var dialog *fileOpenDialog
+	hr, _, _ := pCoCreateInstance.Call(
+		uintptr(unsafe.Pointer(&clsidFileOpenDialog)), 0, clsctxInprocServer,
+		uintptr(unsafe.Pointer(&iidFileOpenDialog)), uintptr(unsafe.Pointer(&dialog)))
+	if failedHRESULT(hr) || dialog == nil {
+		return "", fmt.Errorf("webview: choose path: IFileOpenDialog creation failed (HRESULT 0x%08X)", uint32(hr))
+	}
+	defer dialog.vtbl.Release.Call(uintptr(unsafe.Pointer(dialog)))
+	flags := uintptr(fosForceFilesystem | fosPathMustExist | fosFileMustExist)
+	if directory {
+		flags |= fosPickFolders
+	}
+	if hr, _, _ = dialog.vtbl.SetOptions.Call(uintptr(unsafe.Pointer(dialog)), flags); failedHRESULT(hr) {
+		return "", fmt.Errorf("webview: choose path: SetOptions failed (HRESULT 0x%08X)", uint32(hr))
+	}
+	if hr, _, _ = dialog.vtbl.Show.Call(uintptr(unsafe.Pointer(dialog)), p.hwnd); failedHRESULT(hr) {
+		if uint32(hr) == errorCancelledHR {
+			return "", types.ErrDialogCancelled
+		}
+		return "", fmt.Errorf("webview: choose path: Show failed (HRESULT 0x%08X)", uint32(hr))
+	}
+	var item *shellItem
+	if hr, _, _ = dialog.vtbl.GetResult.Call(uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(&item))); failedHRESULT(hr) || item == nil {
+		return "", fmt.Errorf("webview: choose path: GetResult failed (HRESULT 0x%08X)", uint32(hr))
+	}
+	defer item.vtbl.Release.Call(uintptr(unsafe.Pointer(item)))
+	var raw *uint16
+	if hr, _, _ = item.vtbl.GetDisplayName.Call(uintptr(unsafe.Pointer(item)), sigdnFileSysPath, uintptr(unsafe.Pointer(&raw))); failedHRESULT(hr) || raw == nil {
+		return "", fmt.Errorf("webview: choose path: selected item has no filesystem path (HRESULT 0x%08X)", uint32(hr))
+	}
+	defer pCoTaskMemFree.Call(uintptr(unsafe.Pointer(raw)))
+	path := wideToString(raw)
+	if path == "" {
+		return "", fmt.Errorf("webview: choose path: selected item has an empty filesystem path")
+	}
+	return filepath.Abs(path)
+}
 
 // Native "Save As" dialog via the classic GetSaveFileNameW common dialog.
 // Unlike IFileSaveDialog (Common Item Dialog), this shows no places bar /

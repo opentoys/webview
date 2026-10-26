@@ -1,5 +1,14 @@
 package types
 
+import "errors"
+
+var (
+	// ErrDialogCancelled reports that the user dismissed a native chooser.
+	ErrDialogCancelled = errors.New("webview: dialog cancelled")
+	// ErrDialogUnsupported reports that the selected backend cannot host native dialogs.
+	ErrDialogUnsupported = errors.New("webview: native dialogs unsupported")
+)
+
 // FileFilter restricts a file dialog to files of a given kind.
 type FileFilter struct {
 	// Name is the human-readable label for this filter (e.g. "Images").

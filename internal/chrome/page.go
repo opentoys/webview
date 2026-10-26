@@ -108,6 +108,14 @@ func (c *Chrome) MainThread(f func()) {
 	f()
 }
 
+func (c *Chrome) ChooseFile() (string, error) {
+	return "", types.ErrDialogUnsupported
+}
+
+func (c *Chrome) ChooseDir() (string, error) {
+	return "", types.ErrDialogUnsupported
+}
+
 func jsString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
