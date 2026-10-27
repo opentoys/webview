@@ -49,7 +49,8 @@ type Gtk interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
-	ChooseFile() (string, error)
+	ChooseFile(filters ...types.FileFilter) (string, error)
+	SaveFile(opts types.FileDialogOptions) (string, error)
 	ChooseDir() (string, error)
 }
 

@@ -3,13 +3,42 @@
 package darwin
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/types"
 )
+
+func applyFileFilters(panel objc.ID, filters []types.FileFilter) {
+	if len(filters) == 0 || panel.Send(respondsToSelectorSel, setAllowedContentTypesSel) == 0 {
+		return
+	}
+	var accepts []string
+	for _, f := range filters {
+		accepts = append(accepts, f.Extensions...)
+		accepts = append(accepts, f.MIMETypes...)
+	}
+	if uts := buildUTTypes(accepts); uts != 0 {
+		panel.Send(setAllowedContentTypesSel, uts)
+	}
+}
+
+func applyFileDialogOptions(panel objc.ID, opts types.FileDialogOptions) {
+	if opts.Title != "" {
+		panel.Send(setTitleSel, nsString(opts.Title))
+	}
+	if opts.Filename != "" {
+		panel.Send(setNameFieldStringValueSel, nsString(opts.Filename))
+	}
+	if opts.Directory != "" {
+		panel.Send(setDirectoryURLSel, objc.ID(nsURLClass).Send(fileURLWithPathSel, nsString(filepath.Clean(opts.Directory))))
+	}
+	applyFileFilters(panel, opts.Filters)
+}
 
 // acceptMu protects acceptVal, written by the __accept__ bridge callback
 // (main thread) and read by readAcceptAndFilter (main thread).
@@ -179,7 +208,7 @@ func buildUTTypes(accepts []string) objc.ID {
 	arr := objc.ID(nsMutableArrayClass).Send(arrayInstanceSel)
 	for _, a := range accepts {
 		var ut objc.ID
-		if strings.HasPrefix(a, ".") {
+		if strings.HasPrefix(a, ".") || !strings.Contains(a, "/") {
 			ext := strings.TrimPrefix(a, ".")
 			ut = objc.ID(utTypeClass).Send(typeWithExtSel, nsString(ext))
 		} else if uti, ok := wildcardUTI[a]; ok {

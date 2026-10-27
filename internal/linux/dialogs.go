@@ -22,10 +22,30 @@ const (
 	webkitPolicyDecisionTypeResponse = 2
 )
 
-func (p *gtk) ChooseFile() (string, error) { return p.choosePath(gtkFileChooserActionOpen) }
-func (p *gtk) ChooseDir() (string, error)  { return p.choosePath(gtkFileChooserActionSelectFolder) }
+func (p *gtk) ChooseFile(filters ...types.FileFilter) (string, error) {
+	return p.choosePath(gtkFileChooserActionOpen, filters...)
+}
+func (p *gtk) SaveFile(opts types.FileDialogOptions) (string, error) {
+	if p.window == 0 || p.uiTID.Load() == 0 {
+		return "", fmt.Errorf("webview: save file: window is not running")
+	}
+	var path string
+	var err error
+	p.MainThread(func() {
+		var ok bool
+		path, ok = p.showSaveDialogOptions(opts)
+		if !ok {
+			err = types.ErrDialogCancelled
+		}
+	})
+	if path != "" {
+		path, err = filepath.Abs(filepath.Clean(path))
+	}
+	return path, err
+}
+func (p *gtk) ChooseDir() (string, error) { return p.choosePath(gtkFileChooserActionSelectFolder) }
 
-func (p *gtk) choosePath(action int) (string, error) {
+func (p *gtk) choosePath(action int, filters ...types.FileFilter) (string, error) {
 	if p.window == 0 || p.uiTID.Load() == 0 {
 		return "", fmt.Errorf("webview: choose path: window is not running")
 	}
@@ -38,6 +58,7 @@ func (p *gtk) choosePath(action int) (string, error) {
 			return
 		}
 		defer gObjectUnref(dlg)
+		applyFileDialogOptions(dlg, types.FileDialogOptions{Filters: filters})
 		var response int
 		if gtkNativeDialogRun != nil {
 			response = gtkNativeDialogRun(dlg)
@@ -68,14 +89,19 @@ func (p *gtk) choosePath(action int) (string, error) {
 // (download-started signal) already runs on the GTK main thread, so the chooser
 // is run directly here — never block waiting for a dispatched idle or it deadlocks.
 func (p *gtk) showSaveDialog(suggested string) (string, bool) {
-	dlg := gtkFileChooserNativeNew("", p.window, gtkFileChooserActionSave, "_Save", "_Cancel")
+	return p.showSaveDialogOptions(types.FileDialogOptions{Filename: suggested})
+}
+
+func (p *gtk) showSaveDialogOptions(opts types.FileDialogOptions) (string, bool) {
+	dlg := gtkFileChooserNativeNew(opts.Title, p.window, gtkFileChooserActionSave, "_Save", "_Cancel")
 	if dlg == 0 {
 		return "", false
 	}
 	defer gObjectUnref(dlg)
-	if suggested != "" {
-		gtkFileChooserSetCurrentName(dlg, suggested)
+	if opts.Filename != "" {
+		gtkFileChooserSetCurrentName(dlg, opts.Filename)
 	}
+	applyFileDialogOptions(dlg, opts)
 	var response int
 	if gtkNativeDialogRun != nil {
 		response = gtkNativeDialogRun(dlg)
@@ -90,6 +116,42 @@ func (p *gtk) showSaveDialog(suggested string) (string, bool) {
 		return "", false
 	}
 	return path, true
+}
+
+func applyFileDialogOptions(dlg uintptr, opts types.FileDialogOptions) {
+	if opts.Title != "" && gtkNativeDialogSetTitle != nil {
+		gtkNativeDialogSetTitle(dlg, opts.Title)
+	}
+	if opts.Directory != "" && gtkFileChooserSetCurrentFolderFilename != nil {
+		gtkFileChooserSetCurrentFolderFilename(dlg, filepath.Clean(opts.Directory))
+	}
+	for _, f := range opts.Filters {
+		filter := gtkFileFilterNew()
+		if filter == 0 {
+			continue
+		}
+		name := f.Name
+		if name == "" {
+			name = "Files"
+		}
+		gtkFileFilterSetName(filter, name)
+		for _, e := range f.Extensions {
+			e = strings.TrimPrefix(strings.TrimSpace(e), ".")
+			if e != "" {
+				gtkFileFilterAddPattern(filter, "*."+e)
+			}
+		}
+		for _, m := range f.MIMETypes {
+			if strings.HasSuffix(m, "/*") {
+				for _, pattern := range mimeToExtensions(m) {
+					gtkFileFilterAddPattern(filter, pattern)
+				}
+			} else {
+				gtkFileFilterAddMimeType(filter, m)
+			}
+		}
+		gtkFileChooserAddFilter(dlg, filter)
+	}
 }
 
 var (

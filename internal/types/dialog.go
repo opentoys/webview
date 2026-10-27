@@ -14,9 +14,13 @@ type FileFilter struct {
 	// Name is the human-readable label for this filter (e.g. "Images").
 	Name string
 
-	// Extensions lists the file extensions WITHOUT the leading dot
-	// (e.g. {"png", "jpg"}). An empty list, or an entry "*", matches any file.
+	// Extensions lists file extensions with or without a leading dot
+	// (e.g. {"png", ".jpg"}). An empty list, or an entry "*", matches any file.
 	Extensions []string
+
+	// MIMETypes lists exact or wildcard MIME types (e.g. "image/png" or
+	// "image/*").
+	MIMETypes []string
 }
 
 // FileDialogOptions configures a native file dialog. The zero value is valid:

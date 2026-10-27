@@ -169,8 +169,40 @@ func (p *Platform) SetMenus(menus []Menu) {
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
 
-func (p *Platform) ChooseFile() (string, error) { return p.choosePath(false) }
-func (p *Platform) ChooseDir() (string, error)  { return p.choosePath(true) }
+func (p *Platform) ChooseFile(filters ...types.FileFilter) (string, error) {
+	return p.choosePath(false, filters...)
+}
+func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
+	p.mu.Lock()
+	ready := p.window != 0 && !p.closed
+	p.mu.Unlock()
+	if !ready {
+		return "", fmt.Errorf("webview: save file: window is not running")
+	}
+	var path string
+	var err error
+	mainThread(func() {
+		panel := objc.ID(nsSavePanelClass).Send(savePanelSel)
+		if panel == 0 {
+			err = fmt.Errorf("webview: save file: failed to create NSSavePanel")
+			return
+		}
+		applyFileDialogOptions(panel, opts)
+		if panel.Send(runModalSel) != 1 {
+			err = types.ErrDialogCancelled
+			return
+		}
+		url := panel.Send(panelURLSel)
+		path = goString(url.Send(pathSel))
+		if path == "" {
+			err = fmt.Errorf("webview: save file: panel returned no filesystem path")
+			return
+		}
+		path, err = filepath.Abs(filepath.Clean(path))
+	})
+	return path, err
+}
+func (p *Platform) ChooseDir() (string, error) { return p.choosePath(true) }
 
 // SetFilesDropped installs (or removes) this window's native file-drop
 // receiver. It is safe before Run: setup applies the pending configuration.
@@ -189,7 +221,7 @@ func (p *Platform) SetFilesDropped(fn func([]string)) error {
 	return nil
 }
 
-func (p *Platform) choosePath(directory bool) (string, error) {
+func (p *Platform) choosePath(directory bool, filters ...types.FileFilter) (string, error) {
 	p.mu.Lock()
 	ready := p.window != 0 && !p.closed
 	p.mu.Unlock()
@@ -207,6 +239,9 @@ func (p *Platform) choosePath(directory bool) (string, error) {
 		panel.Send(setCanChooseFilesSel, !directory)
 		panel.Send(setCanChooseDirectoriesSel, directory)
 		panel.Send(setAllowsMultipleSelectionSel, false)
+		if !directory {
+			applyFileFilters(panel, filters)
+		}
 		if panel.Send(runModalSel) != 1 {
 			err = types.ErrDialogCancelled
 			return

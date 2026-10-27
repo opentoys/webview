@@ -10,7 +10,7 @@ import (
 func TestNativeDialogsUnsupported(t *testing.T) {
 	c := New(Options{})
 	for name, choose := range map[string]func() (string, error){
-		"file":      c.ChooseFile,
+		"file":      func() (string, error) { return c.ChooseFile() },
 		"directory": c.ChooseDir,
 	} {
 		t.Run(name, func(t *testing.T) {

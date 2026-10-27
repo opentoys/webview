@@ -130,7 +130,8 @@ w, err := webview.New(webview.Options{
 | `Init(js) error` | 注册每次页面加载前执行的 JavaScript |
 | `Bind(name, fn) error` | 将 Go 函数暴露给 JavaScript |
 | `Unbind(name)` | 删除已绑定的函数 |
-| `ChooseFile() (string, error)` | 阻塞并使用系统原生对话框选择一个文件 |
+| `ChooseFile(filters ...FileFilter) (string, error)` | 阻塞并使用系统原生对话框选择一个文件 |
+| `SaveFile(opts FileDialogOptions) (string, error)` | 使用系统原生“另存为”对话框返回目标路径 |
 | `ChooseDir() (string, error)` | 阻塞并使用系统原生对话框选择一个目录 |
 | `SetMenu(menus...)` | 替换原生菜单栏 |
 | `MainThread(fn)` | 在 UI 线程执行函数并等待完成 |
@@ -152,6 +153,24 @@ if err := w.Bind("chooseFile", func() (string, error) {
 }); err != nil {
 	log.Fatal(err)
 }
+```
+
+可使用扩展名或 MIME 类型过滤文件：
+
+```go
+path, err := w.ChooseFile(webview.FileFilter{
+	Name: "Images", Extensions: []string{"png", "jpg"},
+	MIMETypes: []string{"image/png", "image/jpeg"},
+})
+```
+
+`SaveFile` 只弹出保存面板并返回绝对路径，由调用方负责实际写文件：
+
+```go
+path, err := w.SaveFile(webview.FileDialogOptions{
+	Title: "另存为", Filename: "report.pdf",
+	Filters: []webview.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}, MIMETypes: []string{"application/pdf"}}},
+})
 ```
 
 ### 窗口尺寸

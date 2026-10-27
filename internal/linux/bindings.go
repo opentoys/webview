@@ -54,15 +54,17 @@ var (
 	gtkWindowPresent        func(window uintptr)
 	gtkWindowClose          func(window uintptr)
 	// GTK file chooser (native save dialog for downloads).
-	gtkFileChooserNativeNew      func(title string, parent uintptr, action int, accept, cancel string) uintptr
-	gtkNativeDialogShow          func(dialog uintptr)
-	gtkNativeDialogHide          func(dialog uintptr)
-	gtkNativeDialogSetModal      func(dialog uintptr, modal bool)
-	gtkNativeDialogRun           func(dialog uintptr) int
-	gtkFileChooserSetCurrentName func(chooser uintptr, name string)
-	gtkFileChooserGetFile        func(chooser uintptr) uintptr // GFile*
-	gtkFileChooserGetFiles       func(chooser uintptr) uintptr // GList* of GFile* (GTK4)
-	gFileGetPath                 func(file uintptr) uintptr    // char*
+	gtkFileChooserNativeNew                func(title string, parent uintptr, action int, accept, cancel string) uintptr
+	gtkNativeDialogShow                    func(dialog uintptr)
+	gtkNativeDialogHide                    func(dialog uintptr)
+	gtkNativeDialogSetModal                func(dialog uintptr, modal bool)
+	gtkNativeDialogRun                     func(dialog uintptr) int
+	gtkNativeDialogSetTitle                func(dialog uintptr, title string)
+	gtkFileChooserSetCurrentName           func(chooser uintptr, name string)
+	gtkFileChooserSetCurrentFolderFilename func(chooser uintptr, path string) bool
+	gtkFileChooserGetFile                  func(chooser uintptr) uintptr // GFile*
+	gtkFileChooserGetFiles                 func(chooser uintptr) uintptr // GList* of GFile* (GTK4)
+	gFileGetPath                           func(file uintptr) uintptr    // char*
 	// File chooser filters.
 	gtkFileChooserSetSelectMultiple           func(chooser uintptr, selectMultiple bool)
 	gtkFileChooserAddFilter                   func(chooser, filter uintptr)
@@ -294,6 +296,7 @@ func registerShared(glib, gobject, gio, webkit, gtk uintptr) {
 	// iteration path below.
 	if _, err := purego.Dlsym(gtk, "gtk_native_dialog_run"); err == nil {
 		purego.RegisterLibFunc(&gtkNativeDialogRun, gtk, "gtk_native_dialog_run")
+		purego.RegisterLibFunc(&gtkNativeDialogSetTitle, gtk, "gtk_native_dialog_set_title")
 	}
 	purego.RegisterLibFunc(&gtkFileChooserGetFile, gtk, "gtk_file_chooser_get_file")
 	purego.RegisterLibFunc(&gtkFileChooserGetFiles, gtk, "gtk_file_chooser_get_files")
@@ -301,6 +304,7 @@ func registerShared(glib, gobject, gio, webkit, gtk uintptr) {
 	purego.RegisterLibFunc(&gFileGetPath, gio, "g_file_get_path")
 	// <input type=file> open dialog + accept filters.
 	purego.RegisterLibFunc(&gtkFileChooserSetSelectMultiple, gtk, "gtk_file_chooser_set_select_multiple")
+	purego.RegisterLibFunc(&gtkFileChooserSetCurrentFolderFilename, gtk, "gtk_file_chooser_set_current_folder_filename")
 	purego.RegisterLibFunc(&gtkFileChooserAddFilter, gtk, "gtk_file_chooser_add_filter")
 	purego.RegisterLibFunc(&gtkFileFilterNew, gtk, "gtk_file_filter_new")
 	purego.RegisterLibFunc(&gtkFileFilterSetName, gtk, "gtk_file_filter_set_name")
@@ -366,6 +370,7 @@ func newgtk4symbols() {
 
 	// File chooser / filter (<input type=file> + accept).
 	purego.RegisterLibFunc(&gtkFileChooserSetSelectMultiple, gtk, "gtk_file_chooser_set_select_multiple")
+	purego.RegisterLibFunc(&gtkFileChooserSetCurrentFolderFilename, gtk, "gtk_file_chooser_set_current_folder_filename")
 	purego.RegisterLibFunc(&gtkFileChooserAddFilter, gtk, "gtk_file_chooser_add_filter")
 	purego.RegisterLibFunc(&gtkFileFilterNew, gtk, "gtk_file_filter_new")
 	purego.RegisterLibFunc(&gtkFileFilterSetName, gtk, "gtk_file_filter_set_name")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -46,10 +47,30 @@ type shellItemVtbl struct {
 
 func failedHRESULT(hr uintptr) bool { return uint32(hr)&0x80000000 != 0 }
 
-func (p *Platform) ChooseFile() (string, error) { return p.choosePath(false) }
-func (p *Platform) ChooseDir() (string, error)  { return p.choosePath(true) }
+func (p *Platform) ChooseFile(filters ...FileFilter) (string, error) {
+	return p.choosePath(false, filters...)
+}
+func (p *Platform) SaveFile(opts FileDialogOptions) (string, error) {
+	p.mu.Lock()
+	ready := p.hwnd != 0 && !p.closed
+	p.mu.Unlock()
+	if !ready {
+		return "", fmt.Errorf("webview: save file: window is not running")
+	}
+	var path string
+	var err error
+	p.MainThread(func() { path, err = p.saveFileDialog(opts) })
+	if err == nil && path == "" {
+		err = types.ErrDialogCancelled
+	}
+	if path != "" {
+		path, err = filepath.Abs(filepath.Clean(path))
+	}
+	return path, err
+}
+func (p *Platform) ChooseDir() (string, error) { return p.choosePath(true) }
 
-func (p *Platform) choosePath(directory bool) (string, error) {
+func (p *Platform) choosePath(directory bool, filters ...FileFilter) (string, error) {
 	p.mu.Lock()
 	ready := p.hwnd != 0 && !p.closed
 	p.mu.Unlock()
@@ -58,11 +79,11 @@ func (p *Platform) choosePath(directory bool) (string, error) {
 	}
 	var path string
 	var err error
-	p.MainThread(func() { path, err = p.choosePathUI(directory) })
+	p.MainThread(func() { path, err = p.choosePathUI(directory, filters...) })
 	return path, err
 }
 
-func (p *Platform) choosePathUI(directory bool) (string, error) {
+func (p *Platform) choosePathUI(directory bool, filters ...FileFilter) (string, error) {
 	var dialog *fileOpenDialog
 	hr, _, _ := pCoCreateInstance.Call(
 		uintptr(unsafe.Pointer(&clsidFileOpenDialog)), 0, clsctxInprocServer,
@@ -77,6 +98,12 @@ func (p *Platform) choosePathUI(directory bool) (string, error) {
 	}
 	if hr, _, _ = dialog.vtbl.SetOptions.Call(uintptr(unsafe.Pointer(dialog)), flags); failedHRESULT(hr) {
 		return "", fmt.Errorf("webview: choose path: SetOptions failed (HRESULT 0x%08X)", uint32(hr))
+	}
+	if !directory && len(filters) > 0 {
+		ft := makeWindowsFileTypes(filters)
+		if len(ft) > 0 {
+			dialog.vtbl.SetFileTypes.Call(uintptr(unsafe.Pointer(dialog)), uintptr(len(ft)), uintptr(unsafe.Pointer(&ft[0])))
+		}
 	}
 	if hr, _, _ = dialog.vtbl.Show.Call(uintptr(unsafe.Pointer(dialog)), p.hwnd); failedHRESULT(hr) {
 		if uint32(hr) == errorCancelledHR {
@@ -149,7 +176,7 @@ func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 
 	// "Description\0*.ext\0\0" double-NUL terminated filter. Built manually
 	// because syscall.StringToUTF16Ptr rejects embedded NULs.
-	filter := utf16Filter("All Files (*.*)", "*.*")
+	filter := windowsFilter(opts.Filters)
 
 	var title *uint16
 	if opts.Title != "" {
@@ -162,6 +189,14 @@ func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 	var defExt *uint16
 	if ext := filepath.Ext(opts.Filename); ext != "" {
 		defExt = utf16PtrFromStr(ext[1:]) // strip leading dot
+	} else if len(opts.Filters) == 1 {
+		for _, ext := range opts.Filters[0].Extensions {
+			ext = strings.TrimPrefix(strings.TrimSpace(ext), ".")
+			if ext != "" && ext != "*" {
+				defExt = utf16PtrFromStr(ext)
+				break
+			}
+		}
 	}
 
 	ofn := openfilenameW{
@@ -191,6 +226,81 @@ func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 		return "", nil
 	}
 	return syscall.UTF16ToString(buf), nil
+}
+
+type comdlgFileType struct{ name, spec *uint16 }
+
+func makeWindowsFileTypes(filters []FileFilter) []uintptr { // IFileOpenDialog COMDLG_FILTERSPEC layout
+	var out []uintptr
+	for _, f := range filters {
+		name := f.Name
+		if name == "" {
+			name = "Files"
+		}
+		spec := filterSpec(f)
+		if spec != "" {
+			n := utf16PtrFromStr(name)
+			s := utf16PtrFromStr(spec)
+			out = append(out, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(s)))
+		}
+	}
+	return out
+}
+
+func filterSpec(f FileFilter) string {
+	var parts []string
+	for _, e := range f.Extensions {
+		e = strings.TrimSpace(e)
+		if e == "" || e == "*" {
+			return "*.*"
+		}
+		e = strings.TrimPrefix(e, ".")
+		if e == "" {
+			continue
+		}
+		parts = append(parts, "*."+e)
+	}
+	for _, m := range f.MIMETypes {
+		for _, e := range windowsMIMEExtensions(m) {
+			parts = append(parts, e)
+		}
+	}
+	if len(parts) == 0 {
+		return "*.*"
+	}
+	return strings.Join(parts, ";")
+}
+
+func windowsMIMEExtensions(mime string) []string {
+	common := map[string][]string{
+		"image/*":   {"*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg"},
+		"audio/*":   {"*.mp3", "*.wav", "*.ogg", "*.flac"},
+		"video/*":   {"*.mp4", "*.webm", "*.ogv"},
+		"text/*":    {"*.txt", "*.html", "*.htm", "*.css", "*.md"},
+		"image/png": {"*.png"}, "image/jpeg": {"*.jpg", "*.jpeg"},
+		"application/pdf": {"*.pdf"},
+	}
+	return common[strings.ToLower(strings.TrimSpace(mime))]
+}
+
+func windowsFilter(filters []FileFilter) []uint16 {
+	if len(filters) == 0 {
+		return utf16Filter("All Files (*.*)", "*.*")
+	}
+	var out []uint16
+	for _, f := range filters {
+		name := f.Name
+		if name == "" {
+			name = "Files"
+		}
+		spec := filterSpec(f)
+		for _, s := range []string{name, spec} {
+			out = append(out, utf16.Encode([]rune(s))...)
+			out = append(out, 0)
+		}
+	}
+	out = append(out, 0)
+	return out
 }
 
 // utf16Filter builds a double-NUL-terminated OPENFILENAMEW filter in UTF-16:

@@ -108,7 +108,11 @@ func (c *Chrome) MainThread(f func()) {
 	f()
 }
 
-func (c *Chrome) ChooseFile() (string, error) {
+func (c *Chrome) ChooseFile(...types.FileFilter) (string, error) {
+	return "", types.ErrDialogUnsupported
+}
+
+func (c *Chrome) SaveFile(types.FileDialogOptions) (string, error) {
 	return "", types.ErrDialogUnsupported
 }
 
