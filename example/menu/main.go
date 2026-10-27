@@ -1,9 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
-	"strings"
 
 	"github.com/opentoys/webview"
 )
@@ -53,9 +54,26 @@ func main() {
 
 	w.Bind("opendir", w.ChooseDir)
 
-	if err := w.OnFilesDropped(func(paths []string) {
-		w.Eval(`alert("` + strings.Join(paths, ",") + `")`)
-		fmt.Println(paths)
+	if err := w.OnFilesDropped(func(files []string) {
+		var paths []struct {
+			Name  string `json:"name"`
+			IsDir bool   `json:"is_dir"`
+		}
+		for _, v := range files {
+			f, e := os.Stat(v)
+			if e != nil {
+				continue
+			}
+			paths = append(paths, struct {
+				Name  string "json:\"name\""
+				IsDir bool   "json:\"is_dir\""
+			}{
+				Name:  v,
+				IsDir: f.IsDir(),
+			})
+		}
+		buf, _ := json.Marshal(paths)
+		w.Eval(`document.dispatchEvent(new CustomEvent('appdrop', {detail: ` + string(buf) + `}))`)
 	}); err != nil {
 		panic(err)
 	}
@@ -77,6 +95,12 @@ func main() {
      Shortcuts use <code>webview.CmdOrCtrl</code> (Cmd on macOS, Ctrl elsewhere).</p>
   <textarea id="box">Type here to test Cut/Copy/Paste/Undo/Redo.</textarea>
 </body>
+<script>
+document.addEventListener('appdrop',function(e){
+	console.log(e)
+	alert(e.detail)
+})
+</script>
 </html>`)
 
 	if err := w.Run(); err != nil {
