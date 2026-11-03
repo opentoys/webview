@@ -6,19 +6,25 @@ import "encoding/json"
 
 // --- user scripts ----------------------------------------------------------
 
-var userScriptSrcs []string
-
 func (p *gtk) pushUserScript(src string) {
-	userScriptSrcs = append(userScriptSrcs, src)
-	p.rebuildScripts()
+	p.mu.Lock()
+	p.userScriptSrcs = append(p.userScriptSrcs, src)
+	ready := p.manager != 0
+	p.mu.Unlock()
+	if ready {
+		p.MainThread(p.rebuildScripts)
+	}
 }
 
 func (p *gtk) rebuildScripts() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.manager == 0 {
 		return
 	}
 	webkitUserContentManagerRemoveAllScripts(p.manager)
-	for _, src := range userScriptSrcs {
+	addUserScript(p.manager, bootstrapJS(nil))
+	for _, src := range p.userScriptSrcs {
 		addUserScript(p.manager, src)
 	}
 	// Add bind script for currently bound functions.

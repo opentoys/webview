@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"runtime"
 
 	"github.com/opentoys/webview/internal/types"
 )
@@ -43,7 +44,14 @@ func (w *W) SetSystray(opts SystrayOptions) error {
 	if err := validateMenuItems(opts.Items); err != nil {
 		return err
 	}
-	if _, err := png.Decode(bytes.NewReader(opts.Icon)); err != nil {
+	if len(opts.Icon) == 0 {
+		if opts.Title == "" {
+			return errors.New("webview: systray requires an icon or title")
+		}
+		if runtime.GOOS != "darwin" {
+			return ErrMenuUnsupported
+		}
+	} else if _, err := png.Decode(bytes.NewReader(opts.Icon)); err != nil {
 		return fmt.Errorf("webview: systray PNG: %w", err)
 	}
 	opts.Icon = append([]byte(nil), opts.Icon...)

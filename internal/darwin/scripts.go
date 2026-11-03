@@ -5,6 +5,7 @@ package darwin
 // HTML loading, JavaScript evaluation, and user-script injection.
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/ebitengine/purego/objc"
@@ -69,14 +70,18 @@ func (p *Platform) EvalHost(js string) {
 			objc.RegisterName("runCommand:"),
 			0, false)
 	default:
-		// Channel full (unlikely) — run directly. Safe when called from the
-		// host thread (MessageFunc callback). On other threads this is a race,
-		// but channel-full implies 64+ pending evals, which is a bug anyway.
-		p.evalOnHost(js)
+		// Preserve UI-thread affinity even when many bridge replies are queued.
+		go mainThread(func() { p.evalOnHost(js) })
 	}
 }
 
 func (p *Platform) Eval(js string) error {
+	p.mu.Lock()
+	ready := p.webview != 0 && !p.closed
+	p.mu.Unlock()
+	if !ready {
+		return errors.New("webview: Eval requires a running window; use Init before Run")
+	}
 	p.evalJS(js)
 	return nil
 }
@@ -86,11 +91,22 @@ const wkInjectionTimeAtDocumentStart = 0
 // Init registers JS to run at document start for every page load.
 func (p *Platform) Init(js string) error {
 	p.mu.Lock()
-	p.userScriptSrcs = append(p.userScriptSrcs, js)
-	if p.ucc != 0 {
-		p.rebuildScriptsLocked()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("webview: Init after Close")
 	}
+	p.userScriptSrcs = append(p.userScriptSrcs, js)
+	ready := p.ucc != 0
 	p.mu.Unlock()
+	if ready {
+		mainThread(func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if !p.closed {
+				p.rebuildScriptsLocked()
+			}
+		})
+	}
 	return nil
 }
 
@@ -98,6 +114,12 @@ func (p *Platform) Init(js string) error {
 // Caller must hold p.mu.
 func (p *Platform) rebuildScriptsLocked() {
 	p.ucc.Send(removeAllUserScriptsSel)
+	if p.BoundFuncs != nil {
+		p.injectBootstrapLocked()
+	}
+	if len(p.schemeHandlers) > 0 {
+		addWKUserScript(p.ucc, fetchShimScript(p.schemeHandlers))
+	}
 	for _, src := range p.userScriptSrcs {
 		addWKUserScript(p.ucc, src)
 	}

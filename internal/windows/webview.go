@@ -81,10 +81,13 @@ func (p *Platform) initWebView() {
 	p.webview.AddScriptToExecuteOnDocumentCreated(js, 0)
 
 	// Inject any user scripts accumulated before Run().
-	for _, src := range p.userScriptSrcs {
+	p.mu.Lock()
+	pendingScripts := p.userScriptSrcs
+	p.userScriptSrcs = nil
+	p.mu.Unlock()
+	for _, src := range pendingScripts {
 		p.webview.AddScriptToExecuteOnDocumentCreated(src, 0)
 	}
-	p.userScriptSrcs = nil
 
 	// Configure settings.
 	p.webview.PutAreDevToolsEnabled(p.Debug)

@@ -5,6 +5,8 @@ package windows
 // Platform state, lifecycle, and public window/webview operations.
 
 import (
+	"errors"
+	"fmt"
 	"runtime"
 	"strconv"
 	"sync"
@@ -293,29 +295,51 @@ func (p *Platform) SetHTML(html string) error {
 
 func (p *Platform) Eval(js string) error {
 	if p.ready.Load() == 0 {
-		return nil
+		return errors.New("webview: Eval requires a running window; use Init before Run")
 	}
+	var err error
 	p.MainThread(func() {
 		p.mu.Lock()
 		closed := p.closed
 		p.mu.Unlock()
-		if !closed {
-			p.webview.ExecuteScript(js, 0)
+		if closed {
+			err = errors.New("webview: Eval after Close")
+			return
+		}
+		if hr := p.webview.ExecuteScript(js, 0); hr != S_OK {
+			err = fmt.Errorf("webview: ExecuteScript failed: 0x%X", hr)
 		}
 	})
-	return nil
+	return err
 }
 
 // Init registers JS to run at document start for every page load.
 func (p *Platform) Init(js string) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.webview != nil {
-		p.webview.AddScriptToExecuteOnDocumentCreated(js, 0)
-	} else {
-		p.userScriptSrcs = append(p.userScriptSrcs, js)
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("webview: Init after Close")
 	}
-	return nil
+	if p.webview == nil {
+		p.userScriptSrcs = append(p.userScriptSrcs, js)
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+	var err error
+	p.MainThread(func() {
+		p.mu.Lock()
+		closed := p.closed
+		p.mu.Unlock()
+		if closed {
+			err = errors.New("webview: Init after Close")
+			return
+		}
+		if hr := p.webview.AddScriptToExecuteOnDocumentCreated(js, 0); hr != S_OK {
+			err = fmt.Errorf("webview: register Init script failed: 0x%X", hr)
+		}
+	})
+	return err
 }
 
 // rewriteSchemeURL converts scheme://host/path to https://scheme.localhost/path

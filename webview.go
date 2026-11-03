@@ -214,8 +214,14 @@ func (w *W) SetSize(width, height int, hint types.SizeHint) {
 }
 func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
 func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
-func (w *W) Eval(js string) error      { return w.p.Eval(js) }
-func (w *W) Init(js string) error      { return w.p.Init(js) }
+
+// Eval submits JavaScript to the current document. Call after Run starts and
+// the target page is ready; SetHTML and Navigate load asynchronously.
+func (w *W) Eval(js string) error { return w.p.Eval(js) }
+
+// Init registers JavaScript for the start of future documents. It is safe before
+// Run and does not immediately execute in an already-loaded document.
+func (w *W) Init(js string) error { return w.p.Init(js) }
 
 // ChooseFile blocks in a native chooser and returns one absolute file path.
 func (w *W) ChooseFile(filters ...FileFilter) (string, error) {

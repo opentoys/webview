@@ -93,24 +93,18 @@ func (p *Platform) setup() error {
 		return errors.New("darwin: failed to alloc WKUserContentController")
 	}
 	ucc = ucc.Send(initSel)
+	p.mu.Lock()
 	p.ucc = ucc
+	p.mu.Unlock()
 	handler := objc.ID(messageHandlerClass).Send(allocSel)
 	handler = handler.Send(initSel)
 	scriptHandler = handler
 	ucc.Send(addScriptMessageHandlerSel, handler, nsString("webviewBridge"))
 
-	// Inject any user scripts accumulated before Run().
+	// Install the bridge and resource shim before application Init scripts.
+	p.mu.Lock()
 	p.rebuildScriptsLocked()
-	// WKURLSchemeTask drops POST bodies for some Blob/File fetches. Install a
-	// document-start shim for registered schemes before any page code runs.
-	if len(p.schemeHandlers) > 0 {
-		addWKUserScript(ucc, fetchShimScript(p.schemeHandlers))
-	}
-	// Re-inject bootstrap with current bound func names (BootstrapFuncs may
-	// have changed via Bind before Run).
-	if p.BoundFuncs != nil {
-		p.injectBootstrapLocked()
-	}
+	p.mu.Unlock()
 
 	config := objc.ID(wkWebViewConfigClass).Send(allocSel)
 	config = config.Send(initSel)

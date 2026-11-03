@@ -213,6 +213,9 @@ func (t *linuxTray) update(opts types.SystrayOptions) error {
 	return t.conn.Emit(trayMenuPath, menuInterface+".LayoutUpdated", revision, int32(0))
 }
 func (p *gtk) SetSystray(opts types.SystrayOptions) error {
+	if len(opts.Icon) == 0 {
+		return types.ErrMenuUnsupported
+	}
 	p.extensionMu.Lock()
 	defer p.extensionMu.Unlock()
 	p.mu.Lock()

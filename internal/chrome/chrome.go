@@ -52,6 +52,9 @@ type Options struct {
 
 // Chrome is a CDP-backed webview platform.
 type Chrome struct {
+	pendingInitScripts []string
+	initScriptsReady   bool
+	initialURL         string
 	sync.Mutex
 	wmu      sync.Mutex
 	cmd      *exec.Cmd

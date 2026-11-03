@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/png"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/opentoys/webview/internal/chrome"
@@ -112,13 +113,13 @@ func TestMenuValidationAndErrors(t *testing.T) {
 func TestSystraySnapshotsAndRemoval(t *testing.T) {
 	p := &menuPlatformStub{}
 	w := &W{p: p}
-	opts := SystrayOptions{Icon: menuTestIcon(t), Tooltip: "Tray", Items: []MenuItem{{ID: "quit", Label: "Quit"}}}
+	opts := SystrayOptions{Icon: menuTestIcon(t), Title: "Visible title", Tooltip: "Tray", Items: []MenuItem{{ID: "quit", Label: "Quit"}}}
 	if err := w.SetSystray(opts); err != nil {
 		t.Fatal(err)
 	}
 	opts.Icon[0] = 0
 	opts.Items[0].Label = "changed"
-	if p.tray.Icon[0] != 137 || p.tray.Items[0].Label != "Quit" {
+	if p.tray.Icon[0] != 137 || p.tray.Items[0].Label != "Quit" || p.tray.Title != "Visible title" {
 		t.Fatal("tray config not copied")
 	}
 	for range 2 {
@@ -194,5 +195,27 @@ func TestContextMenuAppendAndRemoveRoles(t *testing.T) {
 	}
 	if !p.context.ReplaceDefault || len(p.context.Items) != 0 {
 		t.Fatal("removal restored defaults")
+	}
+}
+
+func TestTitleOnlySystray(t *testing.T) {
+	p := &menuPlatformStub{}
+	w := &W{p: p}
+	err := w.SetSystray(SystrayOptions{Title: "Text only"})
+	if runtime.GOOS == "darwin" {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.tray.Title != "Text only" || len(p.tray.Icon) != 0 {
+			t.Fatal("title-only config not forwarded")
+		}
+	} else if !errors.Is(err, ErrMenuUnsupported) {
+		t.Fatalf("title-only error=%v", err)
+	}
+	if err := w.SetSystray(SystrayOptions{}); err == nil {
+		t.Fatal("empty tray accepted")
+	}
+	if err := w.SetSystray(SystrayOptions{Title: "Title", Icon: []byte("invalid PNG")}); err == nil {
+		t.Fatal("nonempty invalid icon accepted")
 	}
 }

@@ -36,7 +36,7 @@ func main() {
 	var count atomic.Int64
 	var tray func() error
 	tray = func() error {
-		return w.SetSystray(webview.SystrayOptions{Icon: pngData.Bytes(), Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()), Items: []webview.MenuItem{
+		return w.SetSystray(webview.SystrayOptions{Icon: pngData.Bytes(), Title: fmt.Sprintf("WebView %d", count.Load()), Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()), Items: []webview.MenuItem{
 			{ID: "update", Label: "Update tray", Action: func() { count.Add(1); report(tray()) }},
 			{ID: "remove", Label: "Remove tray", Action: func() { report(w.RemoveSystray()) }},
 			{ID: "separator", Separator: true},

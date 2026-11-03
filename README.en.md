@@ -329,11 +329,17 @@ CGO_ENABLED=0 go run ./cmd/app
 
 The shell binds `app.version()`, `app.close()`, and `app.debug(message)` into the page. See [`cmd/app`](./cmd/app) for the complete implementation.
 
+### Init and Eval timing
+
+Init registers scripts for the start of future documents and may be called before Run. Calling Init at runtime does not execute the script in the current document. DOM nodes may not exist at document start; use DOMContentLoaded for DOM changes.
+
+Eval runs once in the current document. Call it after the window is running and the page is ready; before Run it returns an error. SetHTML and Navigate load asynchronously, so an immediate Eval may target the preceding document. Use a bound Go callback called by the page on DOMContentLoaded to schedule Eval instead of a fixed sleep. A nil Eval error does not mean the script's asynchronous work has completed.
+
 ### Native tray and context menus
 
 Run [`example/native-menus`](example/native-menus/main.go) with `go run ./example/native-menus`.
 
-`SetSystray(SystrayOptions{Icon: pngBytes, Tooltip: "App", Items: items})` creates or replaces a tray icon. `RemoveSystray()` is idempotent.
+`SetSystray(SystrayOptions{Icon: pngBytes, Title: "App", Tooltip: "App tooltip", Items: items})` creates or replaces a tray icon. `RemoveSystray()` is idempotent. `Title` displays text beside the icon on macOS and is ignored on Windows and Linux. `Tooltip` is the separate hover hint. Call SetSystray again to update the title, or pass an empty Title to clear it; macOS supports title-only trays without Icon and switching between icon-only, title-only and combined display. Windows and Linux still require a PNG icon and return ErrMenuUnsupported for title-only configurations.
 
 `SetContextMenu([]MenuItem)` completely replaces the browser's default context menu and previous custom entries. Passing nil or an empty slice disables the context menu; it does not restore defaults. Each Set also clears previous role-removal configuration. `AddContextMenuItem(item)` appends an entry: before any Set it preserves browser defaults; after Set it appends to the replacement menu. `RemoveContextMenuItem(id)` removes a custom entry by ID; an unknown ID is harmless. Custom entries, including separators, require unique nonempty IDs. Leading, trailing and repeated separators are cleaned up.
 

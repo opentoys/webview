@@ -152,3 +152,18 @@ func TestFirstPageTargetRemainsMainTarget(t *testing.T) {
 		t.Fatalf("main target changed to session=%q target=%q", c.sessionID, c.targetID)
 	}
 }
+
+func TestInitBeforeRunQueuesScripts(t *testing.T) {
+	c := New(Options{})
+	for _, script := range []string{"window.first=1", "window.second=2"} {
+		if err := c.Init(script); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(c.pendingInitScripts) != 2 || c.pendingInitScripts[0] != "window.first=1" || c.pendingInitScripts[1] != "window.second=2" {
+		t.Fatal(c.pendingInitScripts)
+	}
+	if err := c.Eval("window.first=3"); err == nil {
+		t.Fatal("Eval before Run silently succeeded")
+	}
+}

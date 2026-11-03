@@ -10,7 +10,8 @@ import "encoding/json"
 // resolve/reject take (id, result|errString) and settle the matching pending
 // promise; the bridge's reply JS calls them directly.
 func bootstrapJS(names []string) string {
-	s := `window.webviewBridge = {
+	s := `if (!window.webviewBridge || typeof window.webviewBridge.call !== "function") {
+window.webviewBridge = {
   _pending: {}, _next: 0,
   postMessage(msg) { window.webkit.messageHandlers.webviewBridge.postMessage(JSON.stringify(msg)); },
   resolve(id, result) { var p = this._pending[id]; if (p) { p.resolve(result); delete this._pending[id]; } },
@@ -20,7 +21,8 @@ func bootstrapJS(names []string) string {
     this._pending[id] = {resolve: resolve, reject: reject};
     this.postMessage({id: id, name: name, args: args});
   }); }
-};`
+};
+}`
 	for _, name := range names {
 		lit, _ := json.Marshal(name)
 		s += "window[" + string(lit) + "] = function() { return window.webviewBridge.call(" + string(lit) + ", Array.prototype.slice.call(arguments)); };"

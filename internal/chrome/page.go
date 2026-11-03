@@ -2,6 +2,7 @@ package chrome
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -10,6 +11,9 @@ import (
 )
 
 func (c *Chrome) Eval(js string) error {
+	if !c.started {
+		return errors.New("webview: Eval requires a running window; use Init before Run")
+	}
 	_, err := c.send("Runtime.evaluate", h{
 		"expression":    js,
 		"returnByValue": true,
@@ -24,6 +28,13 @@ func (c *Chrome) EvalHost(js string) {
 }
 
 func (c *Chrome) Init(js string) error {
+	c.Lock()
+	if !c.initScriptsReady {
+		c.pendingInitScripts = append(c.pendingInitScripts, js)
+		c.Unlock()
+		return nil
+	}
+	c.Unlock()
 	_, err := c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": js})
 	return err
 }

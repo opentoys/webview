@@ -17,7 +17,7 @@ import (
 
 var (
 	hostOnce   sync.Once
-	hostReady  chan struct{} // closed once the host loop is running
+	hostReady  = make(chan struct{}) // closed once the host loop is running
 	hostThread objc.ID
 )
 
@@ -25,7 +25,6 @@ var (
 // then blocks until it is ready.
 func startAppHost() {
 	hostOnce.Do(func() {
-		hostReady = make(chan struct{})
 		go hostLoop()
 	})
 	<-hostReady
@@ -67,11 +66,13 @@ func mainThread(fn func()) {
 		fn()
 		return
 	}
-	commandChan <- fn
+	done := make(chan struct{})
+	commandChan <- func() { fn(); close(done) }
 	objc.ID(commandHandlerClass).Send(allocSel).Send(
 		performSelectorOnMainThreadWithObjectWaitUntilDoneSel,
 		objc.RegisterName("runCommand:"),
-		0, true)
+		0, false)
+	<-done
 }
 
 type Platform struct {

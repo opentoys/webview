@@ -66,12 +66,6 @@ func (c *Chrome) Run() error {
 	} else {
 		c.Unlock()
 	}
-	// Pre-Run scheme URLs (app://...) were not baked into --app (that would
-	// race Fetch.enable and flash an error page). Navigate now, with Fetch
-	// live, so the request is intercepted.
-	if c.deferredURL != "" {
-		c.send("Page.navigate", h{"url": c.deferredURL})
-	}
 	c.send("Runtime.addBinding", h{"name": "webviewBridge"})
 	c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": bootstrapJS()})
 	// The initial --app document is created before Run() connects, so
@@ -80,6 +74,37 @@ func (c *Chrome) Run() error {
 	// installer polls until the native binding appears, then wraps it.
 	c.Eval(bootstrapJS())
 	c.injectBridge()
+	if c.BoundFuncs != nil {
+		c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": stubJS(c.BoundFuncs())})
+	}
+	// Register all pre-Run Init scripts before opening the application's page.
+	for {
+		c.Lock()
+		scripts := c.pendingInitScripts
+		c.pendingInitScripts = nil
+		if len(scripts) == 0 {
+			c.initScriptsReady = true
+			c.Unlock()
+			break
+		}
+		c.Unlock()
+		for _, script := range scripts {
+			if _, err := c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": script}); err != nil {
+				_ = c.Close()
+				return err
+			}
+		}
+	}
+	target := c.deferredURL
+	if target == "" {
+		target = c.initialURL
+	}
+	if target != "" {
+		if _, err := c.send("Page.navigate", h{"url": target}); err != nil {
+			_ = c.Close()
+			return err
+		}
+	}
 	c.Logger.Log(BackendName, "ready", nil)
 
 	err := c.cmd.Wait()
@@ -132,6 +157,12 @@ func (c *Chrome) start() error {
 		}
 	}
 
+	c.Lock()
+	if len(c.pendingInitScripts) > 0 {
+		c.initialURL = appURL
+		appURL = "about:blank"
+	}
+	c.Unlock()
 	cmd := exec.Command(bin, c.buildArgs(dir, appURL)...)
 	// Chrome's --remote-debugging-pipe convention (devtools_pipe_handler.cc):
 	//   child fd3 = INPUT  (Chrome reads CDP commands from here)

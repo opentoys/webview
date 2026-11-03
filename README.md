@@ -139,6 +139,38 @@ w, err := webview.New(webview.Options{
 
 `SetTitle`、`SetSize`、`Navigate`、`SetHTML` 和 `Init` 均可在 `Run` 前调用。
 
+### Init 与 Eval 的执行时机
+
+`Init(js)` 注册在**后续文档开始加载时**执行的脚本，可在 Run 前调用。运行中新增 Init 不会立即在当前页面执行，需要下一次导航或加载新文档才生效。此时 DOM 可能尚未构建，访问 document.body 等节点应放在 DOMContentLoaded 回调中。
+
+`Eval(js)` 只在**当前页面**执行一次，不会保存到后续页面。应在窗口运行、页面就绪后调用；在 Run 前调用会返回错误，请改用 Init。SetHTML 和 Navigate 发起的是异步加载，紧接着调用 Eval 并不代表目标页面已经加载完毕。Eval 返回 nil 也不代表脚本的所有异步操作已经完成。
+
+例如，通过页面就绪回调执行 Eval，避免使用固定时间的 Sleep 猜测加载时机：
+
+```go
+if err := w.Bind("pageReady", func() {
+    if err := w.Eval(`document.body.style.backgroundColor = '#eef6ff'`); err != nil {
+        fmt.Println("Eval:", err)
+    }
+}); err != nil {
+    panic(err)
+}
+if err := w.Init(`
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log('Init registered at document start');
+        pageReady();
+    }, {once: true});
+`); err != nil {
+    panic(err)
+}
+if err := w.SetHTML(`<!doctype html><html><body>Init / Eval demo</body></html>`); err != nil {
+    panic(err)
+}
+if err := w.Run(); err != nil {
+    panic(err)
+}
+```
+
 ### 文件与目录选择
 
 `ChooseFile` 和 `ChooseDir` 会阻塞到用户选择或取消，并返回绝对路径。它们必须在窗口运行后调用，可安全地从普通后台 goroutine 或 `Bind` 回调调用。取消时路径为空，错误可用 `errors.Is(err, webview.ErrDialogCancelled)` 判断。Chrome/Chromium 后端返回 `webview.ErrDialogUnsupported`。
@@ -360,7 +392,8 @@ CGO_ENABLED=0 go run ./cmd/app
 ```go
 if err := w.SetSystray(webview.SystrayOptions{
     Icon: pngBytes, // PNG 图片数据
-    Tooltip: "我的应用",
+    Title: "我的应用", // macOS 菜单栏可见文字；不支持的平台忽略
+    Tooltip: "悬停提示",
     Items: []webview.MenuItem{
         {ID: "quit", Label: "退出", Action: func() { w.Close() }},
     },
@@ -368,6 +401,19 @@ if err := w.SetSystray(webview.SystrayOptions{
     panic(err)
 }
 // 再次 SetSystray 整体更新托盘；RemoveSystray() 移除托盘，可重复调用。
+```
+
+`Title` 是托盘上直接显示的文字，macOS 显示在图标旁，Windows、Linux 忽略该字段。`Tooltip` 是鼠标悬停提示，两者独立设置。再次调用 SetSystray 可更新 Title，传入空字符串可清除文字；macOS 支持仅设置 Title、不传 Icon 的纯文字托盘；也可以在图标、纯文字、图标加文字之间切换。Windows、Linux 仍需有效 PNG 图标，纯文字配置返回 ErrMenuUnsupported。
+
+```go
+if err := w.SetSystray(webview.SystrayOptions{
+    Title: "运行中", // macOS 纯文字托盘
+    Items: []webview.MenuItem{
+        {ID: "quit", Label: "退出", Action: func() { w.Close() }},
+    },
+}); err != nil {
+    panic(err)
+}
 ```
 
 #### 右键菜单接口

@@ -5,6 +5,7 @@
 package linux
 
 import (
+	"errors"
 	"runtime"
 	"strconv"
 	"sync"
@@ -57,6 +58,7 @@ type Gtk interface {
 // gtk is the shared Linux GTK/WebKitGTK backend. The GTK4 adapters supply the
 // version-specific hooks through the function fields below.
 type gtk struct {
+	userScriptSrcs              []string
 	uiDone                      chan struct{}
 	contextSignalID             uint64
 	extensionMu                 sync.Mutex
@@ -298,7 +300,7 @@ func (p *gtk) windowInit(window uintptr) error {
 	// <input type=file>: show a native open dialog honoring accept.
 	gSignalConnectData(p.webview, "run-file-chooser", runFileChooserFn(), p.id, 0, 0)
 
-	p.pushUserScript(bootstrapJS(nil))
+	p.rebuildScripts()
 	return nil
 }
 
@@ -438,7 +440,7 @@ func (p *gtk) Eval(js string) error {
 	closed := p.extensionsClosed
 	p.mu.Unlock()
 	if closed {
-		return nil
+		return errors.New("webview: Eval after Close")
 	}
 	if p.uiTID.Load() != 0 && p.uiTID.Load() != int64(syscall.Gettid()) {
 		var err error
@@ -446,10 +448,10 @@ func (p *gtk) Eval(js string) error {
 		return err
 	}
 	if p.webview == 0 {
-		return nil
+		return errors.New("webview: Eval requires a running window; use Init before Run")
 	}
 	if webkitWebViewGetURI(p.webview) == 0 {
-		return nil
+		return errors.New("webview: Eval requires a loaded page")
 	}
 	if haveEvaluateJavascript {
 		webkitWebViewEvaluateJavascript(p.webview, js, len(js), 0, 0, 0, 0, 0)
@@ -467,6 +469,12 @@ func (p *gtk) EvalHost(js string) {
 
 // Init injects JavaScript that runs at the start of every new page load.
 func (p *gtk) Init(js string) error {
+	p.mu.Lock()
+	closed := p.extensionsClosed
+	p.mu.Unlock()
+	if closed {
+		return errors.New("webview: Init after Close")
+	}
 	p.pushUserScript(js)
 	return nil
 }

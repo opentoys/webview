@@ -85,6 +85,9 @@ func pngTrayIcon(data []byte) (uintptr, error) {
 	return icon, nil
 }
 func (p *Platform) SetSystray(opts types.SystrayOptions) error {
+	if len(opts.Icon) == 0 {
+		return types.ErrMenuUnsupported
+	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()

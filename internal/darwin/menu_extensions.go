@@ -110,14 +110,20 @@ func (p *Platform) applySystray() error {
 		p.removeSystray()
 		return nil
 	}
-	data := objc.ID(objc.GetClass("NSData")).Send(objc.RegisterName("dataWithBytes:length:"), unsafe.Pointer(&opts.Icon[0]), uintptr(len(opts.Icon)))
-	image := objc.ID(objc.GetClass("NSImage")).Send(allocSel).Send(objc.RegisterName("initWithData:"), data)
-	runtime.KeepAlive(opts.Icon)
-	if image == 0 {
+	var image objc.ID
+	if len(opts.Icon) > 0 {
+		data := objc.ID(objc.GetClass("NSData")).Send(objc.RegisterName("dataWithBytes:length:"), unsafe.Pointer(&opts.Icon[0]), uintptr(len(opts.Icon)))
+		image = objc.ID(objc.GetClass("NSImage")).Send(allocSel).Send(objc.RegisterName("initWithData:"), data)
+		runtime.KeepAlive(opts.Icon)
+		if image == 0 {
+			return types.ErrMenuUnsupported
+		}
+		defer image.Send(releaseSel)
+		image.Send(objc.RegisterName("setSize:"), cgSize{18, 18})
+	} else if opts.Title == "" {
 		return types.ErrMenuUnsupported
 	}
-	defer image.Send(releaseSel)
-	image.Send(objc.RegisterName("setSize:"), cgSize{18, 18})
+
 	if p.statusItem == 0 {
 		p.statusItem = objc.ID(objc.GetClass("NSStatusBar")).Send(objc.RegisterName("systemStatusBar")).Send(objc.RegisterName("statusItemWithLength:"), float64(-1)).Send(retainSel)
 	}
@@ -126,6 +132,15 @@ func (p *Platform) applySystray() error {
 	}
 	button := p.statusItem.Send(objc.RegisterName("button"))
 	button.Send(objc.RegisterName("setImage:"), image)
+	button.Send(objc.RegisterName("setTitle:"), nsString(opts.Title))
+	position := uintptr(1) // NSImageOnly
+	if image == 0 {
+		position = 0
+	} else if opts.Title != "" {
+		position = 2
+	} // NSNoImage / NSImageLeft
+
+	button.Send(objc.RegisterName("setImagePosition:"), position)
 	button.Send(objc.RegisterName("setToolTip:"), nsString(opts.Tooltip))
 	var menu nativeMenu
 	menu.menu = objc.ID(nsMenuClass).Send(allocSel).Send(initSel)
