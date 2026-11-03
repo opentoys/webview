@@ -314,19 +314,43 @@ var (
 
 func probe() {
 	probeOnce.Do(func() {
-		// AppKit and WebKit are not linked into a CGO_ENABLED=0 binary, so
-		// load them explicitly before looking up their classes.
-		for _, fw := range []string{
-			"/System/Library/Frameworks/Cocoa.framework/Cocoa",
-			"/System/Library/Frameworks/WebKit.framework/WebKit",
-		} {
-			if _, err := purego.Dlopen(fw, purego.RTLD_GLOBAL|purego.RTLD_LAZY); err != nil {
-				probeErr = fmt.Errorf("webview: failed to load %s: %w", fw, err)
-				return
-			}
+		if err := probeUI(); err != nil {
+			probeErr = err
+			return
+		}
+		if _, err := purego.Dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", purego.RTLD_GLOBAL|purego.RTLD_LAZY); err != nil {
+			probeErr = fmt.Errorf("webview: failed to load WebKit: %w", err)
+			return
 		}
 
 		// Cache frequently used ObjC classes and selectors.
+		wkUCCClass = objc.GetClass("WKUserContentController")
+		wkWebViewConfigClass = objc.GetClass("WKWebViewConfiguration")
+		wkWebViewClass = objc.GetClass("WKWebView")
+		wkDataStoreClass = objc.GetClass("WKWebsiteDataStore")
+		wkOpenPanelParamsClass = objc.GetClass("WKOpenPanelParameters")
+		wkDownloadClass = objc.GetClass("WKDownload")
+		wkUserScriptClass = objc.GetClass("WKUserScript")
+
+		registerDelegateClasses()
+	})
+}
+
+// AppKit work stays on the process main thread. RunApplication pumps its
+// event loop; modal panels can pump that same thread before RunApplication.
+// Cross-thread commands are scheduled in both normal and modal run-loop modes.
+
+// probeUI prepares Cocoa and dispatch only. Opening a standalone chooser never
+// loads WebKit or registers a window/webview delegate.
+var uiProbeOnce sync.Once
+var uiProbeErr error
+
+func probeUI() error {
+	uiProbeOnce.Do(func() {
+		if _, err := purego.Dlopen("/System/Library/Frameworks/Cocoa.framework/Cocoa", purego.RTLD_GLOBAL|purego.RTLD_LAZY); err != nil {
+			uiProbeErr = err
+			return
+		}
 		nsStringClass = objc.GetClass("NSString")
 		nsURLClass = objc.GetClass("NSURL")
 		nsURLRequestClass = objc.GetClass("NSURLRequest")
@@ -334,20 +358,14 @@ func probe() {
 		nsViewClass = objc.GetClass("NSView")
 		nsAppClass = objc.GetClass("NSApplication")
 		nsAutoreleasePoolClass = objc.GetClass("NSAutoreleasePool")
-		wkUCCClass = objc.GetClass("WKUserContentController")
-		wkWebViewConfigClass = objc.GetClass("WKWebViewConfiguration")
-		wkWebViewClass = objc.GetClass("WKWebView")
 		nsMenuClass = objc.GetClass("NSMenu")
 		nsMenuItemClass = objc.GetClass("NSMenuItem")
-		wkDataStoreClass = objc.GetClass("WKWebsiteDataStore")
-		wkOpenPanelParamsClass = objc.GetClass("WKOpenPanelParameters")
 		nsOpenPanelClass = objc.GetClass("NSOpenPanel")
 		nsFileManagerClass = objc.GetClass("NSFileManager")
 		nsArrayClass = objc.GetClass("NSArray")
 		nsMutableArrayClass = objc.GetClass("NSMutableArray")
 		nsSavePanelClass = objc.GetClass("NSSavePanel")
 		nsWorkspaceClass = objc.GetClass("NSWorkspace")
-		wkDownloadClass = objc.GetClass("WKDownload")
 		nsUserDefaultsClass = objc.GetClass("NSUserDefaults")
 		nsHTTPURLResponseClass = objc.GetClass("NSHTTPURLResponse")
 		nsDataClass = objc.GetClass("NSData")
@@ -356,8 +374,6 @@ func probe() {
 		nsTextFieldClass = objc.GetClass("NSTextField")
 		nsThreadClass = objc.GetClass("NSThread")
 		nsErrorClass = objc.GetClass("NSError")
-		wkUserScriptClass = objc.GetClass("WKUserScript")
-
 		allocSel = objc.RegisterName("alloc")
 		initSel = objc.RegisterName("init")
 		newSel = objc.RegisterName("new")
@@ -474,13 +490,28 @@ func probe() {
 		addUserScriptSel = objc.RegisterName("addUserScript:")
 		removeAllUserScriptsSel = objc.RegisterName("removeAllUserScripts")
 		initWithSourceInjectionTimeForMainFrameOnlySel = objc.RegisterName("initWithSource:injectionTime:forMainFrameOnly:")
+		// Command handler: receives performSelectorOnMainThread: calls for
+		// cross-thread dispatch. The ObjC method reads a function from the
+		// command channel and executes it on the host thread.
+		var err error
+		commandHandlerClass, err = objc.RegisterClass(
+			"GoWebviewCommandHandler",
+			objc.GetClass("NSObject"),
+			nil,
+			nil,
+			[]objc.MethodDef{
+				{Cmd: objc.RegisterName("runCommand:"), Fn: func(id objc.ID, cmd objc.SEL, obj objc.ID) {
+					if fn := <-commandChan; fn != nil {
+						fn()
+					}
+				}},
+			},
+		)
+		if err != nil {
+			uiProbeErr = fmt.Errorf("webview: register class: %w", err)
+			return
+		}
 
-		registerDelegateClasses()
 	})
+	return uiProbeErr
 }
-
-// AppKit work is thread-affine: the NSApplication adopts whichever thread first
-// creates it, and all windows/views must be created on that same thread. The Go
-// runtime can migrate goroutines between OS threads, so all AppKit calls go
-// through a single dedicated host thread running [NSApp run]. Cross-thread
-// commands are dispatched via performSelectorOnMainThread:withObject:waitUntilDone:.

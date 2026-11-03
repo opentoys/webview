@@ -26,7 +26,7 @@ const (
 
 var (
 	clsidFileOpenDialog = GUID{0xDC1C5A9C, 0xE88A, 0x4DDE, [8]byte{0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}}
-	iidFileOpenDialog   = GUID{0xD57C7288, 0xD4AD, 0x4768, [8]byte{0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32, 0xD9, 0x60}}
+	iidFileDialog       = GUID{0x42F85136, 0xDB7E, 0x439C, [8]byte{0x85, 0xF1, 0xE4, 0x07, 0x5D, 0x13, 0x5F, 0xC8}}
 )
 
 type fileOpenDialog struct{ vtbl *fileOpenDialogVtbl }
@@ -47,65 +47,81 @@ type shellItemVtbl struct {
 
 func failedHRESULT(hr uintptr) bool { return uint32(hr)&0x80000000 != 0 }
 
-func (p *Platform) ChooseFile(filters ...FileFilter) (string, error) {
-	return p.choosePath(false, filters...)
-}
-func (p *Platform) SaveFile(opts FileDialogOptions) (string, error) {
-	p.mu.Lock()
-	ready := p.hwnd != 0 && !p.closed
-	p.mu.Unlock()
-	if !ready {
-		return "", fmt.Errorf("webview: save file: window is not running")
+func showItemDialog(kind types.DialogKind, opts types.FileDialogOptions) (string, error) {
+	directory := kind == types.DialogDirectory
+	filters := opts.Filters
+	clsid := clsidFileOpenDialog
+	if kind == types.DialogSave {
+		clsid = GUID{0xC0B4E2F3, 0xBA21, 0x4773, [8]byte{0x8D, 0xBA, 0x33, 0x5E, 0xC9, 0x46, 0xEB, 0x8B}}
 	}
-	var path string
-	var err error
-	p.MainThread(func() { path, err = p.saveFileDialog(opts) })
-	if err == nil && path == "" {
-		err = types.ErrDialogCancelled
-	}
-	if path != "" {
-		path, err = filepath.Abs(filepath.Clean(path))
-	}
-	return path, err
-}
-func (p *Platform) ChooseDir() (string, error) { return p.choosePath(true) }
-
-func (p *Platform) choosePath(directory bool, filters ...FileFilter) (string, error) {
-	p.mu.Lock()
-	ready := p.hwnd != 0 && !p.closed
-	p.mu.Unlock()
-	if !ready {
-		return "", fmt.Errorf("webview: choose path: window is not running")
-	}
-	var path string
-	var err error
-	p.MainThread(func() { path, err = p.choosePathUI(directory, filters...) })
-	return path, err
-}
-
-func (p *Platform) choosePathUI(directory bool, filters ...FileFilter) (string, error) {
 	var dialog *fileOpenDialog
 	hr, _, _ := pCoCreateInstance.Call(
-		uintptr(unsafe.Pointer(&clsidFileOpenDialog)), 0, clsctxInprocServer,
-		uintptr(unsafe.Pointer(&iidFileOpenDialog)), uintptr(unsafe.Pointer(&dialog)))
+		uintptr(unsafe.Pointer(&clsid)), 0, clsctxInprocServer,
+		uintptr(unsafe.Pointer(&iidFileDialog)), uintptr(unsafe.Pointer(&dialog)))
 	if failedHRESULT(hr) || dialog == nil {
-		return "", fmt.Errorf("webview: choose path: IFileOpenDialog creation failed (HRESULT 0x%08X)", uint32(hr))
+		return "", fmt.Errorf("%w: IFileDialog creation failed (HRESULT 0x%08X)", types.ErrDialogUnsupported, uint32(hr))
 	}
 	defer dialog.vtbl.Release.Call(uintptr(unsafe.Pointer(dialog)))
-	flags := uintptr(fosForceFilesystem | fosPathMustExist | fosFileMustExist)
+	standaloneDialog = dialog
+	defer func() { standaloneDialog = nil }()
+	flags := uintptr(fosForceFilesystem | fosPathMustExist)
+	if kind == types.DialogSave {
+		flags |= 2
+	} else {
+		flags |= fosFileMustExist
+	}
 	if directory {
 		flags |= fosPickFolders
 	}
 	if hr, _, _ = dialog.vtbl.SetOptions.Call(uintptr(unsafe.Pointer(dialog)), flags); failedHRESULT(hr) {
 		return "", fmt.Errorf("webview: choose path: SetOptions failed (HRESULT 0x%08X)", uint32(hr))
 	}
+	ft := makeWindowsFileTypes(filters)
+	defer runtime.KeepAlive(ft)
 	if !directory && len(filters) > 0 {
-		ft := makeWindowsFileTypes(filters)
 		if len(ft) > 0 {
 			dialog.vtbl.SetFileTypes.Call(uintptr(unsafe.Pointer(dialog)), uintptr(len(ft)), uintptr(unsafe.Pointer(&ft[0])))
 		}
 	}
-	if hr, _, _ = dialog.vtbl.Show.Call(uintptr(unsafe.Pointer(dialog)), p.hwnd); failedHRESULT(hr) {
+	if opts.Title != "" {
+		title := utf16PtrFromStr(opts.Title)
+		dialog.vtbl.SetTitle.Call(uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(title)))
+		runtime.KeepAlive(title)
+	}
+	if kind == types.DialogSave && opts.Filename != "" {
+		name := utf16PtrFromStr(opts.Filename)
+		dialog.vtbl.SetFileName.Call(uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(name)))
+		runtime.KeepAlive(name)
+	}
+	if kind == types.DialogSave {
+		extension := strings.TrimPrefix(filepath.Ext(opts.Filename), ".")
+		if extension == "" && len(filters) == 1 {
+			for _, ext := range filters[0].Extensions {
+				ext = strings.TrimPrefix(strings.TrimSpace(ext), ".")
+				if ext != "" && ext != "*" {
+					extension = ext
+					break
+				}
+			}
+		}
+		if extension != "" {
+			ext := utf16PtrFromStr(extension)
+			dialog.vtbl.SetDefaultExtension.Call(uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(ext)))
+			runtime.KeepAlive(ext)
+		}
+	}
+	if opts.Directory != "" {
+		name := utf16PtrFromStr(opts.Directory)
+		var folder *shellItem
+		iid := GUID{0x43826D1E, 0xE718, 0x42EE, [8]byte{0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}}
+		hr, _, _ = createDialogShellItem.Call(uintptr(unsafe.Pointer(name)), 0, uintptr(unsafe.Pointer(&iid)), uintptr(unsafe.Pointer(&folder)))
+		runtime.KeepAlive(name)
+		if !failedHRESULT(hr) && folder != nil {
+			dialog.vtbl.SetFolder.Call(uintptr(unsafe.Pointer(dialog)), uintptr(unsafe.Pointer(folder)))
+			folder.vtbl.Release.Call(uintptr(unsafe.Pointer(folder)))
+		}
+	}
+	if hr, _, _ = dialog.vtbl.Show.Call(uintptr(unsafe.Pointer(dialog)), 0); failedHRESULT(hr) {
 		if uint32(hr) == errorCancelledHR {
 			return "", types.ErrDialogCancelled
 		}
@@ -230,8 +246,8 @@ func (p *Platform) saveFileDialog(opts FileDialogOptions) (string, error) {
 
 type comdlgFileType struct{ name, spec *uint16 }
 
-func makeWindowsFileTypes(filters []FileFilter) []uintptr { // IFileOpenDialog COMDLG_FILTERSPEC layout
-	var out []uintptr
+func makeWindowsFileTypes(filters []FileFilter) []comdlgFileType { // IFileOpenDialog COMDLG_FILTERSPEC layout
+	var out []comdlgFileType
 	for _, f := range filters {
 		name := f.Name
 		if name == "" {
@@ -241,7 +257,7 @@ func makeWindowsFileTypes(filters []FileFilter) []uintptr { // IFileOpenDialog C
 		if spec != "" {
 			n := utf16PtrFromStr(name)
 			s := utf16PtrFromStr(spec)
-			out = append(out, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(s)))
+			out = append(out, comdlgFileType{n, s})
 		}
 	}
 	return out
@@ -318,4 +334,59 @@ func utf16Filter(name, spec string) []uint16 {
 	}
 	out = append(out, 0)
 	return out
+}
+
+var standaloneDialog *fileOpenDialog // STA only
+var createDialogShellItem = syscall.NewLazyDLL("shell32.dll").NewProc("SHCreateItemFromParsingName")
+
+func PrepareDialogs() error {
+	if err := startApplication(); err != nil {
+		return fmt.Errorf("%w: %v", types.ErrDialogUnsupported, err)
+	}
+	return nil
+}
+func DialogOnUI() bool {
+	select {
+	case <-applicationReady:
+	default:
+		return false
+	}
+	tid, _, _ := pGetCurrentThreadId.Call()
+	return tid == applicationTID
+}
+func ShowDialog(kind types.DialogKind, opts types.FileDialogOptions, stopped func() bool) (string, error) {
+	type result struct {
+		path string
+		err  error
+	}
+	results := make(chan result, 1)
+	applicationThread(func() {
+		var path string
+		var err error
+		defer func() { results <- result{path, err} }()
+		if !stopped() {
+			path, err = showItemDialog(kind, opts)
+		}
+	})
+	select {
+	case r := <-results:
+		return r.path, r.err
+	case <-applicationDone:
+		return "", types.ErrDialogCancelled
+	}
+}
+func CancelDialog() {
+	select {
+	case <-applicationReady:
+	default:
+		return
+	}
+	if applicationErr != nil {
+		return
+	}
+	applicationThread(func() {
+		if standaloneDialog != nil {
+			standaloneDialog.vtbl.Close.Call(uintptr(unsafe.Pointer(standaloneDialog)), errorCancelledHR)
+		}
+	})
 }

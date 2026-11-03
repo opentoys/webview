@@ -49,9 +49,6 @@ type Gtk interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
-	ChooseFile(filters ...types.FileFilter) (string, error)
-	SaveFile(opts types.FileDialogOptions) (string, error)
-	ChooseDir() (string, error)
 }
 
 // gtk is the shared Linux GTK/WebKitGTK backend. The GTK4 adapters supply the
@@ -158,6 +155,9 @@ func newgtk4(p *gtk) error {
 // Run creates the window and enters the GTK main loop. Blocks until Close is
 // called or the window is destroyed.
 func (p *gtk) setup() error {
+	if err := ensureInit(); err != nil {
+		return err
+	}
 	p.Logger.Log(BackendName, "run_start", nil)
 	p.uiTID.Store(applicationTID.Load())
 	p.id = registerPlatform(p)

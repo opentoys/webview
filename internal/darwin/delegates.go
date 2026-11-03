@@ -393,27 +393,6 @@ func registerDelegateClasses() {
 		return
 	}
 
-	// Command handler: receives performSelectorOnMainThread: calls for
-	// cross-thread dispatch. The ObjC method reads a function from the
-	// command channel and executes it on the host thread.
-	commandHandlerClass, err = objc.RegisterClass(
-		"GoWebviewCommandHandler",
-		objc.GetClass("NSObject"),
-		nil,
-		nil,
-		[]objc.MethodDef{
-			{Cmd: objc.RegisterName("runCommand:"), Fn: func(id objc.ID, cmd objc.SEL, obj objc.ID) {
-				if fn := <-commandChan; fn != nil {
-					fn()
-				}
-			}},
-		},
-	)
-	if err != nil {
-		probeErr = fmt.Errorf("webview: register class: %w", err)
-		return
-	}
-
 	// Menu item action handler: dispatches via a tag→callback map.
 	menuCallbackMu.Lock()
 	menuCallbacks = map[uintptr]func(){}

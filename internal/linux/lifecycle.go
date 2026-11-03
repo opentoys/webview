@@ -27,9 +27,8 @@ func startApplication() error {
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
 			defer close(applicationDone)
-			applicationErr = ensureInit()
+			applicationErr = ensureUIBindings()
 			if applicationErr == nil {
-				newgtk4symbols()
 				if !gtkInitCheck4() {
 					applicationErr = errNoDisplay
 				}

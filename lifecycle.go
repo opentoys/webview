@@ -14,6 +14,7 @@ var (
 )
 
 type application struct {
+	dialogs          *dialogService
 	runNative        func(func() error, <-chan struct{}) error
 	quitting         atomic.Bool
 	makeTray         func(SystrayOptions) (trayBackend, error)
@@ -31,7 +32,7 @@ var app *application
 func init() { app = newApplication() }
 
 func newApplication() *application {
-	return &application{runNative: runNativeApplication, makeTray: newNativeTray, stopNative: stopNativeApplication, done: make(chan struct{}), windows: make(map[*W]struct{}), trays: make(map[*Systray]struct{})}
+	return &application{dialogs: newDialogService(), runNative: runNativeApplication, makeTray: newNativeTray, stopNative: stopNativeApplication, done: make(chan struct{}), windows: make(map[*W]struct{}), trays: make(map[*Systray]struct{})}
 }
 
 // Run owns the process lifetime. Closing the last window or tray does not stop it.
@@ -83,6 +84,7 @@ func Quit() error {
 	app.quitting.Store(true)
 	windows, trays := app.windowSnapshot(), app.traySnapshot()
 	app.mu.Unlock()
+	app.dialogs.stop()
 	var result error
 	for _, w := range windows {
 		result = errors.Join(result, w.Close())

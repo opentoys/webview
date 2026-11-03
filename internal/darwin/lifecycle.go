@@ -45,6 +45,10 @@ func StopApplication() error {
 	default:
 		return nil
 	}
+	if !hostRunning.Load() {
+		hostDoneOnce.Do(func() { close(hostDone) })
+		return nil
+	}
 	mainThread(func() {
 		app := objc.ID(nsAppClass).Send(sharedApplicationSel)
 		app.Send(objc.RegisterName("stop:"), objc.ID(0))

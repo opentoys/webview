@@ -4,8 +4,10 @@ import "errors"
 
 var (
 	// ErrDialogCancelled reports that the user dismissed a native chooser.
-	ErrDialogCancelled = errors.New("webview: dialog cancelled")
-	// ErrDialogUnsupported reports that the selected backend cannot host native dialogs.
+	ErrDialogCancelled  = errors.New("webview: dialog cancelled")
+	ErrDialogMainThread = errors.New("webview: dialogs before Run require the main goroutine")
+	ErrDialogReentrant  = errors.New("webview: dialog called on UI thread while another request is pending")
+	// ErrDialogUnsupported reports that the native UI cannot host file dialogs.
 	ErrDialogUnsupported = errors.New("webview: native dialogs unsupported")
 )
 
@@ -39,3 +41,12 @@ type FileDialogOptions struct {
 	// Filters limits the selectable file types. An empty list shows all files.
 	Filters []FileFilter
 }
+
+// DialogKind identifies a process-owned native chooser.
+type DialogKind int
+
+const (
+	DialogOpen DialogKind = iota
+	DialogDirectory
+	DialogSave
+)

@@ -133,9 +133,6 @@ w, err := webview.New(webview.Options{
 | `Init(js) error` | 注册每次页面加载前执行的 JavaScript |
 | `Bind(name, fn) error` | 将 Go 函数暴露给 JavaScript |
 | `Unbind(name) error` | 删除已绑定的函数 |
-| `ChooseFile(filters ...FileFilter) (string, error)` | 阻塞并使用系统原生对话框选择一个文件 |
-| `SaveFile(opts FileDialogOptions) (string, error)` | 使用系统原生“另存为”对话框返回目标路径 |
-| `ChooseDir() (string, error)` | 阻塞并使用系统原生对话框选择一个目录 |
 | `SetMenu(menus...) error` | 替换原生菜单栏 |
 | `MainThread(fn)` | 在 UI 线程执行函数并等待完成 |
 | `InterceptResource(scheme, handler)` | 注册自定义 URL Scheme 处理器；应在 `Run` 前调用 |
@@ -176,11 +173,25 @@ if err := w.Run(); err != nil {
 
 ### 文件与目录选择
 
-`ChooseFile` 和 `ChooseDir` 会阻塞到用户选择或取消，并返回绝对路径。它们必须在窗口运行后调用，可安全地从普通后台 goroutine 或 `Bind` 回调调用。取消时路径为空，错误可用 `errors.Is(err, webview.ErrDialogCancelled)` 判断。Chrome/Chromium 后端返回 `webview.ErrDialogUnsupported`。
+文件对话框现在是包级函数，原来的 `w.ChooseDir()`、`w.ChooseFile()` 和 `w.SaveFile()` 已移除：
+
+| 函数 | 行为 |
+| --- | --- |
+| `webview.ChooseDir()` | 选择一个目录 |
+| `webview.ChooseFile(filters ...webview.FileFilter)` | 选择一个文件，可按扩展名和 MIME 类型过滤 |
+| `webview.SaveFile(opts webview.FileDialogOptions)` | 选择保存路径，支持默认目录、建议文件名和原生覆盖确认 |
+
+三个函数同步等待选择并返回绝对路径，无需创建 WebView 或托盘，可在 `Run` 前及运行期间使用，Chrome 后端也可使用。对话框不绑定业务窗口，关闭全部窗口后仍可使用。`SaveFile` 不创建文件，也不会自动运行或退出应用。
+
+macOS 在 `Run` 前必须从 main 主 goroutine 调用，其他线程返回 `ErrDialogMainThread`；运行期间可从普通 goroutine、绑定函数或托盘回调调用。请求按入队顺序串行显示，并复制参数；等待期间调用方应避免修改正在传入的切片。UI 线程在已有请求时调用返回 `ErrDialogReentrant`。
+
+取消返回 `ErrDialogCancelled`，缺少原生能力返回 `ErrDialogUnsupported`。`Quit` 会取消活动和排队请求，这些请求及退出后的新请求返回 `ErrApplicationStopped`。错误均可用 `errors.Is` 判断。
+
+独立示例见 [`example/dialogs`](example/dialogs/main.go)：先在 `Run` 前选文件，再从纯托盘回调打开三个对话框。
 
 ```go
 if err := w.Bind("chooseFile", func() (string, error) {
-	path, err := w.ChooseFile()
+	path, err := webview.ChooseFile()
 	if errors.Is(err, webview.ErrDialogCancelled) {
 		return "", nil
 	}
@@ -193,7 +204,7 @@ if err := w.Bind("chooseFile", func() (string, error) {
 可使用扩展名或 MIME 类型过滤文件：
 
 ```go
-path, err := w.ChooseFile(webview.FileFilter{
+path, err := webview.ChooseFile(webview.FileFilter{
 	Name: "Images", Extensions: []string{"png", "jpg"},
 	MIMETypes: []string{"image/png", "image/jpeg"},
 })
@@ -202,7 +213,7 @@ path, err := w.ChooseFile(webview.FileFilter{
 `SaveFile` 只弹出保存面板并返回绝对路径，由调用方负责实际写文件：
 
 ```go
-path, err := w.SaveFile(webview.FileDialogOptions{
+path, err := webview.SaveFile(webview.FileDialogOptions{
 	Title: "另存为", Filename: "report.pdf",
 	Filters: []webview.FileFilter{{Name: "PDF", Extensions: []string{"pdf"}, MIMETypes: []string{"application/pdf"}}},
 })

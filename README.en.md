@@ -133,8 +133,6 @@ Backend probing happens during `New`. Some native shared libraries are not loade
 | `Init(js) error` | Register JavaScript to run before every page load |
 | `Bind(name, fn) error` | Expose a Go function to JavaScript |
 | `Unbind(name) error` | Remove a binding |
-| `ChooseFile() (string, error)` | Block in a native dialog and select one file |
-| `ChooseDir() (string, error)` | Block in a native dialog and select one directory |
 | `SetMenu(menus...) error` | Replace the native menu bar |
 | `MainThread(fn)` | Run a function on the UI thread and wait for it |
 | `InterceptResource(scheme, handler)` | Register a custom URL scheme handler; call before `Run` |
@@ -143,7 +141,21 @@ Backend probing happens during `New`. Some native shared libraries are not loade
 
 ### Choosing files and directories
 
-`ChooseFile` and `ChooseDir` block until the user selects a path or cancels, and return an absolute path. Call them after the window starts; they are safe from a background goroutine or a `Bind` callback. Cancellation returns an empty path and an error matching `webview.ErrDialogCancelled`. The Chrome/Chromium backend returns `webview.ErrDialogUnsupported`.
+Dialogs are package functions; migrate `w.ChooseDir()`, `w.ChooseFile(...)` and `w.SaveFile(...)` to these calls:
+
+| Function | Behavior |
+| --- | --- |
+| `webview.ChooseDir()` | Select one directory |
+| `webview.ChooseFile(filters ...webview.FileFilter)` | Select one file with optional extension/MIME filters |
+| `webview.SaveFile(opts webview.FileDialogOptions)` | Select a save path with initial directory, suggested filename and native overwrite confirmation |
+
+They synchronously return an absolute path without creating a WebView or tray, before or during `Run`, including when using Chrome or after all windows close. Dialogs have no business window parent. `SaveFile` does not create a file. Dialog calls do not call `Run` or `Quit`.
+
+On macOS, calls before `Run` must use the main goroutine; other threads receive `ErrDialogMainThread`. During `Run`, use a regular goroutine, binding or tray callback. Requests display in queue order and copy their options before enqueueing. Do not concurrently mutate slices while passing them to a call. A UI thread call while another request is pending returns `ErrDialogReentrant`.
+
+Cancellation returns `ErrDialogCancelled`; missing native capabilities return `ErrDialogUnsupported`. `Quit` cancels active and queued requests with `ErrApplicationStopped`; subsequent requests return the same error. Use `errors.Is` to check these errors.
+
+See [`example/dialogs`](example/dialogs/main.go) for file selection before `Run` followed by all three dialogs from a tray without a WebView.
 
 ### Window size
 

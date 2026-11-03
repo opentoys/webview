@@ -67,7 +67,7 @@ func main() {
 
 	w.SetMenu(menus...)
 
-	w.Bind("opendir", w.ChooseDir)
+	w.Bind("opendir", webview.ChooseDir)
 
 	if err := w.OnFilesDropped(func(files []string) {
 		var paths []struct {

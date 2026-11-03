@@ -3,7 +3,6 @@
 package linux
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,67 +20,6 @@ const (
 	// Navigation decisions (type=0) are WebKitNavigationPolicyDecision — do NOT call get_response() on them.
 	webkitPolicyDecisionTypeResponse = 2
 )
-
-func (p *gtk) ChooseFile(filters ...types.FileFilter) (string, error) {
-	return p.choosePath(gtkFileChooserActionOpen, filters...)
-}
-func (p *gtk) SaveFile(opts types.FileDialogOptions) (string, error) {
-	if p.window == 0 || p.uiTID.Load() == 0 {
-		return "", fmt.Errorf("webview: save file: window is not running")
-	}
-	var path string
-	var err error
-	p.MainThread(func() {
-		var ok bool
-		path, ok = p.showSaveDialogOptions(opts)
-		if !ok {
-			err = types.ErrDialogCancelled
-		}
-	})
-	if path != "" {
-		path, err = filepath.Abs(filepath.Clean(path))
-	}
-	return path, err
-}
-func (p *gtk) ChooseDir() (string, error) { return p.choosePath(gtkFileChooserActionSelectFolder) }
-
-func (p *gtk) choosePath(action int, filters ...types.FileFilter) (string, error) {
-	if p.window == 0 || p.uiTID.Load() == 0 {
-		return "", fmt.Errorf("webview: choose path: window is not running")
-	}
-	var path string
-	var err error
-	p.MainThread(func() {
-		dlg := gtkFileChooserNativeNew("", p.window, action, "_Open", "_Cancel")
-		if dlg == 0 {
-			err = fmt.Errorf("webview: choose path: failed to create GTK dialog")
-			return
-		}
-		defer gObjectUnref(dlg)
-		applyFileDialogOptions(dlg, types.FileDialogOptions{Filters: filters})
-		var response int
-		if gtkNativeDialogRun != nil {
-			response = gtkNativeDialogRun(dlg)
-		} else {
-			response = runFallbackDialog(dlg)
-		}
-		if response != gtkResponseAccept {
-			err = types.ErrDialogCancelled
-			return
-		}
-		if p.savePathFn == nil {
-			err = fmt.Errorf("webview: choose path: GTK path conversion is unavailable")
-			return
-		}
-		path = p.savePathFn(p, dlg)
-		if path == "" {
-			err = fmt.Errorf("webview: choose path: GTK returned no filesystem path")
-			return
-		}
-		path, err = filepath.Abs(path)
-	})
-	return path, err
-}
 
 // showSaveDialog presents a modal GtkFileChooserNative save dialog on the GTK
 // thread and returns the chosen path. The second result is false when the user
@@ -122,8 +60,12 @@ func applyFileDialogOptions(dlg uintptr, opts types.FileDialogOptions) {
 	if opts.Title != "" && gtkNativeDialogSetTitle != nil {
 		gtkNativeDialogSetTitle(dlg, opts.Title)
 	}
-	if opts.Directory != "" && gtkFileChooserSetCurrentFolderFilename != nil {
-		gtkFileChooserSetCurrentFolderFilename(dlg, filepath.Clean(opts.Directory))
+	if opts.Directory != "" {
+		file := gFileNewForPath(filepath.Clean(opts.Directory))
+		if file != 0 {
+			gtkFileChooserSetCurrentFolder(dlg, file, 0)
+			gObjectUnref(file)
+		}
 	}
 	for _, f := range opts.Filters {
 		filter := gtkFileFilterNew()
@@ -135,9 +77,14 @@ func applyFileDialogOptions(dlg uintptr, opts types.FileDialogOptions) {
 			name = "Files"
 		}
 		gtkFileFilterSetName(filter, name)
+		if len(f.Extensions) == 0 && len(f.MIMETypes) == 0 {
+			gtkFileFilterAddPattern(filter, "*")
+		}
 		for _, e := range f.Extensions {
 			e = strings.TrimPrefix(strings.TrimSpace(e), ".")
-			if e != "" {
+			if e == "*" || e == "" {
+				gtkFileFilterAddPattern(filter, "*")
+			} else {
 				gtkFileFilterAddPattern(filter, "*."+e)
 			}
 		}
@@ -188,6 +135,9 @@ func runFallbackDialog(dlg uintptr) int {
 	dialogRespSeq++
 	token := dialogRespSeq
 	st := &dialogResp{}
+	if dlg == standaloneChooser {
+		standaloneResponse = st
+	}
 	dialogRespStates[token] = st
 	dialogRespMu.Unlock()
 	defer func() {
@@ -196,8 +146,8 @@ func runFallbackDialog(dlg uintptr) int {
 		dialogRespMu.Unlock()
 	}()
 	gSignalConnectData(dlg, "response", dialogResponseFn(), uintptr(token), 0, 0)
-	gtkNativeDialogShow(dlg)
 	gtkNativeDialogSetModal(dlg, true)
+	gtkNativeDialogShow(dlg)
 	for {
 		dialogRespMu.Lock()
 		done := st.done

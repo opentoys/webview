@@ -6,9 +6,10 @@ package darwin
 
 import (
 	"fmt"
-	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
 	"github.com/opentoys/webview/internal/debuglog"
@@ -18,17 +19,18 @@ import (
 var (
 	hostDone      = make(chan struct{})
 	hostOnce      sync.Once
-	hostReady     = make(chan struct{}) // closed once the host loop is running
+	hostPumpOnce  sync.Once
+	hostDoneOnce  sync.Once
+	hostRunning   atomic.Bool
+	hostReady     = make(chan struct{}) // closed once native UI is initialized
 	hostThread    objc.ID
 	commandTarget objc.ID
 )
 
-// startAppHost launches the single AppKit host thread if not already running,
-// then blocks until it is ready.
+// startAppHost ensures native UI is initialized. RunApplication owns the event
+// loop; creating an object must never start a second AppKit host thread.
 func startAppHost() {
-	hostOnce.Do(func() {
-		go hostLoop()
-	})
+	hostOnce.Do(initializeHost)
 	<-hostReady
 }
 
@@ -47,12 +49,7 @@ func initializeHost() {
 }
 func pumpHost() {
 	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(objc.RegisterName("run"))
-	close(hostDone)
-}
-func hostLoop() {
-	runtime.LockOSThread()
-	initializeHost()
-	pumpHost()
+	hostDoneOnce.Do(func() { close(hostDone) })
 }
 
 // RunApplication runs AppKit on the calling (main) thread. The initializer
@@ -64,15 +61,16 @@ func RunApplication(start func() error) error {
 		_ = start()
 		return probeErr
 	}
-	ownsHost := false
-	hostOnce.Do(func() { ownsHost = true; initializeHost() })
+	hostOnce.Do(initializeHost)
+	ownsLoop := false
+	hostPumpOnce.Do(func() { ownsLoop = true; hostRunning.Store(true) })
 	if err := start(); err != nil {
-		if ownsHost {
-			close(hostDone)
+		if ownsLoop {
+			hostDoneOnce.Do(func() { close(hostDone) })
 		}
 		return err
 	}
-	if ownsHost {
+	if ownsLoop {
 		pumpHost()
 	} else {
 		<-hostDone
@@ -104,7 +102,10 @@ func mainThread(fn func()) {
 	case <-hostDone:
 		return
 	}
-	commandTarget.Send(objc.RegisterName("performSelector:onThread:withObject:waitUntilDone:"), objc.RegisterName("runCommand:"), hostThread, objc.ID(0), false)
+	modes := []objc.ID{nsString("NSDefaultRunLoopMode"), nsString("NSModalPanelRunLoopMode"), nsString("NSEventTrackingRunLoopMode")}
+	array := objc.ID(nsArrayClass).Send(arrayWithObjectsCountSel, unsafe.Pointer(&modes[0]), uintptr(len(modes)))
+	commandTarget.Send(objc.RegisterName("performSelector:onThread:withObject:waitUntilDone:modes:"), objc.RegisterName("runCommand:"), hostThread, objc.ID(0), false, array)
+	runtime.KeepAlive(modes)
 	select {
 	case <-done:
 	case <-hostDone:
@@ -227,41 +228,6 @@ func (p *Platform) SetMenus(menus []Menu) {
 // MainThread runs f on the AppKit host thread, blocking until it completes.
 func (p *Platform) MainThread(f func()) { mainThread(f) }
 
-func (p *Platform) ChooseFile(filters ...types.FileFilter) (string, error) {
-	return p.choosePath(false, filters...)
-}
-func (p *Platform) SaveFile(opts types.FileDialogOptions) (string, error) {
-	p.mu.Lock()
-	ready := p.window != 0 && !p.closed
-	p.mu.Unlock()
-	if !ready {
-		return "", fmt.Errorf("webview: save file: window is not running")
-	}
-	var path string
-	var err error
-	mainThread(func() {
-		panel := objc.ID(nsSavePanelClass).Send(savePanelSel)
-		if panel == 0 {
-			err = fmt.Errorf("webview: save file: failed to create NSSavePanel")
-			return
-		}
-		applyFileDialogOptions(panel, opts)
-		if panel.Send(runModalSel) != 1 {
-			err = types.ErrDialogCancelled
-			return
-		}
-		url := panel.Send(panelURLSel)
-		path = goString(url.Send(pathSel))
-		if path == "" {
-			err = fmt.Errorf("webview: save file: panel returned no filesystem path")
-			return
-		}
-		path, err = filepath.Abs(filepath.Clean(path))
-	})
-	return path, err
-}
-func (p *Platform) ChooseDir() (string, error) { return p.choosePath(true) }
-
 // SetFilesDropped installs (or removes) this window's native file-drop
 // receiver. It is safe before Run: setup applies the pending configuration.
 func (p *Platform) SetFilesDropped(fn func([]string)) error {
@@ -277,42 +243,6 @@ func (p *Platform) SetFilesDropped(fn func([]string)) error {
 		mainThread(func() { p.applyFileDropTarget(w, fn != nil) })
 	}
 	return nil
-}
-
-func (p *Platform) choosePath(directory bool, filters ...types.FileFilter) (string, error) {
-	p.mu.Lock()
-	ready := p.window != 0 && !p.closed
-	p.mu.Unlock()
-	if !ready {
-		return "", fmt.Errorf("webview: choose path: window is not running")
-	}
-	var path string
-	var err error
-	mainThread(func() {
-		panel := objc.ID(nsOpenPanelClass).Send(openPanelSel)
-		if panel == 0 {
-			err = fmt.Errorf("webview: choose path: failed to create NSOpenPanel")
-			return
-		}
-		panel.Send(setCanChooseFilesSel, !directory)
-		panel.Send(setCanChooseDirectoriesSel, directory)
-		panel.Send(setAllowsMultipleSelectionSel, false)
-		if !directory {
-			applyFileFilters(panel, filters)
-		}
-		if panel.Send(runModalSel) != 1 {
-			err = types.ErrDialogCancelled
-			return
-		}
-		url := panel.Send(panelURLSel)
-		path = goString(url.Send(pathSel))
-		if path == "" {
-			err = fmt.Errorf("webview: choose path: NSOpenPanel returned no filesystem path")
-			return
-		}
-		path, err = filepath.Abs(path)
-	})
-	return path, err
 }
 
 func (p *Platform) Run() error {

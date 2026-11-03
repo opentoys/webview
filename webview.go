@@ -63,7 +63,7 @@ type FileDialogOptions = types.FileDialogOptions
 var (
 	// ErrDialogCancelled is returned when a native chooser is dismissed.
 	ErrDialogCancelled = types.ErrDialogCancelled
-	// ErrDialogUnsupported is returned by backends without host-native choosers.
+	// ErrDialogUnsupported is returned when native UI capabilities are unavailable.
 	ErrDialogUnsupported = types.ErrDialogUnsupported
 	// ErrDropUnsupported is returned when a backend cannot receive native file
 	// drops. The Chrome/Chromium backend deliberately has no host window hook.
@@ -85,9 +85,6 @@ type Platform interface {
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
 	MainThread(f func())
-	ChooseFile(filters ...FileFilter) (string, error)
-	SaveFile(opts FileDialogOptions) (string, error)
-	ChooseDir() (string, error)
 	// SetFilesDropped installs the native drop target. The callback must return
 	// promptly; it only hands an immutable batch to W's dispatcher.
 	SetFilesDropped(func([]string)) error
@@ -273,39 +270,6 @@ func (w *W) Eval(js string) error { return w.windowCall(func() error { return w.
 // Init registers JavaScript for the start of future documents. It is safe before
 // Run and does not immediately execute in an already-loaded document.
 func (w *W) Init(js string) error { return w.windowCall(func() error { return w.p.Init(js) }) }
-
-// ChooseFile blocks in a native chooser and returns one absolute file path.
-func (w *W) ChooseFile(filters ...FileFilter) (string, error) {
-	var path string
-	err := w.windowCall(func() error { var err error; path, err = w.p.ChooseFile(filters...); return err })
-	return cleanDialogPath(path), err
-}
-
-// SaveFile shows a native Save As dialog and returns the selected path. It
-// does not create or write the file.
-func (w *W) SaveFile(opts FileDialogOptions) (string, error) {
-	var path string
-	err := w.windowCall(func() error { var err error; path, err = w.p.SaveFile(opts); return err })
-	return cleanDialogPath(path), err
-}
-
-func cleanDialogPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return abs
-}
-
-// ChooseDir blocks in a native chooser and returns one absolute directory path.
-func (w *W) ChooseDir() (string, error) {
-	var path string
-	err := w.windowCall(func() error { var err error; path, err = w.p.ChooseDir(); return err })
-	return path, err
-}
 
 func (w *W) Bind(name string, fn any) error {
 	return w.windowCall(func() error { return w.bridge.Bind(name, fn) })
