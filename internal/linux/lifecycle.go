@@ -74,6 +74,7 @@ func applicationThread(fn func()) {
 	}
 }
 func StopApplication() error {
+	trayBus.stop()
 	select {
 	case <-applicationReady:
 	default:
@@ -118,24 +119,14 @@ func (p *gtk) Hidden() error {
 type Tray struct{ tray *linuxTray }
 
 func NewTray(opts types.SystrayOptions) (*Tray, error) {
-	t, err := newLinuxTray()
+	t, err := newLinuxTray(opts)
 	if err != nil {
-		return nil, err
-	}
-	if err := t.update(opts); err != nil {
-		t.conn.Close()
 		return nil, err
 	}
 	return &Tray{t}, nil
 }
 func (t *Tray) Update(opts types.SystrayOptions) error { return t.tray.update(opts) }
-func (t *Tray) Close() error {
-	t.tray.mu.Lock()
-	t.tray.items = nil
-	t.tray.onClick = nil
-	t.tray.mu.Unlock()
-	return t.tray.conn.Close()
-}
+func (t *Tray) Close() error                           { return t.tray.close() }
 
 func (p *gtk) SetInitialHidden(hidden bool) { p.initialHidden = hidden }
 

@@ -7,189 +7,89 @@ import (
 	"fmt"
 	"image/png"
 	"sync"
+	"unsafe"
 
-	"github.com/godbus/dbus/v5"
-	"github.com/godbus/dbus/v5/introspect"
-	"github.com/godbus/dbus/v5/prop"
+	"github.com/ebitengine/purego"
 	"github.com/opentoys/webview/internal/types"
 )
 
 const trayInterface = "org.kde.StatusNotifierItem"
 const menuInterface = "com.canonical.dbusmenu"
-const trayPath dbus.ObjectPath = "/StatusNotifierItem"
-const trayMenuPath dbus.ObjectPath = "/MenuBar"
+const trayPath = "/StatusNotifierItem"
+const trayMenuPath = "/MenuBar"
+const invalidMenuItem = "com.canonical.dbusmenu.Error.InvalidMenuItem"
 
 type trayPixmap struct {
 	Width, Height int32
 	Data          []byte
 }
-type trayLayout struct {
-	ID         int32
-	Properties map[string]dbus.Variant
-	Children   []dbus.Variant
-}
-type trayProperty struct {
-	ID         int32
-	Properties map[string]dbus.Variant
-}
-type trayEvent struct {
-	ID        int32
-	Event     string
-	Data      dbus.Variant
-	Timestamp uint32
-}
 
+// Mutable native state belongs exclusively to trayBus's context thread.
 type linuxTray struct {
-	onClick  func()
-	mu       sync.Mutex
-	conn     *dbus.Conn
-	props    *prop.Properties
-	items    []types.MenuItem
+	conn     uintptr
+	id       uintptr
+	objects  []uint32
+	node     uintptr
+	closed   bool
+	opts     types.SystrayOptions
+	pixmap   trayPixmap
 	revision uint32
 	nextID   int32
 	ids      []int32
 }
 
-func (t *linuxTray) ContextMenu(x, y int32) *dbus.Error { return nil }
-func (t *linuxTray) Activate(x, y int32) *dbus.Error {
-	t.mu.Lock()
-	fn := t.onClick
-	t.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
-	return nil
-}
-func (t *linuxTray) SecondaryActivate(x, y int32) *dbus.Error           { return nil }
-func (t *linuxTray) Scroll(delta int32, orientation string) *dbus.Error { return nil }
-func (t *linuxTray) GetLayout(parent, depth int32, names []string) (uint32, trayLayout, *dbus.Error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	root := trayLayout{ID: 0, Properties: map[string]dbus.Variant{"children-display": dbus.MakeVariant("submenu")}, Children: []dbus.Variant{}}
-	for i, item := range t.items {
-		node := trayLayout{ID: t.ids[i], Properties: trayItemProperties(item), Children: []dbus.Variant{}}
-		if parent == node.ID {
-			return t.revision, node, nil
-		}
-		root.Children = append(root.Children, dbus.MakeVariant(node))
-	}
-	if parent != 0 {
-		return t.revision, trayLayout{}, dbus.NewError("com.canonical.dbusmenu.Error.InvalidMenuItem", []any{"unknown menu item"})
-	}
-	if depth == 0 {
-		root.Children = []dbus.Variant{}
-	}
-	return t.revision, root, nil
-}
-func trayItemProperties(item types.MenuItem) map[string]dbus.Variant {
-	if item.Separator {
-		return map[string]dbus.Variant{"type": dbus.MakeVariant("separator")}
-	}
-	return map[string]dbus.Variant{"label": dbus.MakeVariant(item.Label), "enabled": dbus.MakeVariant(true), "visible": dbus.MakeVariant(true)}
-}
-func (t *linuxTray) GetGroupProperties(ids []int32, names []string) ([]trayProperty, *dbus.Error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := []trayProperty{}
-	for i, item := range t.items {
-		for _, id := range ids {
-			if id == t.ids[i] {
-				out = append(out, trayProperty{id, trayItemProperties(item)})
-			}
-		}
-	}
-	return out, nil
-}
-func (t *linuxTray) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for i, item := range t.items {
-		if id == t.ids[i] {
-			if v, ok := trayItemProperties(item)[name]; ok {
-				return v, nil
-			}
-		}
-	}
-	return dbus.MakeVariant(""), nil
-}
-func (t *linuxTray) Event(id int32, event string, data dbus.Variant, timestamp uint32) *dbus.Error {
-	t.mu.Lock()
-	var fn func()
-	if event == "clicked" {
-		for i, item := range t.items {
-			if t.ids[i] == id {
-				fn = item.Action
-				break
-			}
-		}
-	}
-	t.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
-	return nil
-}
-func (t *linuxTray) EventGroup(events []trayEvent) ([]int32, *dbus.Error) {
-	for _, e := range events {
-		t.Event(e.ID, e.Event, e.Data, e.Timestamp)
-	}
-	return []int32{}, nil
-}
-func (t *linuxTray) AboutToShow(id int32) (bool, *dbus.Error) { return false, nil }
-func (t *linuxTray) AboutToShowGroup(ids []int32) ([]int32, []int32, *dbus.Error) {
-	return []int32{}, []int32{}, nil
-}
+var trayCallbacksOnce sync.Once
+var trayVTable dbusVTable
 
-func newLinuxTray() (*linuxTray, error) {
-	conn, err := dbus.ConnectSessionBus()
-	if err != nil {
-		return nil, fmt.Errorf("%w: session bus: %v", types.ErrMenuUnsupported, err)
-	}
-	fail := func(err error) (*linuxTray, error) {
-		conn.Close()
-		return nil, fmt.Errorf("%w: %v", types.ErrMenuUnsupported, err)
-	}
-	watcher := conn.Object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher")
-	host, err := watcher.GetProperty("org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered")
-	if err != nil || host.Value() != true {
-		return fail(fmt.Errorf("no StatusNotifier host"))
-	}
-	t := &linuxTray{conn: conn}
-	if err = conn.Export(t, trayPath, trayInterface); err != nil {
-		return fail(err)
-	}
-	if err = conn.Export(t, trayMenuPath, menuInterface); err != nil {
-		return fail(err)
-	}
-	conn.Export(introspect.NewIntrospectable(&introspect.Node{Interfaces: []introspect.Interface{{Name: trayInterface, Methods: introspect.Methods(t)}}}), trayPath, "org.freedesktop.DBus.Introspectable")
-	conn.Export(introspect.NewIntrospectable(&introspect.Node{Interfaces: []introspect.Interface{{Name: menuInterface, Methods: introspect.Methods(t)}}}), trayMenuPath, "org.freedesktop.DBus.Introspectable")
-	properties := map[string]map[string]*prop.Prop{
-		trayInterface: {
-			"Category": {Value: "ApplicationStatus"}, "Id": {Value: "webview"}, "Title": {Value: ""}, "Status": {Value: "Active"},
-			"IconName": {Value: ""}, "IconPixmap": {Value: []trayPixmap{}, Emit: prop.EmitTrue}, "ToolTip": {Value: struct {
-				Icon               string
-				Pixmaps            []trayPixmap
-				Title, Description string
-			}{"", []trayPixmap{}, "", ""}, Emit: prop.EmitTrue},
-			"ItemIsMenu": {Value: true}, "Menu": {Value: trayMenuPath},
-		},
-	}
-	t.props, err = prop.Export(conn, trayPath, properties)
-	if err != nil {
-		return fail(err)
-	}
-	if _, err = prop.Export(conn, trayMenuPath, map[string]map[string]*prop.Prop{menuInterface: {"Version": {Value: uint32(3)}, "TextDirection": {Value: "ltr"}, "Status": {Value: "normal"}, "IconThemePath": {Value: []string{}}}}); err != nil {
-		return fail(err)
-	}
-	if err = watcher.Call("org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem", 0, string(trayPath)).Err; err != nil {
-		return fail(err)
-	}
-	return t, nil
+func initTrayCallbacks() {
+	trayCallbacksOnce.Do(func() {
+		trayVTable.Method = purego.NewCallback(func(conn, sender, path, iface, method, params, invocation, data uintptr) {
+			t := trayBus.trays[data]
+			if t == nil || t.closed {
+				gio.ReturnError(invocation, "org.freedesktop.DBus.Error.UnknownObject", "tray is closed")
+				return
+			}
+			reply, callbacks, errName := t.method(nativeString(iface), nativeString(method), params)
+			if errName != "" {
+				gio.ReturnError(invocation, errName, "unknown method, property or menu item")
+				return
+			}
+			gio.Return(invocation, reply)
+			// Return queues the reply. Flush it before a user callback can
+			// close this connection, otherwise Close may discard the reply.
+			// The flush runs outside the context, with its own native reference.
+			if len(callbacks) > 0 {
+				gio.ObjectRef(conn)
+				go func() {
+					defer gio.ObjectUnref(conn)
+					var e uintptr
+					if gio.Flush(conn, 0, &e) == 0 {
+						if e != 0 {
+							gio.ErrorFree(e)
+						}
+						return
+					}
+					for _, fn := range callbacks {
+						if fn != nil {
+							go fn()
+						}
+					}
+				}()
+			}
+		})
+		trayVTable.Get = purego.NewCallback(func(conn, sender, path, iface, property, errorOut, data uintptr) uintptr {
+			t := trayBus.trays[data]
+			if t == nil || t.closed {
+				return 0
+			}
+			return t.property(nativeString(iface), nativeString(property))
+		})
+	})
 }
-func (t *linuxTray) update(opts types.SystrayOptions) error {
-	image, err := png.Decode(bytes.NewReader(opts.Icon))
+func decodeTrayPixmap(icon []byte) (trayPixmap, error) {
+	image, err := png.Decode(bytes.NewReader(icon))
 	if err != nil {
-		return err
+		return trayPixmap{}, err
 	}
 	bounds := image.Bounds()
 	pixels := make([]byte, 0, bounds.Dx()*bounds.Dy()*4)
@@ -199,30 +99,187 @@ func (t *linuxTray) update(opts types.SystrayOptions) error {
 			pixels = append(pixels, byte(a>>8), byte(r>>8), byte(g>>8), byte(b>>8))
 		}
 	}
-	pixmaps := []trayPixmap{{int32(bounds.Dx()), int32(bounds.Dy()), pixels}}
-	t.mu.Lock()
-	t.items = opts.Items
-	t.onClick = opts.OnClick
+	return trayPixmap{int32(bounds.Dx()), int32(bounds.Dy()), pixels}, nil
+}
+func (p trayPixmap) variant() uintptr {
+	return vArray("(iiay)", vTuple(gio.NewInt(p.Width), gio.NewInt(p.Height),
+		gio.NewFixedArray("y", unsafe.SliceData(p.Data), uintptr(len(p.Data)), 1)))
+}
+func newLinuxTray(opts types.SystrayOptions) (*linuxTray, error) {
+	pixmap, err := decodeTrayPixmap(opts.Icon)
+	if err != nil {
+		return nil, err
+	}
+	if err = trayBus.start(); err != nil {
+		return nil, err
+	}
+	conn, err := connectSession()
+	if err != nil {
+		return nil, fmt.Errorf("%w: session bus: %v", types.ErrMenuUnsupported, err)
+	}
+	// This reference protects outbound calls even when StopApplication closes
+	// the tray concurrently. The context owns a separate reference.
+	defer gio.ObjectUnref(conn)
+	t := &linuxTray{}
+	err = trayBus.do(func() error {
+		initTrayCallbacks()
+		t.conn = gio.ObjectRef(conn)
+		trayBus.nextID++
+		t.id = trayBus.nextID
+		trayBus.trays[t.id] = t
+		t.publish(opts, pixmap)
+		var e uintptr
+		t.node = gio.NodeNew(trayXML, &e)
+		if t.node == 0 {
+			t.closeNative()
+			return takeGError(e)
+		}
+		for _, obj := range []struct{ path, iface string }{{trayPath, trayInterface}, {trayMenuPath, menuInterface}} {
+			id := gio.Register(conn, obj.path, gio.NodeLookup(t.node, obj.iface), &trayVTable, t.id, 0, &e)
+			if id == 0 {
+				t.closeNative()
+				return takeGError(e)
+			}
+			t.objects = append(t.objects, id)
+		}
+		return nil
+	})
+	if err != nil {
+		// No context owns this connection if dispatch was rejected during shutdown.
+		var e uintptr
+		gio.Close(conn, 0, &e)
+		if e != 0 {
+			gio.ErrorFree(e)
+		}
+		return nil, fmt.Errorf("%w: %v", types.ErrMenuUnsupported, err)
+	}
+	fail := func(err error) (*linuxTray, error) {
+		_ = t.close()
+		return nil, fmt.Errorf("%w: %v", types.ErrMenuUnsupported, err)
+	}
+	const watcher = "org.kde.StatusNotifierWatcher"
+	v, err := dbusCall(conn, watcher, "/StatusNotifierWatcher", "org.freedesktop.DBus.Properties", "Get", vTuple(gio.NewString(watcher), gio.NewString("IsStatusNotifierHostRegistered")))
+	if err != nil {
+		return fail(err)
+	}
+	if nativeString(gio.Signature(v)) != "(v)" {
+		gio.Unref(v)
+		return fail(fmt.Errorf("invalid StatusNotifier host property response"))
+	}
+	boxed := gio.Child(v, 0)
+	value := gio.Variant(boxed)
+	host := nativeString(gio.Signature(value)) == "b" && gio.Bool(value) != 0
+	gio.Unref(value)
+	gio.Unref(boxed)
+	gio.Unref(v)
+	if !host {
+		return fail(fmt.Errorf("no StatusNotifier host"))
+	}
+	v, err = dbusCall(conn, watcher, "/StatusNotifierWatcher", watcher, "RegisterStatusNotifierItem", vTuple(gio.NewString(trayPath)))
+	if err != nil {
+		return fail(err)
+	}
+	if nativeString(gio.Signature(v)) != "()" {
+		gio.Unref(v)
+		return fail(fmt.Errorf("invalid StatusNotifier registration response"))
+	}
+	gio.Unref(v)
+	// Detect shutdown while the outbound registration was in flight.
+	if err = trayBus.do(func() error {
+		if t.closed {
+			return errTrayClosed
+		}
+		return nil
+	}); err != nil {
+		return fail(err)
+	}
+	return t, nil
+}
+func (t *linuxTray) publish(opts types.SystrayOptions, pixmap trayPixmap) {
+	t.opts = opts
+	t.opts.Items = append([]types.MenuItem(nil), opts.Items...)
+	t.pixmap = pixmap
 	t.ids = nil
-	for range t.items {
+	for range opts.Items {
 		t.nextID++
 		t.ids = append(t.ids, t.nextID)
 	}
 	t.revision++
-	revision := t.revision
-	t.mu.Unlock()
-	t.props.SetMust(trayInterface, "ItemIsMenu", opts.OnClick == nil)
-	t.props.SetMust(trayInterface, "Title", opts.Tooltip)
-	t.props.SetMust(trayInterface, "IconPixmap", pixmaps)
-	t.props.SetMust(trayInterface, "ToolTip", struct {
-		Icon               string
-		Pixmaps            []trayPixmap
-		Title, Description string
-	}{"", pixmaps, opts.Tooltip, ""})
-	t.conn.Emit(trayPath, trayInterface+".NewIcon")
-	t.conn.Emit(trayPath, trayInterface+".NewToolTip")
-	return t.conn.Emit(trayMenuPath, menuInterface+".LayoutUpdated", revision, int32(0))
 }
+func (t *linuxTray) update(opts types.SystrayOptions) error {
+	pixmap, err := decodeTrayPixmap(opts.Icon)
+	if err != nil {
+		return err
+	}
+	return trayBus.do(func() error {
+		if t.closed {
+			return errTrayClosed
+		}
+		t.publish(opts, pixmap)
+		changed := []uintptr{}
+		for _, name := range []string{"ItemIsMenu", "Title", "IconPixmap", "ToolTip"} {
+			changed = append(changed, gio.NewEntry(gio.NewString(name), gio.NewVariant(t.property(trayInterface, name))))
+		}
+		if err := t.emit(trayPath, "org.freedesktop.DBus.Properties", "PropertiesChanged", vTuple(gio.NewString(trayInterface), vArray("{sv}", changed...), vStrings(nil))); err != nil {
+			return err
+		}
+		for _, signal := range []string{"NewIcon", "NewToolTip", "NewTitle"} {
+			if err := t.emit(trayPath, trayInterface, signal, vTuple()); err != nil {
+				return err
+			}
+		}
+		return t.emit(trayMenuPath, menuInterface, "LayoutUpdated", vTuple(gio.NewUint(t.revision), gio.NewInt(0)))
+	})
+}
+func (t *linuxTray) emit(path, iface, name string, args uintptr) error {
+	var e uintptr
+	if gio.Emit(t.conn, 0, path, iface, name, args, &e) == 0 {
+		return takeGError(e)
+	}
+	return nil
+}
+func (t *linuxTray) closeNative() {
+	if t.closed {
+		return
+	}
+	t.closed = true
+	for _, id := range t.objects {
+		gio.Unregister(t.conn, id)
+	}
+	t.objects = nil
+	if t.node != 0 {
+		gio.NodeUnref(t.node)
+		t.node = 0
+	}
+	if t.conn != 0 {
+		var e uintptr
+		gio.Close(t.conn, 0, &e)
+		if e != 0 {
+			gio.ErrorFree(e)
+		}
+		gio.ObjectUnref(t.conn)
+		t.conn = 0
+	}
+	t.opts = types.SystrayOptions{}
+	t.ids = nil
+	t.pixmap = trayPixmap{}
+	delete(trayBus.trays, t.id)
+}
+func (t *linuxTray) close() error {
+	err := trayBus.do(func() error { t.closeNative(); return nil })
+	if err == errBusStopped {
+		// stop drains every registered tray before signaling completion.
+		trayBus.mu.Lock()
+		done := trayBus.done
+		trayBus.mu.Unlock()
+		if done != nil {
+			<-done
+		}
+		return nil
+	}
+	return err
+}
+
 func (p *gtk) SetSystray(opts types.SystrayOptions) error {
 	if len(opts.Icon) == 0 {
 		return types.ErrMenuUnsupported
@@ -249,10 +306,8 @@ func (p *gtk) applySystray() error {
 	}
 	if p.tray == nil {
 		var err error
-		p.tray, err = newLinuxTray()
-		if err != nil {
-			return err
-		}
+		p.tray, err = newLinuxTray(*p.trayOptions)
+		return err
 	}
 	return p.tray.update(*p.trayOptions)
 }
@@ -262,7 +317,7 @@ func (p *gtk) RemoveSystray() error {
 	p.trayOptions = nil
 	p.trayActions.Close()
 	if p.tray != nil {
-		p.tray.conn.Close()
+		p.tray.close()
 		p.tray = nil
 	}
 	return nil

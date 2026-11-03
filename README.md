@@ -514,4 +514,4 @@ if err := w.AddContextMenuItem(webview.MenuItem{
 
 可在 Run 前配置，也可在运行时更新。回调异步执行，可调用菜单更新、Eval 和 Close；多个回调可能并发，应用共享状态应自行同步。菜单栏、托盘、右键菜单独立管理回调。窗口关闭时只释放所属窗口资源，托盘及进程事件循环继续运行。
 
-macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 使用 WebKitGTK 6.0、会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要桌面提供 StatusNotifier 托盘宿主。Chrome 的窗口右键菜单或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。
+macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 托盘通过 purego 调用 GLib/GObject/GIO 的 GDBus，使用会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要系统提供 libglib-2.0.so.0、libgobject-2.0.so.0、libgio-2.0.so.0 和桌面 StatusNotifier 托盘宿主。纯托盘无需 GTK、WebKitGTK 或显示服务器；窗口和文件对话框仍需现有 GTK/WebKitGTK 运行环境。Chrome 的窗口右键菜单或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。
