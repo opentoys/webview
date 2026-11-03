@@ -10,7 +10,8 @@ A no-CGO desktop WebView framework for Go, powered by [purego](https://github.co
 - Native backends: WKWebView on macOS, WebView2 on Windows, and WebKitGTK on Linux
 - Optional Chrome/Chromium backend driven through the Chrome DevTools Protocol
 - Promise-based JavaScript-to-Go bridge
-- Native menus, shortcuts, and callbacks
+- Native menus, shortcuts, and asynchronous callbacks
+- Independent system trays, including multiple trays and windowless applications
 - Custom URL schemes for embedded frontend assets without a local HTTP server
 - JavaScript injection before each page load
 - Incognito mode and custom browser data directories
@@ -23,20 +24,25 @@ A no-CGO desktop WebView framework for Go, powered by [purego](https://github.co
 | --- | --- | --- |
 | macOS 10.13+ | WKWebView + AppKit | System frameworks |
 | Windows 10+ | WebView2 | [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
-| Linux | WebKitGTK 4.1 | WebKitGTK shared libraries |
+| Linux (native windows) | GTK4 + WebKitGTK 6.0 | GTK4, WebKitGTK 6.0, and a display server |
+| Linux (tray only) | GIO/GDBus | GLib/GObject/GIO, a session D-Bus, and a StatusNotifier host |
 
-Go 1.25+ is required. On Linux, install the runtime library:
+Go 1.25+ is required. For native Linux windows, install the GTK4 / WebKitGTK 6.0 runtime:
 
 ```bash
 # Debian / Ubuntu
-sudo apt install libwebkit2gtk-4.1-0
+sudo apt install libwebkitgtk-6.0-4
 
 # Fedora
-sudo dnf install webkit2gtk4.1
+sudo dnf install webkitgtk6.0
 
 # Arch Linux
-sudo pacman -S webkit2gtk-4.1
+sudo pacman -S webkitgtk-6.0
 ```
+
+Package names are documented in the [Ubuntu](https://packages.ubuntu.com/search?keywords=libwebkitgtk-6.0-4&searchon=names&section=all&suite=all), [Fedora](https://packages.fedoraproject.org/pkgs/webkitgtk/webkitgtk6.0/), and [Arch Linux](https://archlinux.org/packages/extra/x86_64/webkitgtk-6.0/) package directories.
+
+Linux tray-only applications require `libglib-2.0.so.0`, `libgobject-2.0.so.0`, `libgio-2.0.so.0`, an accessible session D-Bus, and a StatusNotifier host. They need no GTK, WebKitGTK, or display server. Standalone file dialogs require GTK4 and a display server; creating a native WebView window also requires WebKitGTK 6.0.
 
 The Chrome backend requires Chrome or Chromium. The executable is discovered automatically, or it can be specified with `WEBVIEW_CHROME`.
 
@@ -386,7 +392,9 @@ Chrome Close terminates only its own browser child process; Show, Hidden, and On
 
 Run [`example/systray`](example/systray/main.go) for hide/restore, [`example/tray-only`](example/tray-only/main.go) for tray-only startup and creating new windows after closing previous ones, and [`example/native-menus`](example/native-menus/main.go) for tray updates and context menus.
 
-OnClick customizes the primary click; without it, clicking opens the menu. Right-click still opens the menu. Linux dispatches primary clicks through StatusNotifierItem.Activate; some desktop hosts always show the menu or ignore Activate. Each tray has its own D-Bus connection and does not require a GTK/WebView window.
+OnClick customizes the primary click; without it, clicking opens the menu. Right-click still opens the menu. Linux dispatches primary clicks through StatusNotifierItem.Activate; some desktop hosts always show the menu or ignore Activate. Each Linux tray has its own D-Bus connection, so closing one leaves the others running. A tray-only application can call `NewSystray` followed by `Run` without creating a WebView. Creating a window or opening a file dialog later initializes the corresponding graphical environment.
+
+Linux trays call system GIO/GDBus through purego. Click callbacks run on Go goroutines after the D-Bus reply is sent and may call `tray.Update`, `tray.Close`, `webview.Quit`, or file dialogs. Dialogs still require GTK4 and a display server as described above. Missing required libraries, symbols, the session bus, or an available tray host returns an error matching `errors.Is(err, webview.ErrMenuUnsupported)`. Trays configured before Run check these requirements during Run. Registration is not automatically restored after a watcher restart.
 
 `SetContextMenu([]MenuItem)` completely replaces the browser's default context menu and previous custom entries. Passing nil or an empty slice disables the context menu; it does not restore defaults. Each Set also clears previous role-removal configuration. `AddContextMenuItem(item)` appends an entry: before any Set it preserves browser defaults; after Set it appends to the replacement menu. `RemoveContextMenuItem(id)` removes a custom entry by ID; an unknown ID is harmless. Custom entries, including separators, require unique nonempty IDs. Leading, trailing and repeated separators are cleaned up.
 
@@ -394,4 +402,28 @@ OnClick customizes the primary click; without it, clicking opens the menu. Right
 
 Configure before Run or update at runtime. Callbacks run asynchronously and may update menus, call Eval or Close; synchronize shared state when callbacks overlap. The menu bar, tray and context menu own callbacks independently. Closing a window leaves independent trays and the application loop running.
 
-Native backends use NSStatusItem on macOS, notification icons and WebView2 ContextMenuRequested on Windows (including Explorer restart recovery), and StatusNotifierItem/DBusMenu on Linux. Linux trays use purego with GLib/GObject/GIO GDBus and require libglib-2.0.so.0, libgobject-2.0.so.0, libgio-2.0.so.0, a session D-Bus and a StatusNotifier host. Tray-only applications need no GTK, WebKitGTK or display server; windows and file dialogs still require the existing GTK/WebKitGTK runtime. Chrome window context menus and unavailable native capabilities return ErrMenuUnsupported (check with errors.Is). Initialization failures discovered after pre-Run configuration are returned by Run.
+Native backends use NSStatusItem on macOS, notification icons and WebView2 ContextMenuRequested on Windows (including Explorer restart recovery), and StatusNotifierItem/DBusMenu on Linux. See the runtime requirements above. Chrome window context menus and unavailable native capabilities return ErrMenuUnsupported (check with errors.Is). Initialization failures discovered after pre-Run configuration are returned by Run.
+
+## Testing
+
+Run all tests for the current platform:
+
+```bash
+go test ./...
+```
+
+Linux GDBus tests require GLib/GObject/GIO and `dbus-run-session`. This command creates an isolated session bus with a test-process mock watcher and verifies registration, properties, menu calls, signals, tray isolation, and cleanup without DISPLAY or Wayland:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY G_DEBUG=fatal-warnings \
+  dbus-run-session -- go test ./internal/linux
+```
+
+Session-bus integration tests skip when `DBUS_SESSION_BUS_ADDRESS` is unset. Race detection requires a Go-supported C compiler and CGO enabled; applications can still be built with `CGO_ENABLED=0`:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY G_DEBUG=fatal-warnings CGO_ENABLED=1 \
+  dbus-run-session -- go test -race ./...
+```
+
+Mock-watcher tests do not verify icon rendering, mouse interaction, or file dialogs on a real desktop. Verify those interactions separately on a graphical Linux desktop with a tray host.

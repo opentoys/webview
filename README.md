@@ -10,7 +10,8 @@
 - 原生后端：macOS WKWebView、Windows WebView2、Linux WebKitGTK
 - 可选 Chrome/Chromium 后端，通过 Chrome DevTools Protocol 驱动
 - JavaScript 与 Go 双向桥接，Go 函数在 JavaScript 中以 Promise 形式调用
-- 原生菜单、快捷键和回调
+- 原生菜单、快捷键和异步回调
+- 独立系统托盘，支持多托盘及无窗口运行
 - 自定义 URL Scheme，可直接加载内嵌前端资源，无需启动本地 HTTP 服务
 - 页面加载前注入 JavaScript
 - 隐身模式和自定义浏览器数据目录
@@ -23,20 +24,25 @@
 | --- | --- | --- |
 | macOS 10.13+ | WKWebView + AppKit | 系统框架 |
 | Windows 10+ | WebView2 | [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
-| Linux | WebKitGTK 4.1 | WebKitGTK 动态库 |
+| Linux（原生窗口） | GTK4 + WebKitGTK 6.0 | GTK4、WebKitGTK 6.0 和显示服务器 |
+| Linux（纯托盘） | GIO/GDBus | GLib/GObject/GIO、会话 D-Bus 和 StatusNotifier 托盘宿主 |
 
-项目要求 Go 1.25+。Linux 需安装运行时库：
+项目要求 Go 1.25+。Linux 原生窗口需安装 GTK4 / WebKitGTK 6.0 运行时：
 
 ```bash
 # Debian / Ubuntu
-sudo apt install libwebkit2gtk-4.1-0
+sudo apt install libwebkitgtk-6.0-4
 
 # Fedora
-sudo dnf install webkit2gtk4.1
+sudo dnf install webkitgtk6.0
 
 # Arch Linux
-sudo pacman -S webkit2gtk-4.1
+sudo pacman -S webkitgtk-6.0
 ```
+
+包名可参考 [Ubuntu](https://packages.ubuntu.com/search?keywords=libwebkitgtk-6.0-4&searchon=names&section=all&suite=all)、[Fedora](https://packages.fedoraproject.org/pkgs/webkitgtk/webkitgtk6.0/) 和 [Arch Linux](https://archlinux.org/packages/extra/x86_64/webkitgtk-6.0/) 的软件包目录。
+
+Linux 纯托盘只需系统提供 `libglib-2.0.so.0`、`libgobject-2.0.so.0`、`libgio-2.0.so.0`，以及可访问的会话 D-Bus 和 StatusNotifier 托盘宿主，无需 GTK、WebKitGTK 或显示服务器。独立文件对话框需要 GTK4 和显示服务器；创建原生 WebView 窗口时才需要 WebKitGTK 6.0。
 
 Chrome 后端需要本机安装 Chrome 或 Chromium。程序会自动查找，也可通过 `WEBVIEW_CHROME` 指定可执行文件。
 
@@ -441,7 +447,9 @@ Chrome 的 Close 只结束对应浏览器进程，Show / Hidden / OnClose 返回
 
 完整示例：[`example/systray`](example/systray/main.go) 演示关闭按钮隐藏、点击托盘恢复；[`example/tray-only`](example/tray-only/main.go) 演示纯托盘启动，以及窗口关闭后继续创建新窗口；[`example/native-menus`](example/native-menus/main.go) 演示托盘更新与右键菜单。
 
-OnClick 自定义左键行为，未设置时使用菜单；右键仍打开菜单。Linux 依赖宿主通过 StatusNotifierItem.Activate 通知点击：部分桌面始终显示菜单或忽略 Activate，具体行为取决于宿主。每个 Linux 托盘拥有独立的 D-Bus 连接，无需 GTK/WebView 窗口。
+OnClick 自定义左键行为，未设置时使用菜单；右键仍打开菜单。Linux 依赖宿主通过 StatusNotifierItem.Activate 通知点击：部分桌面始终显示菜单或忽略 Activate，具体行为取决于宿主。每个 Linux 托盘拥有独立的 D-Bus 连接，关闭一个托盘不影响其他托盘。纯托盘可直接创建 `NewSystray` 后调用 `Run`，无需创建 WebView；以后创建窗口或打开文件对话框时，才初始化对应的图形环境。
+
+Linux 托盘通过 purego 调用系统 GIO/GDBus。点击回调在 D-Bus 应答发送后交给 Go goroutine 执行，可调用 `tray.Update`、`tray.Close`、`webview.Quit` 或文件对话框；使用对话框时仍需满足上面的 GTK4 与显示环境要求。缺少必要库、符号、会话总线或可用托盘宿主时，返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前配置的托盘在 Run 时检查这些条件。当前不自动恢复 watcher 重启后的注册。
 
 #### 右键菜单接口
 
@@ -514,4 +522,28 @@ if err := w.AddContextMenuItem(webview.MenuItem{
 
 可在 Run 前配置，也可在运行时更新。回调异步执行，可调用菜单更新、Eval 和 Close；多个回调可能并发，应用共享状态应自行同步。菜单栏、托盘、右键菜单独立管理回调。窗口关闭时只释放所属窗口资源，托盘及进程事件循环继续运行。
 
-macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 托盘通过 purego 调用 GLib/GObject/GIO 的 GDBus，使用会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要系统提供 libglib-2.0.so.0、libgobject-2.0.so.0、libgio-2.0.so.0 和桌面 StatusNotifier 托盘宿主。纯托盘无需 GTK、WebKitGTK 或显示服务器；窗口和文件对话框仍需现有 GTK/WebKitGTK 运行环境。Chrome 的窗口右键菜单或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。
+macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 使用 StatusNotifierItem 与 DBusMenu，运行依赖见上文。Chrome 的窗口右键菜单或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。
+
+## 测试
+
+运行当前平台的全量测试：
+
+```bash
+go test ./...
+```
+
+Linux 的 GDBus 测试需要 GLib/GObject/GIO 和 `dbus-run-session`。以下命令创建隔离会话总线，由测试进程提供模拟 watcher，并在没有 DISPLAY/Wayland 的情况下验证注册、属性、菜单、信号、多托盘隔离与清理：
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY G_DEBUG=fatal-warnings \
+  dbus-run-session -- go test ./internal/linux
+```
+
+未设置 `DBUS_SESSION_BUS_ADDRESS` 时，会话总线集成测试会跳过。Race 检测需要 Go 支持的 C 编译器及启用 CGO；应用本身仍可使用 `CGO_ENABLED=0` 构建：
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY G_DEBUG=fatal-warnings CGO_ENABLED=1 \
+  dbus-run-session -- go test -race ./...
+```
+
+模拟 watcher 测试不验证真实桌面的图标显示、鼠标交互或文件对话框。这些交互需在有图形环境及托盘宿主的 Linux 桌面另行验证。
