@@ -82,14 +82,14 @@ func TestMenuValidationAndErrors(t *testing.T) {
 		if err := w.SetContextMenu(items); err == nil {
 			t.Fatalf("accepted %#v", items)
 		}
-		if err := w.SetSystray(SystrayOptions{Icon: menuTestIcon(t), Items: items}); err == nil {
+		if err := traySnapshotError(SystrayOptions{Icon: menuTestIcon(t), Items: items}); err == nil {
 			t.Fatalf("tray accepted %#v", items)
 		}
 	}
 	if err := w.RemoveContextMenuItemRole(MenuItemRoleNone); err == nil {
 		t.Fatal("invalid role accepted")
 	}
-	if err := w.SetSystray(SystrayOptions{Icon: []byte("bad PNG")}); err == nil {
+	if err := traySnapshotError(SystrayOptions{Icon: []byte("bad PNG")}); err == nil {
 		t.Fatal("invalid PNG accepted")
 	}
 	if err := w.SetContextMenu([]MenuItem{{ID: "a"}}); err != nil {
@@ -111,26 +111,31 @@ func TestMenuValidationAndErrors(t *testing.T) {
 	}
 }
 func TestSystraySnapshotsAndRemoval(t *testing.T) {
-	p := &menuPlatformStub{}
-	w := &W{p: p}
-	opts := SystrayOptions{Icon: menuTestIcon(t), Title: "Visible title", Tooltip: "Tray", Items: []MenuItem{{ID: "quit", Label: "Quit"}}}
-	if err := w.SetSystray(opts); err != nil {
+	opts := SystrayOptions{Icon: menuTestIcon(t), Title: "Visible title", Items: []MenuItem{{ID: "quit", Label: "Quit"}}}
+	snapshot, err := traySnapshot(opts)
+	if err != nil {
 		t.Fatal(err)
 	}
 	opts.Icon[0] = 0
 	opts.Items[0].Label = "changed"
-	if p.tray.Icon[0] != 137 || p.tray.Items[0].Label != "Quit" || p.tray.Title != "Visible title" {
+	if snapshot.Icon[0] != 137 || snapshot.Items[0].Label != "Quit" {
 		t.Fatal("tray config not copied")
 	}
-	for range 2 {
-		if err := w.RemoveSystray(); err != nil {
-			t.Fatal(err)
-		}
+	s := &Systray{opts: snapshot}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(snapshot); !errors.Is(err, ErrClosed) {
+		t.Fatal(err)
 	}
 }
+func traySnapshotError(opts SystrayOptions) error { _, err := traySnapshot(opts); return err }
 func TestChromeMenuExtensionsUnsupported(t *testing.T) {
 	w := &W{p: chrome.New(chrome.Options{})}
-	errorsToCheck := []error{w.SetSystray(SystrayOptions{}), w.RemoveSystray(), w.SetContextMenu(nil), w.AddContextMenuItem(MenuItem{ID: "x"}), w.RemoveContextMenuItem("x"), w.RemoveContextMenuItemRole(MenuItemRoleCopy)}
+	errorsToCheck := []error{w.SetContextMenu(nil), w.AddContextMenuItem(MenuItem{ID: "x"}), w.RemoveContextMenuItem("x"), w.RemoveContextMenuItemRole(MenuItemRoleCopy)}
 	for _, err := range errorsToCheck {
 		if !errors.Is(err, ErrMenuUnsupported) {
 			t.Fatalf("got %v", err)
@@ -199,23 +204,18 @@ func TestContextMenuAppendAndRemoveRoles(t *testing.T) {
 }
 
 func TestTitleOnlySystray(t *testing.T) {
-	p := &menuPlatformStub{}
-	w := &W{p: p}
-	err := w.SetSystray(SystrayOptions{Title: "Text only"})
+	err := traySnapshotError(SystrayOptions{Title: "Text only"})
 	if runtime.GOOS == "darwin" {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.tray.Title != "Text only" || len(p.tray.Icon) != 0 {
-			t.Fatal("title-only config not forwarded")
-		}
 	} else if !errors.Is(err, ErrMenuUnsupported) {
 		t.Fatalf("title-only error=%v", err)
 	}
-	if err := w.SetSystray(SystrayOptions{}); err == nil {
+	if err := traySnapshotError(SystrayOptions{}); err == nil {
 		t.Fatal("empty tray accepted")
 	}
-	if err := w.SetSystray(SystrayOptions{Title: "Title", Icon: []byte("invalid PNG")}); err == nil {
+	if err := traySnapshotError(SystrayOptions{Title: "Title", Icon: []byte("invalid PNG")}); err == nil {
 		t.Fatal("nonempty invalid icon accepted")
 	}
 }

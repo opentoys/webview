@@ -277,7 +277,7 @@ func (p *gtk) showOpenDialog(multiple bool) ([]string, bool) {
 	if multiple {
 		gtkFileChooserSetSelectMultiple(dlg, true)
 	}
-	addAcceptFilter(dlg)
+	p.addAcceptFilter(dlg)
 	var response int
 	if gtkNativeDialogRun != nil {
 		response = gtkNativeDialogRun(dlg)
@@ -357,11 +357,27 @@ func parseAccept(accept string) []string {
 // database which may be absent or incomplete on some Linux setups. We
 // convert MIME types to file-extension glob patterns instead, which are
 // always reliable.
+func (p *gtk) SetFileAccept(v string) {
+	p.fileAcceptMu.Lock()
+	p.fileAccept = v
+	p.fileAcceptMu.Unlock()
+}
+func (p *gtk) addAcceptFilter(dlg uintptr) {
+	p.fileAcceptMu.Lock()
+	accept := p.fileAccept
+	p.fileAccept = ""
+	p.fileAcceptMu.Unlock()
+	applyAcceptFilter(dlg, accept)
+}
+
 func addAcceptFilter(dlg uintptr) {
 	fileAcceptMu.Lock()
 	accept := fileAccept
 	fileAccept = ""
 	fileAcceptMu.Unlock()
+	applyAcceptFilter(dlg, accept)
+}
+func applyAcceptFilter(dlg uintptr, accept string) {
 	entries := parseAccept(accept)
 	if len(entries) == 0 {
 		return

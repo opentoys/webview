@@ -28,12 +28,14 @@ func (a *MenuActions) Replace(items []MenuItem) []MenuItem {
 			continue
 		}
 		result[i].Action = func() {
-			a.mu.Lock()
-			valid := !a.closed && a.generation == generation
-			a.mu.Unlock()
-			if valid {
-				go fn()
-			}
+			go func() {
+				a.mu.Lock()
+				valid := !a.closed && a.generation == generation
+				a.mu.Unlock()
+				if valid {
+					fn()
+				}
+			}()
 		}
 	}
 	return result

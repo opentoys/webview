@@ -19,6 +19,10 @@ func registerDelegateClasses() {
 	// windowShouldClose: returns whether the window should close when the user
 	// clicks the close button. The window is the sender (one argument).
 	windowShouldClose := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
+		if p := platformFor(sender); p != nil && p.closeRequest != nil {
+			p.closeRequest()
+			return false
+		}
 		return true
 	}
 	// windowWillClose: signals Close() semantics when the user closes the window
@@ -26,7 +30,7 @@ func registerDelegateClasses() {
 	// delivered there), so call signalExit, not Close() (which would deadlock on
 	// mainThread).
 	windowWillClose := func(id objc.ID, cmd objc.SEL, window objc.ID) {
-		if p := activePlatform; p != nil {
+		if p := platformFor(id); p != nil {
 			p.signalExit()
 		}
 	}
@@ -34,22 +38,22 @@ func registerDelegateClasses() {
 	// registered native handler consumes a file drop before WKWebView turns it
 	// into DOM dragover/drop events.
 	draggingEntered := func(id objc.ID, cmd objc.SEL, sender objc.ID) uintptr {
-		if p := activePlatform; p != nil && p.fileDropEnabled() {
+		if p := platformFor(id); p != nil && p.fileDropEnabled() {
 			return 1 // NSDragOperationCopy
 		}
 		return 0
 	}
 	prepareForDragOperation := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
-		return activePlatform != nil && activePlatform.fileDropEnabled()
+		return platformFor(id) != nil && platformFor(id).fileDropEnabled()
 	}
 	draggingUpdated := func(id objc.ID, cmd objc.SEL, sender objc.ID) uintptr {
-		if p := activePlatform; p != nil && p.fileDropEnabled() {
+		if p := platformFor(id); p != nil && p.fileDropEnabled() {
 			return 1 // NSDragOperationCopy
 		}
 		return 0
 	}
 	performDragOperation := func(id objc.ID, cmd objc.SEL, sender objc.ID) bool {
-		p := activePlatform
+		p := platformFor(id)
 		if p == nil || !p.fileDropEnabled() {
 			return false
 		}
@@ -80,6 +84,11 @@ func registerDelegateClasses() {
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("windowShouldClose:"), Fn: windowShouldClose},
 			{Cmd: objc.RegisterName("windowWillClose:"), Fn: windowWillClose},
+			{Cmd: objc.RegisterName("windowDidBecomeKey:"), Fn: func(id objc.ID, cmd objc.SEL, note objc.ID) {
+				if p := platformFor(id); p != nil {
+					p.applyMenus(p.pendingMenus)
+				}
+			}},
 			{Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"), Fn: terminateAfterLastWindowClosed},
 			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
 			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
@@ -129,7 +138,7 @@ func registerDelegateClasses() {
 				if superWillOpenMenu != nil {
 					superWillOpenMenu(id, cmd, menu, event)
 				}
-				if p := activePlatform; p != nil {
+				if p := platformFor(id); p != nil {
 					p.extendContextMenu(menu)
 				}
 			}},
@@ -147,9 +156,9 @@ func registerDelegateClasses() {
 	// userContentController:didReceiveScriptMessage: is called on the host thread
 	// when JS runs postMessage on this class's registered handler. ObjC method
 	// closures can't capture Go state, so route through the package-level
-	// activePlatform set in setup().
+	// platformFor(id) set in setup().
 	didReceiveMessage := func(id objc.ID, cmd objc.SEL, controller objc.ID, message objc.ID) {
-		p := activePlatform
+		p := platformFor(id)
 		if p == nil || p.MessageFunc == nil {
 			return
 		}
@@ -176,7 +185,7 @@ func registerDelegateClasses() {
 
 	// WKUIDelegate: handles JS alert/confirm/prompt. Runs on the WebKit
 	// delivery thread, which is the host thread (same assumption as
-	// MessageFunc/didReceiveScriptMessage). activePlatform is written once
+	// MessageFunc/didReceiveScriptMessage). platformFor(id) is written once
 	// in setup() on the host thread and read here on the host thread.
 	uiDelegateClass, err = objc.RegisterClass(
 		"GoWebviewUIDelegate",
@@ -260,7 +269,16 @@ func registerDelegateClasses() {
 		// registered class; WebKit retains via setDelegate:.
 		inst := objc.ID(downloadDelegateClass).Send(allocSel)
 		inst = inst.Send(initSel)
-		download.Send(setDelegateSel, inst)
+		if p := platformFor(webView); p != nil {
+			if p.downloadInstances == nil {
+				p.downloadInstances = make(map[objc.ID]objc.ID)
+			}
+			objectPlatforms[inst] = p
+			p.downloadInstances[download.Send(retainSel)] = inst
+			download.Send(setDelegateSel, inst)
+		} else {
+			inst.Send(releaseSel)
+		}
 	}
 
 	decideDestination := func(id objc.ID, cmd objc.SEL, download objc.ID, response objc.ID, suggestedFilename objc.ID, completion objc.ID) {
@@ -272,7 +290,7 @@ func registerDelegateClasses() {
 			return
 		}
 		defer safe.Release()
-		p := activePlatform
+		p := platformFor(id)
 		if p == nil {
 			invokeBlock(objc.ID(safe), objc.ID(0))
 			return
@@ -281,6 +299,7 @@ func registerDelegateClasses() {
 	}
 
 	downloadDidFinish := func(id objc.ID, cmd objc.SEL, download objc.ID) {
+		defer releaseDownloadDelegate(download, id)
 		dest, ok := pendingDownloads.LoadAndDelete(downloadKey(download))
 		if !ok {
 			return
@@ -299,6 +318,7 @@ func registerDelegateClasses() {
 	}
 
 	downloadDidFail := func(id objc.ID, cmd objc.SEL, download objc.ID, errObj objc.ID) {
+		defer releaseDownloadDelegate(download, id)
 		pendingDownloads.Delete(downloadKey(download))
 	}
 
@@ -327,7 +347,7 @@ func registerDelegateClasses() {
 	// A completion callback is intentionally limited to the phase: WKNavigation
 	// can expose full request URLs and those must not reach the debug log.
 	didFinishNavigation := func(id objc.ID, cmd objc.SEL, webView objc.ID, navigation objc.ID) {
-		if p := activePlatform; p != nil {
+		if p := platformFor(id); p != nil {
 			p.Logger.Log(BackendName, "navigate", map[string]string{"phase": "completed"})
 		}
 	}
@@ -338,7 +358,16 @@ func registerDelegateClasses() {
 	downloadDidBecomeFromResponse := func(id objc.ID, cmd objc.SEL, webView objc.ID, navigationResponse objc.ID, download objc.ID) {
 		inst := objc.ID(downloadDelegateClass).Send(allocSel)
 		inst = inst.Send(initSel)
-		download.Send(setDelegateSel, inst)
+		if p := platformFor(webView); p != nil {
+			if p.downloadInstances == nil {
+				p.downloadInstances = make(map[objc.ID]objc.ID)
+			}
+			objectPlatforms[inst] = p
+			p.downloadInstances[download.Send(retainSel)] = inst
+			download.Send(setDelegateSel, inst)
+		} else {
+			inst.Send(releaseSel)
+		}
 	}
 
 	downloadDelegateClass, err = objc.RegisterClass(
@@ -430,7 +459,11 @@ func registerDelegateClasses() {
 		if idx := strings.Index(urlGo, "://"); idx > 0 {
 			scheme = urlGo[:idx]
 		}
-		handler, ok := schemeHandlerInstances[scheme]
+		p := platformFor(webView)
+		if p == nil {
+			return
+		}
+		handler, ok := p.schemeHandlers[scheme]
 		if !ok {
 			return
 		}
@@ -523,7 +556,7 @@ func registerDelegateClasses() {
 					return // task was cancelled
 				}
 				activeSchemeTasks.delete(taskID)
-				respondToSchemeTask(t, *resp, nsURL)
+				respondToSchemeTask(t, *resp, t.Send(schemeRequestSel).Send(panelURLSel))
 			})
 		})
 	}
@@ -561,5 +594,16 @@ func registerDelegateClasses() {
 	if err != nil {
 		probeErr = fmt.Errorf("webview: register class: %w", err)
 		return
+	}
+}
+
+func releaseDownloadDelegate(download, delegate objc.ID) {
+	if p := platformFor(delegate); p != nil {
+		if owned := p.downloadInstances[download]; owned != 0 {
+			delete(p.downloadInstances, download)
+			delete(objectPlatforms, owned)
+			owned.Send(releaseSel)
+			download.Send(releaseSel)
+		}
 	}
 }

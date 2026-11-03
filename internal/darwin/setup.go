@@ -54,15 +54,11 @@ func (p *Platform) endOffscreenActivity() {
 // thread (called via mainThread from Run).
 func (p *Platform) setup() error {
 	p.beginOffscreenActivity()
-	// Route script messages of the (process-global) handler class to this
-	// platform. Called on the host thread; the didReceiveMessage handler
-	// closure reads activePlatform on the same thread, so no lock is needed.
-	activePlatform = p
-
 	// Delegate: one per Platform, kept alive as a field.
 	delegate := objc.ID(windowDelegateClass).Send(allocSel)
 	delegate = delegate.Send(initSel)
 	p.delegate = delegate
+	objectPlatforms[delegate] = p
 
 	w := objc.ID(nsWindowClass).Send(allocSel)
 	if w == 0 {
@@ -73,6 +69,8 @@ func (p *Platform) setup() error {
 		rect(0, 0, 800, 600), styleMask, backingBuffered, false)
 	p.mu.Lock()
 	p.window = w
+	objectPlatforms[w] = p
+	w.Send(objc.RegisterName("setReleasedWhenClosed:"), false)
 	p.mu.Unlock()
 	w.Send(setDelegateSel, delegate)
 
@@ -98,7 +96,9 @@ func (p *Platform) setup() error {
 	p.mu.Unlock()
 	handler := objc.ID(messageHandlerClass).Send(allocSel)
 	handler = handler.Send(initSel)
-	scriptHandler = handler
+	p.scriptHandler = handler
+	objectPlatforms[handler] = p
+	objectPlatforms[ucc] = p
 	ucc.Send(addScriptMessageHandlerSel, handler, nsString("webviewBridge"))
 
 	// Install the bridge and resource shim before application Init scripts.
@@ -117,11 +117,12 @@ func (p *Platform) setup() error {
 	// loaded from it report window.isSecureContext == true. Do not spoof
 	// that read-only browser value in injected JavaScript: doing so would not
 	// grant the secure-context-only web APIs.
-	for scheme, handler := range p.schemeHandlers {
-		schemeHandlerInstances[scheme] = handler
+	for scheme := range p.schemeHandlers {
 		inst := objc.ID(schemeHandlerClass).Send(allocSel)
 		inst = inst.Send(initSel)
+		objectPlatforms[inst] = p
 		config.Send(setURLSchemeHandlerForURLSchemeSel, inst, nsString(scheme))
+		inst.Send(releaseSel)
 	}
 
 	// Enable WebKit Inspector (right-click → Inspect Element) when Debug is set.
@@ -136,6 +137,7 @@ func (p *Platform) setup() error {
 		return errNoWebView
 	}
 	wv = wv.Send(initWithFrameSel, rect(0, 0, 800, 600), config)
+	config.Send(releaseSel)
 	// macOS 13.3+ disables inspection by default; explicitly enable it.
 	// https://webkit.org/blog/13936/enabling-the-inspection-of-web-content-in-apps/
 	if p.Debug {
@@ -143,6 +145,7 @@ func (p *Platform) setup() error {
 	}
 	p.mu.Lock()
 	p.webview = wv
+	objectPlatforms[wv] = p
 	p.mu.Unlock()
 	p.Logger.Log(BackendName, "ready", nil)
 
@@ -150,6 +153,7 @@ func (p *Platform) setup() error {
 	uiDelegate := objc.ID(uiDelegateClass).Send(allocSel)
 	uiDelegate = uiDelegate.Send(initSel)
 	p.uiDelegate = uiDelegate
+	objectPlatforms[uiDelegate] = p
 	wv.Send(setUIDelegateSel, uiDelegate)
 
 	// WKNavigationDelegate intercepts downloads; WKDownloadDelegate handles
@@ -157,6 +161,7 @@ func (p *Platform) setup() error {
 	dlDelegate := objc.ID(downloadDelegateClass).Send(allocSel)
 	dlDelegate = dlDelegate.Send(initSel)
 	p.downloadDelegate = dlDelegate
+	objectPlatforms[dlDelegate] = p
 	wv.Send(setNavigationDelegateSel, dlDelegate)
 
 	// Wrap the webview in a container NSView so the Web Inspector pane can be
@@ -169,6 +174,7 @@ func (p *Platform) setup() error {
 	}
 	widget = widget.Send(initWithFrameOnlySel, rect(0, 0, 800, 600))
 	p.dropView = widget
+	objectPlatforms[widget] = p
 	widget.Send(setAutoresizesSubviewsSel, true)
 	wv.Send(setAutoresizingMaskSel, webviewAutoresizingMask)
 	widget.Send(addSubviewSel, wv)
@@ -181,11 +187,13 @@ func (p *Platform) setup() error {
 		p.applyFileDropTarget(widget, true)
 	}
 	w.Send(centerSel)
-	w.Send(makeKeyAndOrderFrontSel, 0)
-	// Make webview first responder so it receives keyboard/mouse events.
-	w.Send(objc.RegisterName("makeFirstResponder:"), wv)
-	// Re-activate app to ensure window gets focus on modern macOS.
-	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(activateIgnoringOtherAppsSel, true)
+	if !p.initialHidden {
+		w.Send(makeKeyAndOrderFrontSel, 0)
+		// Make webview first responder so it receives keyboard/mouse events.
+		w.Send(objc.RegisterName("makeFirstResponder:"), wv)
+		// Re-activate app to ensure window gets focus on modern macOS.
+		objc.ID(nsAppClass).Send(sharedApplicationSel).Send(activateIgnoringOtherAppsSel, true)
+	}
 	// Apply the menu bar (SetMenus before Run() stores it in pendingMenus;
 	// buildPlatform wires DefaultMenus(w) through that same path so all
 	// platforms share one entry point).
@@ -211,7 +219,7 @@ func (p *Platform) setup() error {
 	p.pendingHTML = ""
 	p.mu.Unlock()
 	if html != "" {
-		html = prependBootstrap(html)
+		html = p.prependBootstrap(html)
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
 		wv.Send(loadHTMLStringSel, str, objc.ID(0))
 		p.Logger.Log(BackendName, "load_html", map[string]string{"bytes": strconv.Itoa(len(html)), "phase": "started"})

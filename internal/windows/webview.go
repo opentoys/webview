@@ -16,17 +16,28 @@ import (
 // --- COM callback implementations ---
 
 func (p *Platform) InvokeEnvCompleted(errorCode uintptr, env *iCoreWebView2Environment) uintptr {
+	if p.closed {
+		return 0
+	}
 	if errorCode != S_OK || env == nil {
+		p.initialized(fmt.Errorf("webview: environment initialization failed: 0x%X", errorCode))
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "webview_environment", "error": "initialization failed"})
 		return 0
 	}
+	env.vtbl.AddRef.Call(uintptr(unsafe.Pointer(env)))
 	p.env = env
-	env.CreateCoreWebView2Controller(p.hwndWidget, p.ctrlCompletedHandler)
+	if hr := env.CreateCoreWebView2Controller(p.hwndWidget, p.ctrlCompletedHandler); hr != S_OK {
+		p.initialized(fmt.Errorf("webview: create controller failed: 0x%X", hr))
+	}
 	return 0
 }
 
 func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCoreWebView2Controller) uintptr {
+	if p.closed {
+		return 0
+	}
 	if errorCode != S_OK || controller == nil {
+		p.initialized(fmt.Errorf("webview: controller initialization failed: 0x%X", errorCode))
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "webview_controller", "error": "initialization failed"})
 		return 0
 	}
@@ -35,7 +46,10 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 	controller.vtbl.AddRef.Call(uintptr(unsafe.Pointer(controller)))
 	p.controller = controller
 	controller.GetCoreWebView2(&p.webview)
-	p.webview.vtbl.AddRef.Call(uintptr(unsafe.Pointer(p.webview)))
+	if p.webview == nil {
+		p.initialized(fmt.Errorf("webview: controller returned no WebView"))
+		return 0
+	}
 
 	// Register PermissionRequested inside this callback (matches reference C++).
 	var permTok eventToken
@@ -51,15 +65,20 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 // initWebView finishes WebView2 setup after the controller-completed callback
 // has returned. It runs on the UI thread via the message loop.
 func (p *Platform) initWebView() {
+	if p.closed {
+		return
+	}
 	name := utf16PtrFromStr("TaskbarCreated")
 	p.taskbarCreated, _, _ = registerTrayMessage.Call(uintptr(unsafe.Pointer(name)))
 	if err := p.initializeExtendedMenus(); err != nil {
 		p.menuInitErr = err
+		p.initialized(err)
 		_ = p.Close()
 		return
 	}
 
 	if err := p.setDropTarget(p.filesDropped); err != nil {
+		p.initialized(err)
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "file_drop", "error": err.Error()})
 		_ = p.Close()
 		return
@@ -120,10 +139,12 @@ func (p *Platform) initWebView() {
 	pUpdateWindow.Call(p.hwndWidget)
 
 	// Show the main window and focus.
-	pShowWindow.Call(p.hwnd, SW_SHOW)
-	pUpdateWindow.Call(p.hwnd)
-	pSetForegroundWindow.Call(p.hwnd)
-	pSetFocus.Call(p.hwnd)
+	if !p.hidden {
+		pShowWindow.Call(p.hwnd, SW_SHOW)
+		pUpdateWindow.Call(p.hwnd)
+		pSetForegroundWindow.Call(p.hwnd)
+		pSetFocus.Call(p.hwnd)
+	}
 
 	if p.hasCustomMenus {
 		p.applyMenus(p.pendingMenus)
@@ -133,6 +154,7 @@ func (p *Platform) initWebView() {
 
 	// Mark ready so SetTitle/SetSize/SetHTML apply immediately.
 	p.ready.Store(1)
+	p.initialized(nil)
 	p.Logger.Log(BackendName, "ready", nil)
 
 	// Defer navigation to the next message-loop iteration.
@@ -240,4 +262,11 @@ func (p *Platform) InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess bo
 	js := bootstrapJS(names)
 	p.webview.ExecuteScript(js, 0)
 	return 0
+}
+
+func (p *Platform) initialized(err error) {
+	select {
+	case p.initDone <- err:
+	default:
+	}
 }

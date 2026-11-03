@@ -34,7 +34,7 @@ func main() {
 				}},
 				{Separator: true},
 				{Label: "Quit", Shortcut: webview.CmdOrCtrl + "+Q", Action: func() {
-					w.Close()
+					webview.Quit()
 				}},
 			},
 		},

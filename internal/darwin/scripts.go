@@ -23,7 +23,7 @@ func (p *Platform) SetHTML(html string) error {
 		return nil
 	}
 	p.mu.Unlock()
-	html = prependBootstrap(html)
+	html = p.prependBootstrap(html)
 	// Use loadHTMLString:baseURL: to avoid data: URL encoding issues.
 	mainThread(func() {
 		str := objc.ID(nsStringClass).Send(stringWithUTF8Sel, html)
@@ -56,24 +56,7 @@ func (p *Platform) evalOnHost(js string) {
 // non-blocking channel send + performSelectorOnMainThread:NO: if called from
 // the host thread, the ObjC selector fires after the current callback returns;
 // if from another thread, it fires on the next run loop iteration.
-func (p *Platform) EvalHost(js string) {
-	select {
-	case <-hostReady:
-	default:
-		return
-	}
-	select {
-	case commandChan <- func() { p.evalOnHost(js) }:
-		// Command queued; trigger the ObjC selector to read and execute it.
-		objc.ID(commandHandlerClass).Send(allocSel).Send(
-			performSelectorOnMainThreadWithObjectWaitUntilDoneSel,
-			objc.RegisterName("runCommand:"),
-			0, false)
-	default:
-		// Preserve UI-thread affinity even when many bridge replies are queued.
-		go mainThread(func() { p.evalOnHost(js) })
-	}
-}
+func (p *Platform) EvalHost(js string) { go mainThread(func() { p.evalOnHost(js) }) }
 
 func (p *Platform) Eval(js string) error {
 	p.mu.Lock()

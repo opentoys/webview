@@ -116,21 +116,11 @@ func indexHead(html string) int {
 	return -1
 }
 
-// boundFuncNames returns the JS-visible func names from the active platform's
-// BoundFuncs. Used by prependBootstrap; activePlatform is set in setup() before
-// any SetHTML path runs, so it is always current.
-func boundFuncNames() []string {
-	if p := activePlatform; p != nil && p.BoundFuncs != nil {
-		return p.BoundFuncs()
-	}
-	return nil
-}
-
 // injectBootstrapLocked adds a WKUserScript that runs the bridge bootstrap at
 // document start. This mirrors the Linux path where pushUserScript fires on
 // every navigation. Caller must hold p.mu.
 func (p *Platform) injectBootstrapLocked() {
-	src := bootstrapJS(boundFuncNames())
+	src := bootstrapJS(p.boundFuncNames())
 	if src == "" {
 		return
 	}
@@ -139,8 +129,8 @@ func (p *Platform) injectBootstrapLocked() {
 
 // prependBootstrap inserts the bridge bootstrap (webviewBridge + func stubs) as
 // an inline <script> so it is available before any user-supplied script runs.
-func prependBootstrap(html string) string {
-	if js := bootstrapJS(boundFuncNames()); js != "" {
+func (p *Platform) prependBootstrap(html string) string {
+	if js := bootstrapJS(p.boundFuncNames()); js != "" {
 		// HTML parsing closes <script> on </script>, </script>, or </SCRIPT>.
 		// Escape </ sequences so the script body is safe inside the tag.
 		js = strings.ReplaceAll(js, "</", `<\/`)

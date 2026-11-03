@@ -120,20 +120,23 @@ w, err := webview.New(webview.Options{
 
 | 方法 | 说明 |
 | --- | --- |
-| `Run() error` | 启动事件循环并阻塞，直到窗口关闭 |
-| `Close() error` | 关闭窗口 |
-| `SetTitle(title)` | 设置标题 |
-| `SetSize(width, height, hint)` | 设置窗口尺寸约束 |
+| `webview.Run() error` | 启动进程事件循环，直到显式调用 Quit；w.Run() 为兼容入口 |
+| `webview.Quit() error` | 清理所有窗口和托盘并停止事件循环，不调用 os.Exit |
+| `Show() error` / `Hidden() error` | 显示并激活 / 隐藏窗口，保留页面状态 |
+| `OnClose(func()) error` | 拦截原生关闭请求；nil 恢复销毁行为 |
+| `Close() error` | 销毁当前窗口及 WebView；已关闭后其他操作返回 ErrClosed |
+| `SetTitle(title) error` | 设置标题 |
+| `SetSize(width, height, hint) error` | 设置窗口尺寸约束 |
 | `Navigate(url) error` | 导航到 URL |
 | `SetHTML(html) error` | 加载 HTML 字符串 |
 | `Eval(js) error` | 在当前页面执行 JavaScript |
 | `Init(js) error` | 注册每次页面加载前执行的 JavaScript |
 | `Bind(name, fn) error` | 将 Go 函数暴露给 JavaScript |
-| `Unbind(name)` | 删除已绑定的函数 |
+| `Unbind(name) error` | 删除已绑定的函数 |
 | `ChooseFile(filters ...FileFilter) (string, error)` | 阻塞并使用系统原生对话框选择一个文件 |
 | `SaveFile(opts FileDialogOptions) (string, error)` | 使用系统原生“另存为”对话框返回目标路径 |
 | `ChooseDir() (string, error)` | 阻塞并使用系统原生对话框选择一个目录 |
-| `SetMenu(menus...)` | 替换原生菜单栏 |
+| `SetMenu(menus...) error` | 替换原生菜单栏 |
 | `MainThread(fn)` | 在 UI 线程执行函数并等待完成 |
 | `InterceptResource(scheme, handler)` | 注册自定义 URL Scheme 处理器；应在 `Run` 前调用 |
 
@@ -313,7 +316,7 @@ menus = append(menus, webview.Menu{
 		{
 			Label:    "Quit",
 			Shortcut: webview.CmdOrCtrl + "+Q",
-			Action:   func() { _ = w.Close() },
+			Action:   func() { _ = webview.Quit() },
 		},
 	},
 })
@@ -387,34 +390,47 @@ CGO_ENABLED=0 go run ./cmd/app
 
 ### 系统托盘与原生右键菜单
 
-完整示例：[`example/native-menus`](example/native-menus/main.go)，运行 `go run ./example/native-menus`。
+托盘无需 WebView，可创建多个。窗口、托盘和进程事件循环分别管理生命周期：关闭最后一个窗口或托盘仍会保持运行，只有 `webview.Quit()` 才清理全部对象并让 `Run()` 返回。`w.Run()` 是包级 `Run()` 的兼容入口。
 
 ```go
-if err := w.SetSystray(webview.SystrayOptions{
-    Icon: pngBytes, // PNG 图片数据
-    Title: "我的应用", // macOS 菜单栏可见文字；不支持的平台忽略
-    Tooltip: "悬停提示",
+w, err := webview.New(webview.Options{})
+if err != nil { panic(err) }
+if err := w.SetHTML(`<input value="隐藏后仍保留">`); err != nil { panic(err) }
+if err := w.OnClose(func() {
+    if err := w.Hidden(); err != nil { log.Print(err) }
+}); err != nil { panic(err) }
+tray, err := webview.NewSystray(webview.SystrayOptions{
+    Icon: pngBytes,
+    Title: "运行中",
+    Tooltip: "点击显示窗口",
+    OnClick: func() { if err := w.Show(); err != nil { log.Print(err) } },
     Items: []webview.MenuItem{
-        {ID: "quit", Label: "退出", Action: func() { w.Close() }},
+        {ID: "show", Label: "显示窗口", Action: func() {
+            if err := w.Show(); err != nil { log.Print(err) }
+        }},
+        {ID: "quit", Label: "退出", Action: func() {
+            if err := webview.Quit(); err != nil { log.Print(err) }
+        }},
     },
-}); err != nil {
-    panic(err)
-}
-// 再次 SetSystray 整体更新托盘；RemoveSystray() 移除托盘，可重复调用。
+})
+if err != nil { panic(err) }
+_ = tray // tray.Update(opts) 整体更新；tray.Close() 幂等移除。
+if err := webview.Run(); err != nil { panic(err) }
 ```
 
-`Title` 是托盘上直接显示的文字，macOS 显示在图标旁，Windows、Linux 忽略该字段。`Tooltip` 是鼠标悬停提示，两者独立设置。再次调用 SetSystray 可更新 Title，传入空字符串可清除文字；macOS 支持仅设置 Title、不传 Icon 的纯文字托盘；也可以在图标、纯文字、图标加文字之间切换。Windows、Linux 仍需有效 PNG 图标，纯文字配置返回 ErrMenuUnsupported。
+旧 `w.SetSystray` / `w.RemoveSystray` 已移除，迁移为 `NewSystray`、`tray.Update` 和 `tray.Close`。菜单中的“退出应用”应调用 `webview.Quit()`。`Title` 仅在 macOS 显示，可用纯文字代替 Icon；Windows、Linux 需要 PNG 图标。`Tooltip` 是独立的悬停提示。
 
-```go
-if err := w.SetSystray(webview.SystrayOptions{
-    Title: "运行中", // macOS 纯文字托盘
-    Items: []webview.MenuItem{
-        {ID: "quit", Label: "退出", Action: func() { w.Close() }},
-    },
-}); err != nil {
-    panic(err)
-}
-```
+`Show` 显示并激活窗口；`Hidden` 保留 DOM、输入、页面及 JS 状态，不重复执行 Init。隐藏不代表操作系统挂起，后台 JS 节流仍遵循引擎和 Offscreen 配置。`Close` 真正销毁当前窗口与 WebView，不能用 Show 重建，必须重新 New。关闭窗口不会影响其他窗口或托盘。
+
+`OnClose` 接管关闭按钮等原生请求，回调自行选择 Hidden、Close 或不处理。同一窗口回调运行时的重复请求会合并，传 nil 恢复默认销毁。主动 Close 和 Quit 绕过 OnClose。回调异步执行，Quit 不等待正在执行的用户回调；关闭对象会使其尚未执行的回调失效。
+
+Run 前创建的对象只保存配置，Hidden 可设置初始隐藏；运行中 New / NewSystray 会等待原生创建结果。可在 Run 前 Close 待创建对象。启动环境错误由 Run 返回并清理资源。并发 Run 返回 ErrAlreadyRunning；Quit 后禁止创建对象或再次运行，返回 ErrApplicationStopped。macOS 的 Run 应在 main 函数的主 goroutine 调用，以满足 AppKit 主线程要求。同一进程只能启动一次应用事件循环。无窗口和托盘时 Run 也会等待 Quit。
+
+Chrome 的 Close 只结束对应浏览器进程，Show / Hidden / OnClose 返回 ErrWindowUnsupported；独立原生托盘不受窗口后端选择影响。
+
+完整示例：[`example/systray`](example/systray/main.go) 演示关闭按钮隐藏、点击托盘恢复；[`example/tray-only`](example/tray-only/main.go) 演示纯托盘启动，以及窗口关闭后继续创建新窗口；[`example/native-menus`](example/native-menus/main.go) 演示托盘更新与右键菜单。
+
+OnClick 自定义左键行为，未设置时使用菜单；右键仍打开菜单。Linux 依赖宿主通过 StatusNotifierItem.Activate 通知点击：部分桌面始终显示菜单或忽略 Activate，具体行为取决于宿主。每个 Linux 托盘拥有独立的 D-Bus 连接，无需 GTK/WebView 窗口。
 
 #### 右键菜单接口
 
@@ -485,6 +501,6 @@ if err := w.AddContextMenuItem(webview.MenuItem{
 
 自定义项可通过 `Role: webview.MenuItemRoleCopy` 等标记编辑角色；RemoveContextMenuItemRole 会连同这些匹配的自定义项一起移除，未标记 Role 的自定义项继续保留。重复移除同一 role 无额外副作用，传入未知 role 返回错误。
 
-可在 Run 前配置，也可在运行时更新。回调异步执行，可调用菜单更新、Eval 和 Close；多个回调可能并发，应用共享状态应自行同步。菜单栏、托盘、右键菜单独立管理回调。窗口关闭时移除托盘并释放扩展菜单资源，关闭窗口仍会结束 Run。
+可在 Run 前配置，也可在运行时更新。回调异步执行，可调用菜单更新、Eval 和 Close；多个回调可能并发，应用共享状态应自行同步。菜单栏、托盘、右键菜单独立管理回调。窗口关闭时只释放所属窗口资源，托盘及进程事件循环继续运行。
 
-macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 使用 WebKitGTK 6.0、会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要桌面提供 StatusNotifier 托盘宿主。Chrome 或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。
+macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 使用 WebKitGTK 6.0、会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要桌面提供 StatusNotifier 托盘宿主。Chrome 的窗口右键菜单或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。

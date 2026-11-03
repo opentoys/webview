@@ -16,9 +16,11 @@ import (
 )
 
 var (
-	hostOnce   sync.Once
-	hostReady  = make(chan struct{}) // closed once the host loop is running
-	hostThread objc.ID
+	hostDone      = make(chan struct{})
+	hostOnce      sync.Once
+	hostReady     = make(chan struct{}) // closed once the host loop is running
+	hostThread    objc.ID
+	commandTarget objc.ID
 )
 
 // startAppHost launches the single AppKit host thread if not already running,
@@ -30,33 +32,63 @@ func startAppHost() {
 	<-hostReady
 }
 
-// hostLoop runs on one pinned OS thread for the life of the process: it owns
-// the NSApplication and pumps its event loop via [NSApp run], which processes
-// all events, timers, and the main dispatch queue. Cross-thread commands arrive
-// via performSelectorOnMainThread: (which [NSApp run] dispatches from the run
-// loop) and are read from the commandChan.
-func hostLoop() {
-	runtime.LockOSThread()
+// AppKit must be initialized and pumped on the process main thread. Locking
+// the importing goroutine here preserves that thread until application Run.
+func init() { runtime.LockOSThread() }
+
+func initializeHost() {
 	app := objc.ID(nsAppClass).Send(sharedApplicationSel)
 	hostThread = objc.ID(nsThreadClass).Send(currentThreadSel)
-	if app == 0 {
-		panic("darwin: no shared NSApplication")
-	}
 	app.Send(setActivationPolicySel, activationRegular)
 	app.Send(activateIgnoringOtherAppsSel, true)
-	// Complete app launch (menu/activation setup) as a nib-less program must.
 	app.Send(finishLaunchingSel)
+	commandTarget = objc.ID(commandHandlerClass).Send(allocSel).Send(initSel)
 	close(hostReady)
-	// Pump the run loop. [NSApp run] processes all events and dispatches
-	// performSelectorOnMainThread: calls (which read from commandChan and
-	// execute the queued Go functions).
-	app.Send(objc.RegisterName("run"))
+}
+func pumpHost() {
+	objc.ID(nsAppClass).Send(sharedApplicationSel).Send(objc.RegisterName("run"))
+	close(hostDone)
+}
+func hostLoop() {
+	runtime.LockOSThread()
+	initializeHost()
+	pumpHost()
+}
+
+// RunApplication runs AppKit on the calling (main) thread. The initializer
+// creates pending objects before events are delivered. Test hosts can also
+// use this to run their test driver on a worker while AppKit owns main.
+func RunApplication(start func() error) error {
+	probe()
+	if probeErr != nil {
+		_ = start()
+		return probeErr
+	}
+	ownsHost := false
+	hostOnce.Do(func() { ownsHost = true; initializeHost() })
+	if err := start(); err != nil {
+		if ownsHost {
+			close(hostDone)
+		}
+		return err
+	}
+	if ownsHost {
+		pumpHost()
+	} else {
+		<-hostDone
+	}
+	return nil
 }
 
 // mainThread runs fn on the AppKit host thread, blocking until it completes.
 // Before the host has started (no window exists yet) it is a no-op, which makes
 // SetTitle/SetHTML/Navigate/Eval safe to call before Run().
 func mainThread(fn func()) {
+	select {
+	case <-hostDone:
+		return
+	default:
+	}
 	select {
 	case <-hostReady:
 	default:
@@ -67,15 +99,27 @@ func mainThread(fn func()) {
 		return
 	}
 	done := make(chan struct{})
-	commandChan <- func() { fn(); close(done) }
-	objc.ID(commandHandlerClass).Send(allocSel).Send(
-		performSelectorOnMainThreadWithObjectWaitUntilDoneSel,
-		objc.RegisterName("runCommand:"),
-		0, false)
-	<-done
+	select {
+	case commandChan <- func() { fn(); close(done) }:
+	case <-hostDone:
+		return
+	}
+	commandTarget.Send(objc.RegisterName("performSelector:onThread:withObject:waitUntilDone:"), objc.RegisterName("runCommand:"), hostThread, objc.ID(0), false)
+	select {
+	case <-done:
+	case <-hostDone:
+	}
+
 }
 
 type Platform struct {
+	downloadInstances           map[objc.ID]objc.ID
+	acceptMu                    sync.Mutex
+	acceptVal                   string
+	initialHidden               bool
+	closeRequest                func()
+	scriptHandler               objc.ID
+	trayTarget                  objc.ID
 	trayOptions                 *types.SystrayOptions
 	contextOptions              types.ContextMenuConfig
 	trayActions, contextActions types.MenuActions
@@ -90,8 +134,7 @@ type Platform struct {
 	delegate         objc.ID
 	uiDelegate       objc.ID // WKUIDelegate instance; kept alive for the webview.
 	downloadDelegate objc.ID // WKNavigationDelegate+WKDownloadDelegate instance.
-	// ucc keeps the WKUserContentController alive; the handler instance lives
-	// in the package-level scriptHandler (registered class is process-global).
+	// ucc and scriptHandler are owned by this window.
 	ucc objc.ID
 
 	// MessageFunc is called with the string body of each JS postMessage to
@@ -300,19 +343,45 @@ func (p *Platform) Close() error {
 	close(p.runDone)
 	p.mu.Unlock()
 
-	// Hide the window so a closed platform doesn't linger on screen while the
-	// next window in the same process is running. Read window under lock; the
-	// command handler reads it again to guard against the window being
-	// destroyed between scheduling and execution.
 	mainThread(func() {
-		p.mu.Lock()
-		w := p.window
-		p.window = 0
-		p.webview = 0
-		p.mu.Unlock()
-		if w != 0 {
-			w.Send(orderOutSel, 0)
+		p.closeExtendedMenus()
+		for download, delegate := range p.downloadInstances {
+			download.Send(setDelegateSel, objc.ID(0))
+			pendingDownloads.Delete(downloadKey(download))
+			delete(objectPlatforms, delegate)
+			delegate.Send(releaseSel)
+			download.Send(releaseSel)
+			delete(p.downloadInstances, download)
 		}
+		p.endOffscreenActivity()
+		for id, owner := range objectPlatforms {
+			if owner == p {
+				delete(objectPlatforms, id)
+			}
+		}
+		p.mu.Lock()
+		window, view := p.window, p.webview
+		p.window, p.webview = 0, 0
+		p.mu.Unlock()
+		if view != 0 {
+			view.Send(setUIDelegateSel, objc.ID(0))
+			view.Send(setNavigationDelegateSel, objc.ID(0))
+			view.Send(objc.RegisterName("stopLoading"))
+		}
+		if p.ucc != 0 {
+			p.ucc.Send(objc.RegisterName("removeScriptMessageHandlerForName:"), nsString("webviewBridge"))
+		}
+		if window != 0 {
+			window.Send(setDelegateSel, objc.ID(0))
+			window.Send(objc.RegisterName("close"))
+			window.Send(releaseSel)
+		}
+		for _, id := range []objc.ID{view, p.dropView, p.delegate, p.uiDelegate, p.downloadDelegate, p.ucc, p.scriptHandler} {
+			if id != 0 {
+				id.Send(releaseSel)
+			}
+		}
+		p.dropView, p.delegate, p.uiDelegate, p.downloadDelegate, p.ucc, p.scriptHandler = 0, 0, 0, 0, 0, 0
 	})
 	return nil
 }
@@ -324,30 +393,5 @@ func (p *Platform) InterceptResource(scheme string, handler ResourceHandler) {
 	p.schemeHandlers[scheme] = handler
 }
 
-// signalExit makes Run() return without closing the window. Callable from the
-// host thread (windowWillClose:) or any other thread (Close()). Uses a non-
-// blocking channel send so it is safe on the host thread where Close()'s
-// mainThread orderOut would deadlock. Sets closed=true so a subsequent Close()
-// does not try to orderOut: a window that is already being destroyed.
-func (p *Platform) signalExit() {
-	p.Logger.Log(BackendName, "close_requested", nil)
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return
-	}
-	p.closed = true
-	p.window = 0
-	p.webview = 0
-	p.mu.Unlock()
-	// Do NOT call [NSApp stop:] here — it kills the host thread's run loop,
-	// which deadlocks any subsequent mainThread() call (process-global
-	// singleton). The run loop lives until the process exits; that's fine.
-	select {
-	case p.runDone <- struct{}{}:
-	default:
-	}
-}
-
-// applyMenus builds and installs a native NSMenu bar from the given Menu slice.
-// Runs on the host thread.
+// signalExit schedules disposal after a native close notification.
+func (p *Platform) signalExit() { go p.Close() }

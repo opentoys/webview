@@ -53,7 +53,7 @@ func TestDownloadPolicyConstants(t *testing.T) {
 	if inst == 0 {
 		t.Fatal("failed to alloc download delegate instance")
 	}
-	sel := objc.RegisterName("decidePolicyForNavigationResponse:decisionHandler:")
+	sel := objc.RegisterName("webView:decidePolicyForNavigationResponse:decisionHandler:")
 	if inst.Send(respondsToSelectorSel, sel) == 0 {
 		t.Fatal("download delegate does not respond to decidePolicyForNavigationResponse:decisionHandler:")
 	}

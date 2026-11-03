@@ -52,6 +52,7 @@ type Options struct {
 
 // Chrome is a CDP-backed webview platform.
 type Chrome struct {
+	ClosedFunc         func()
 	pendingInitScripts []string
 	initScriptsReady   bool
 	initialURL         string

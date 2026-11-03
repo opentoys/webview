@@ -1,11 +1,8 @@
 package webview
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"image/png"
-	"runtime"
 
 	"github.com/opentoys/webview/internal/types"
 )
@@ -16,8 +13,6 @@ type SystrayOptions = types.SystrayOptions
 var ErrMenuUnsupported = types.ErrMenuUnsupported
 
 type extendedMenus interface {
-	SetSystray(SystrayOptions) error
-	RemoveSystray() error
 	ApplyContextMenu(types.ContextMenuConfig) error
 }
 
@@ -35,48 +30,11 @@ func validateMenuItems(items []MenuItem) error {
 	return nil
 }
 
-// SetSystray creates or replaces the native tray icon and menu, before or during Run.
-func (w *W) SetSystray(opts SystrayOptions) error {
-	p, ok := w.p.(extendedMenus)
-	if !ok {
-		return ErrMenuUnsupported
-	}
-	if err := validateMenuItems(opts.Items); err != nil {
-		return err
-	}
-	if len(opts.Icon) == 0 {
-		if opts.Title == "" {
-			return errors.New("webview: systray requires an icon or title")
-		}
-		if runtime.GOOS != "darwin" {
-			return ErrMenuUnsupported
-		}
-	} else if _, err := png.Decode(bytes.NewReader(opts.Icon)); err != nil {
-		return fmt.Errorf("webview: systray PNG: %w", err)
-	}
-	opts.Icon = append([]byte(nil), opts.Icon...)
-	opts.Items = append([]MenuItem(nil), opts.Items...)
-	w.menuMu.Lock()
-	defer w.menuMu.Unlock()
-	if w.menuClosed {
-		return errors.New("webview: menu update after Close")
-	}
-	return p.SetSystray(opts)
-}
-
-// RemoveSystray removes the tray icon. Repeated calls are harmless.
-func (w *W) RemoveSystray() error {
-	p, ok := w.p.(extendedMenus)
-	if !ok {
-		return ErrMenuUnsupported
-	}
-	w.menuMu.Lock()
-	defer w.menuMu.Unlock()
-	return p.RemoveSystray()
-}
-
 // SetContextMenu replaces the entire native context menu. An empty slice disables it.
 func (w *W) SetContextMenu(items []MenuItem) error {
+	return w.windowCall(func() error { return w.setContextMenuPublic(items) })
+}
+func (w *W) setContextMenuPublic(items []MenuItem) error {
 	w.menuMu.Lock()
 	defer w.menuMu.Unlock()
 	return w.setContextMenu(types.ContextMenuConfig{ReplaceDefault: true, Items: items})
@@ -87,7 +45,7 @@ func (w *W) setContextMenu(opts types.ContextMenuConfig) error {
 		return ErrMenuUnsupported
 	}
 	if w.menuClosed {
-		return errors.New("webview: menu update after Close")
+		return ErrClosed
 	}
 	if err := validateMenuItems(opts.Items); err != nil {
 		return err
@@ -97,7 +55,7 @@ func (w *W) setContextMenu(opts types.ContextMenuConfig) error {
 			return fmt.Errorf("webview: unsupported default menu role %d", role)
 		}
 	}
-	opts.Items = append([]MenuItem(nil), opts.Items...)
+	opts.Items = w.menuCallbacks(opts.Items)
 	opts.RemoveDefault = append([]MenuItemRole(nil), opts.RemoveDefault...)
 	if err := p.ApplyContextMenu(opts); err != nil {
 		return err
@@ -109,6 +67,9 @@ func (w *W) setContextMenu(opts types.ContextMenuConfig) error {
 // AddContextMenuItem appends one uniquely identified custom item. Browser defaults
 // are preserved until SetContextMenu replaces the menu.
 func (w *W) AddContextMenuItem(item MenuItem) error {
+	return w.windowCall(func() error { return w.addContextMenuItemPublic(item) })
+}
+func (w *W) addContextMenuItemPublic(item MenuItem) error {
 	w.menuMu.Lock()
 	defer w.menuMu.Unlock()
 	opts := w.contextMenu
@@ -118,6 +79,9 @@ func (w *W) AddContextMenuItem(item MenuItem) error {
 
 // RemoveContextMenuItem removes an item by ID; a missing ID has no effect.
 func (w *W) RemoveContextMenuItem(id string) error {
+	return w.windowCall(func() error { return w.removeContextMenuItemPublic(id) })
+}
+func (w *W) removeContextMenuItemPublic(id string) error {
 	w.menuMu.Lock()
 	defer w.menuMu.Unlock()
 	if _, ok := w.p.(extendedMenus); !ok {
@@ -136,13 +100,16 @@ func (w *W) RemoveContextMenuItem(id string) error {
 // RemoveContextMenuItemRole hides default actions and removes custom items with
 // matching roles. Missing roles are ignored; None and unknown roles are invalid.
 func (w *W) RemoveContextMenuItemRole(roles ...MenuItemRole) error {
+	return w.windowCall(func() error { return w.removeContextMenuItemRolePublic(roles...) })
+}
+func (w *W) removeContextMenuItemRolePublic(roles ...MenuItemRole) error {
 	w.menuMu.Lock()
 	defer w.menuMu.Unlock()
 	if _, ok := w.p.(extendedMenus); !ok {
 		return ErrMenuUnsupported
 	}
 	if w.menuClosed {
-		return errors.New("webview: menu update after Close")
+		return ErrClosed
 	}
 	if len(roles) == 0 {
 		return nil

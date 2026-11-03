@@ -90,6 +90,13 @@ func (p *Platform) RemoveSystray() error {
 func (p *Platform) removeSystray() {
 	p.trayActions.Close()
 	if p.statusItem != 0 {
+		delete(trayButtons, p.statusItem.Send(objc.RegisterName("button")))
+	}
+	if p.trayTarget != 0 {
+		p.trayTarget.Send(releaseSel)
+		p.trayTarget = 0
+	}
+	if p.statusItem != 0 {
 		p.statusItem.Send(objc.RegisterName("setMenu:"), objc.ID(0))
 		objc.ID(objc.GetClass("NSStatusBar")).Send(objc.RegisterName("systemStatusBar")).Send(objc.RegisterName("removeStatusItem:"), p.statusItem)
 		p.statusItem.Send(releaseSel)
@@ -145,10 +152,10 @@ func (p *Platform) applySystray() error {
 	var menu nativeMenu
 	menu.menu = objc.ID(nsMenuClass).Send(allocSel).Send(initSel)
 	menu.append(menu.menu, p.trayActions.Replace(opts.Items))
-	p.statusItem.Send(objc.RegisterName("setMenu:"), menu.menu)
+	p.statusItem.Send(objc.RegisterName("setMenu:"), objc.ID(0))
 	p.trayNative.clear()
 	p.trayNative = menu
-	return nil
+	return configureTrayClick(p, button, opts)
 }
 func (p *Platform) ApplyContextMenu(opts types.ContextMenuConfig) error {
 	// willOpenMenu:withEvent: is the public NSView hook available since macOS 10.11.

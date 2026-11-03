@@ -120,19 +120,22 @@ Backend probing happens during `New`. Some native shared libraries are not loade
 
 | Method | Description |
 | --- | --- |
-| `Run() error` | Start the event loop and block until the window closes |
-| `Close() error` | Close the window |
-| `SetTitle(title)` | Set the window title |
-| `SetSize(width, height, hint)` | Set window size constraints |
+| `webview.Run() error` | Run until explicit Quit; w.Run() is a compatibility entry point |
+| `webview.Quit() error` | Destroy all windows and trays and stop the loop without os.Exit |
+| `Show() error` / `Hidden() error` | Show and activate / hide while preserving page state |
+| `OnClose(func()) error` | Intercept native close requests; nil restores destruction |
+| `Close() error` | Destroy this window and WebView; subsequent operations return ErrClosed |
+| `SetTitle(title) error` | Set the window title |
+| `SetSize(width, height, hint) error` | Set window size constraints |
 | `Navigate(url) error` | Navigate to a URL |
 | `SetHTML(html) error` | Load an HTML string |
 | `Eval(js) error` | Execute JavaScript in the current page |
 | `Init(js) error` | Register JavaScript to run before every page load |
 | `Bind(name, fn) error` | Expose a Go function to JavaScript |
-| `Unbind(name)` | Remove a binding |
+| `Unbind(name) error` | Remove a binding |
 | `ChooseFile() (string, error)` | Block in a native dialog and select one file |
 | `ChooseDir() (string, error)` | Block in a native dialog and select one directory |
-| `SetMenu(menus...)` | Replace the native menu bar |
+| `SetMenu(menus...) error` | Replace the native menu bar |
 | `MainThread(fn)` | Run a function on the UI thread and wait for it |
 | `InterceptResource(scheme, handler)` | Register a custom URL scheme handler; call before `Run` |
 
@@ -250,7 +253,7 @@ menus = append(menus, webview.Menu{
 		{
 			Label:    "Quit",
 			Shortcut: webview.CmdOrCtrl + "+Q",
-			Action:   func() { _ = w.Close() },
+			Action:   func() { _ = webview.Quit() },
 		},
 	},
 })
@@ -337,14 +340,46 @@ Eval runs once in the current document. Call it after the window is running and 
 
 ### Native tray and context menus
 
-Run [`example/native-menus`](example/native-menus/main.go) with `go run ./example/native-menus`.
+Windows, trays, and the process loop have independent lifetimes. `webview.Run()` (also available as `w.Run()`) waits for `webview.Quit()`, even with no windows or trays. Closing the last object never quits the application.
 
-`SetSystray(SystrayOptions{Icon: pngBytes, Title: "App", Tooltip: "App tooltip", Items: items})` creates or replaces a tray icon. `RemoveSystray()` is idempotent. `Title` displays text beside the icon on macOS and is ignored on Windows and Linux. `Tooltip` is the separate hover hint. Call SetSystray again to update the title, or pass an empty Title to clear it; macOS supports title-only trays without Icon and switching between icon-only, title-only and combined display. Windows and Linux still require a PNG icon and return ErrMenuUnsupported for title-only configurations.
+```go
+w, err := webview.New(webview.Options{})
+if err != nil { panic(err) }
+if err := w.OnClose(func() {
+    if err := w.Hidden(); err != nil { log.Print(err) }
+}); err != nil { panic(err) }
+tray, err := webview.NewSystray(webview.SystrayOptions{
+    Icon: pngBytes, Title: "Running", Tooltip: "Click to restore",
+    OnClick: func() { if err := w.Show(); err != nil { log.Print(err) } },
+    Items: []webview.MenuItem{
+        {ID: "quit", Label: "Quit", Action: func() {
+            if err := webview.Quit(); err != nil { log.Print(err) }
+        }},
+    },
+})
+if err != nil { panic(err) }
+_ = tray // tray.Update(opts) replaces configuration; tray.Close() is idempotent.
+if err := webview.Run(); err != nil { panic(err) }
+```
+
+Replace the removed `w.SetSystray` and `w.RemoveSystray` with `NewSystray`, `tray.Update`, and `tray.Close`. Application-exit actions must call `webview.Quit()`. Multiple independent trays need no WebView. Title is visible on macOS, which supports title-only trays; Windows and Linux require a PNG icon. Tooltip controls the hover hint independently.
+
+Show displays and activates the window. Hidden retains DOM, inputs, and JS state without rerunning Init; background timer throttling still follows the engine and Offscreen configuration. Close destroys this window and its WebView; Show cannot recreate it, so call New again. Other windows and trays remain alive.
+
+OnClose intercepts native close requests. Its asynchronous callback may hide, destroy, or leave the window open; repeated requests coalesce while it runs. Passing nil restores default destruction. Explicit Close and Quit bypass OnClose. Quit invalidates queued callbacks and does not wait for active user callbacks.
+
+Objects created before Run retain their configuration; Hidden sets initial visibility, and Close cancels pending creation. Objects created during Run wait for native creation. Startup environment errors are returned by Run after cleanup. Concurrent Run returns ErrAlreadyRunning; after Quit, creation and Run return ErrApplicationStopped. On macOS call Run from the main goroutine in main so AppKit owns the process main thread. The process loop cannot restart. Quit is idempotent and never calls os.Exit.
+
+Chrome Close terminates only its own browser child process; Show, Hidden, and OnClose return ErrWindowUnsupported. Native trays are independent of the selected WebView backend.
+
+Run [`example/systray`](example/systray/main.go) for hide/restore, [`example/tray-only`](example/tray-only/main.go) for tray-only startup and creating new windows after closing previous ones, and [`example/native-menus`](example/native-menus/main.go) for tray updates and context menus.
+
+OnClick customizes the primary click; without it, clicking opens the menu. Right-click still opens the menu. Linux dispatches primary clicks through StatusNotifierItem.Activate; some desktop hosts always show the menu or ignore Activate. Each tray has its own D-Bus connection and does not require a GTK/WebView window.
 
 `SetContextMenu([]MenuItem)` completely replaces the browser's default context menu and previous custom entries. Passing nil or an empty slice disables the context menu; it does not restore defaults. Each Set also clears previous role-removal configuration. `AddContextMenuItem(item)` appends an entry: before any Set it preserves browser defaults; after Set it appends to the replacement menu. `RemoveContextMenuItem(id)` removes a custom entry by ID; an unknown ID is harmless. Custom entries, including separators, require unique nonempty IDs. Leading, trailing and repeated separators are cleaned up.
 
 `RemoveContextMenuItemRole(MenuItemRoleCopy, MenuItemRoleCut)` hides these default actions and removes custom entries whose Role matches. Supported roles are MenuItemRoleUndo, MenuItemRoleRedo, MenuItemRoleCut, MenuItemRoleCopy, MenuItemRolePaste and MenuItemRoleSelectAll. None and unknown roles return an error; absent actions are ignored. To keep browser defaults while extending the menu, call Add and RemoveContextMenuItemRole without calling SetContextMenu first.
 
-Configure before Run or update at runtime. Callbacks run asynchronously and may update menus, call Eval or Close; synchronize shared state when callbacks overlap. The menu bar, tray and context menu own callbacks independently. Closing the window removes the tray and ends Run.
+Configure before Run or update at runtime. Callbacks run asynchronously and may update menus, call Eval or Close; synchronize shared state when callbacks overlap. The menu bar, tray and context menu own callbacks independently. Closing a window leaves independent trays and the application loop running.
 
-Native backends use NSStatusItem on macOS, notification icons and WebView2 ContextMenuRequested on Windows (including Explorer restart recovery), and StatusNotifierItem/DBusMenu on Linux. Linux requires WebKitGTK 6.0, a session D-Bus and a StatusNotifier host. Chrome and unavailable native capabilities return ErrMenuUnsupported (check with errors.Is). Initialization failures discovered after pre-Run configuration are returned by Run.
+Native backends use NSStatusItem on macOS, notification icons and WebView2 ContextMenuRequested on Windows (including Explorer restart recovery), and StatusNotifierItem/DBusMenu on Linux. Linux requires WebKitGTK 6.0, a session D-Bus and a StatusNotifier host. Chrome window context menus and unavailable native capabilities return ErrMenuUnsupported (check with errors.Is). Initialization failures discovered after pre-Run configuration are returned by Run.

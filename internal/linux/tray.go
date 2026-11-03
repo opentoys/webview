@@ -40,6 +40,7 @@ type trayEvent struct {
 }
 
 type linuxTray struct {
+	onClick  func()
 	mu       sync.Mutex
 	conn     *dbus.Conn
 	props    *prop.Properties
@@ -49,8 +50,16 @@ type linuxTray struct {
 	ids      []int32
 }
 
-func (t *linuxTray) ContextMenu(x, y int32) *dbus.Error                 { return nil }
-func (t *linuxTray) Activate(x, y int32) *dbus.Error                    { return nil }
+func (t *linuxTray) ContextMenu(x, y int32) *dbus.Error { return nil }
+func (t *linuxTray) Activate(x, y int32) *dbus.Error {
+	t.mu.Lock()
+	fn := t.onClick
+	t.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	return nil
+}
 func (t *linuxTray) SecondaryActivate(x, y int32) *dbus.Error           { return nil }
 func (t *linuxTray) Scroll(delta int32, orientation string) *dbus.Error { return nil }
 func (t *linuxTray) GetLayout(parent, depth int32, names []string) (uint32, trayLayout, *dbus.Error) {
@@ -193,6 +202,7 @@ func (t *linuxTray) update(opts types.SystrayOptions) error {
 	pixmaps := []trayPixmap{{int32(bounds.Dx()), int32(bounds.Dy()), pixels}}
 	t.mu.Lock()
 	t.items = opts.Items
+	t.onClick = opts.OnClick
 	t.ids = nil
 	for range t.items {
 		t.nextID++
@@ -201,6 +211,7 @@ func (t *linuxTray) update(opts types.SystrayOptions) error {
 	t.revision++
 	revision := t.revision
 	t.mu.Unlock()
+	t.props.SetMust(trayInterface, "ItemIsMenu", opts.OnClick == nil)
 	t.props.SetMust(trayInterface, "Title", opts.Tooltip)
 	t.props.SetMust(trayInterface, "IconPixmap", pixmaps)
 	t.props.SetMust(trayInterface, "ToolTip", struct {

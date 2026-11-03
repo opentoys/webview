@@ -19,12 +19,12 @@ func buildPlatform(opts Options, w *W, logger *debuglog.Logger) (Platform, error
 	p.Offscreen = opts.Offscreen
 	p.BoundFuncs = w.bridge.funcNames
 	p.MessageFunc = func(body string) {
-		w.bridge.HandleMessage(body, p.EvalHost)
+		w.dispatchMessage(body, p.EvalHost)
 	}
 	// Capture <input accept> on click so the native file picker can read it
 	// synchronously before showing the dialog.
 	w.bridge.Bind("__accept__", func(v string) {
-		linux.SetFileAccept(v)
+		p.SetFileAccept(v)
 	})
 	p.Init(`document.addEventListener('click', function(e) {
 		var el = e.target;

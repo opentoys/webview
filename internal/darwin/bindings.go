@@ -105,14 +105,6 @@ var menuHandlerClass objc.Class
 // thread (via performSelectorOnMainThread:YES).
 var commandChan = make(chan func(), 64)
 
-// scriptHandler keeps the active message handler instance alive. addScriptMessageHandler:
-// does not retain its handler, so it must outlive the UCC or messages stop.
-var scriptHandler objc.ID
-
-// schemeHandlerInstances maps scheme name → Go handler. Written once per
-// scheme in setup(), read from ObjC callbacks on the host thread.
-var schemeHandlerInstances = map[string]ResourceHandler{}
-
 var menuCallbackMu sync.Mutex
 var menuCallbacks = map[uintptr]func(){}
 
@@ -311,12 +303,6 @@ var (
 	removeAllUserScriptsSel                               objc.SEL // [ucc removeAllUserScripts]
 	initWithSourceInjectionTimeForMainFrameOnlySel        objc.SEL // [WKUserScript initWithSource:injectionTime:forMainFrameOnly:]
 )
-
-// activePlatform is the Platform whose webview is currently set up. Process-
-// global because handler methods are registered per-class, not per-instance.
-// Written once in setup() on the host thread; read from the host thread the
-// same way, so no lock is needed.
-var activePlatform *Platform
 
 // probeOnce / probeErr: lazy framework loading. Converted from init() so that
 // Probe() can return an error instead of panicking, allowing New() to fall back

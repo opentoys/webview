@@ -179,9 +179,7 @@ func TestContextMenuHookOnWebViewSubclass(t *testing.T) {
 		t.Fatal(err)
 	}
 	mainThread(func() {
-		previous := activePlatform
-		activePlatform = p
-		defer func() { p.closeExtendedMenus(); activePlatform = previous }()
+		defer p.closeExtendedMenus()
 		subclass := objc.GetClass("GoWebviewContextMenuHookTestSubclass")
 		if subclass == 0 {
 			var err error
@@ -194,6 +192,8 @@ func TestContextMenuHookOnWebViewSubclass(t *testing.T) {
 		config := objc.ID(wkWebViewConfigClass).Send(allocSel).Send(initSel)
 		defer config.Send(releaseSel)
 		view := objc.ID(subclass).Send(allocSel).Send(initWithFrameSel, rect(0, 0, 100, 100), config)
+		objectPlatforms[view] = p
+		defer delete(objectPlatforms, view)
 		if view == 0 {
 			t.Error("could not create test WKWebView subclass")
 			return

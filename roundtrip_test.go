@@ -48,6 +48,9 @@ func TestRoundtripDarwin(t *testing.T) {
 		t.Fatal("roundtrip timeout: bound func never returned")
 	}
 	w.Close()
+	if err := Quit(); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-runErr; err != nil {
 		t.Fatal(err)
 	}

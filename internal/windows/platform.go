@@ -39,6 +39,9 @@ type FileFilter = types.FileFilter
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
+	closeRequest                func()
+	hidden                      bool
+	initDone                    chan error
 	trayOptions                 *types.SystrayOptions
 	trayIcon                    uintptr
 	trayAdded                   bool
@@ -132,14 +135,15 @@ const (
 
 // New creates a Platform instance.
 func New() (*Platform, error) {
-	_, err := loadWebView2Loader()
+
 	return &Platform{
 		runDone:        make(chan struct{}),
+		initDone:       make(chan error, 1),
 		pendingURL:     "about:blank",
 		schemeHandlers: make(map[string]ResourceHandler),
 		menuCallbacks:  make(map[uintptr]func()),
 		nextMenuCmdID:  cmdCustomBase,
-	}, err
+	}, nil
 }
 
 // SetMenus replaces the native menu bar. Call before Run().
@@ -151,61 +155,14 @@ func (p *Platform) SetMenus(menus []Menu) {
 // MainThread runs f on the Win32 UI thread, blocking until it completes.
 // Reentrant: if already on the UI thread (e.g. a menu Action or bound func),
 // f runs directly to avoid deadlocking the message loop.
-func (p *Platform) MainThread(f func()) {
-	if uiTID, _, _ := pGetWindowThreadProcessId.Call(p.hwnd, 0); uiTID != 0 {
-		if curTID, _, _ := pGetCurrentThreadId.Call(); curTID == uiTID {
-			f()
-			return
-		}
-	}
-	done := make(chan struct{})
-	p.dispatch.push(func() {
-		f()
-		close(done)
-	})
-	pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
-	select {
-	case <-done:
-	case <-p.runDone:
-	}
-}
-
-// Run blocks until the window is closed.
-func (p *Platform) Run() error {
-	p.Logger.Log(BackendName, "run_start", nil)
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	if err := p.setup(); err != nil {
-		p.Logger.Log(BackendName, "error", map[string]string{"operation": "setup", "error": debuglog.Error(err)})
-		return err
-	}
-
-	// Message loop.
-	var msg MSG
-	for {
-		r, _, _ := pGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
-		if r == 0 { // WM_QUIT
-			break
-		}
-		if msg.Message == WM_APP {
-			if fn := p.dispatch.pop(); fn != nil {
-				fn()
-			}
-			continue
-		}
-		pTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
-		pDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
-	}
-	return p.menuInitErr
-}
+func (p *Platform) MainThread(f func()) { applicationThread(f) }
+func (p *Platform) Run() error          { return p.Start() }
 
 // setup creates the Win32 window and initializes WebView2.
 // --- Platform interface methods ---
 
 // Close destroys the window, causing Run() to return.
 func (p *Platform) Close() error {
-	p.Logger.Log(BackendName, "close_requested", nil)
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -213,7 +170,17 @@ func (p *Platform) Close() error {
 	}
 	p.closed = true
 	p.mu.Unlock()
-	pPostMessageW.Call(p.hwnd, WM_CLOSE, 0, 0)
+	select {
+	case <-applicationReady:
+		if applicationErr == nil {
+			applicationThread(func() {
+				if p.hwnd != 0 {
+					pDestroyWindow.Call(p.hwnd)
+				}
+			})
+		}
+	default:
+	}
 	return nil
 }
 

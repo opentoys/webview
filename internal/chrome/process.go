@@ -37,7 +37,7 @@ var defaultChromeArgs = []string{
 
 // New creates a Chrome backend. Chrome is launched lazily in Run.
 // Run launches Chrome and blocks until the window is closed.
-func (c *Chrome) Run() error {
+func (c *Chrome) Start() error {
 	c.Logger.Log(BackendName, "run_start", nil)
 	if err := c.start(); err != nil {
 		c.Logger.Log(BackendName, "error", map[string]string{"operation": "start", "error": debuglog.Error(err)})
@@ -107,9 +107,14 @@ func (c *Chrome) Run() error {
 	}
 	c.Logger.Log(BackendName, "ready", nil)
 
-	err := c.cmd.Wait()
-	c.Logger.Log(BackendName, "closed", nil)
-	return err
+	go func() {
+		_ = c.cmd.Wait()
+		if c.ClosedFunc != nil {
+			c.ClosedFunc()
+		}
+		c.Logger.Log(BackendName, "closed", nil)
+	}()
+	return nil
 }
 
 func (c *Chrome) start() error {
@@ -235,3 +240,5 @@ func (c *Chrome) Close() error {
 	}
 	return nil
 }
+
+func (c *Chrome) Run() error { return c.Start() }

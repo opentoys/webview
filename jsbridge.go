@@ -9,8 +9,9 @@ import (
 )
 
 type bridge struct {
-	mu    sync.Mutex
-	funcs map[string]any
+	closed bool
+	mu     sync.Mutex
+	funcs  map[string]any
 }
 
 func newBridge() *bridge {
@@ -60,6 +61,10 @@ func (b *bridge) HandleMessage(msg string, emit func(string)) {
 		return
 	}
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
 	fn, ok := b.funcs[in.Name]
 	b.mu.Unlock()
 	if !ok {
@@ -137,4 +142,23 @@ func callFunc(fn any, raw json.RawMessage) (result any, err error) {
 	default:
 		return nil, fmt.Errorf("webview: too many return values")
 	}
+}
+func (b *bridge) Close() { b.mu.Lock(); b.closed = true; clear(b.funcs); b.mu.Unlock() }
+
+// Keep the internal file-input capture ordered with native chooser requests;
+// application bindings always run outside native callback stacks.
+func (w *W) dispatchMessage(body string, emit func(string)) {
+	var message struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal([]byte(body), &message)
+	if message.Name == "__accept__" {
+		w.bridge.HandleMessage(body, emit)
+		return
+	}
+	go func() {
+		if !app.quitting.Load() {
+			w.bridge.HandleMessage(body, emit)
+		}
+	}()
 }

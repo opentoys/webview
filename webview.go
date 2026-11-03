@@ -116,9 +116,13 @@ type Options struct {
 // W is the top-level webview handle. Darwin includes handler fields for
 // dialog, file-panel, and download overrides.
 type W struct {
-	menuMu      sync.Mutex
-	contextMenu types.ContextMenuConfig
-	menuClosed  bool
+	lifeMu                                sync.Mutex
+	closed, started, hidden, closePending bool
+	onClose                               func()
+	closeDone                             chan struct{}
+	menuMu                                sync.Mutex
+	contextMenu                           types.ContextMenuConfig
+	menuClosed                            bool
 
 	p      Platform
 	bridge *bridge
@@ -128,6 +132,7 @@ type W struct {
 	dropClosed bool
 	dropQueue  []dropEvent
 	dropWake   chan struct{}
+	dropDone   chan struct{}
 	dropOnce   sync.Once
 }
 
@@ -137,6 +142,11 @@ type dropEvent struct {
 }
 
 func New(opts Options) (*W, error) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if app.stopped {
+		return nil, ErrApplicationStopped
+	}
 	w := &W{bridge: newBridge()}
 	debugWriter := io.Discard
 	if opts.Debug {
@@ -168,10 +178,23 @@ func New(opts Options) (*W, error) {
 		return nil, err
 	}
 
+	if w.p == nil {
+		return nil, errors.New("webview: unknown backend")
+	}
+
 	// Install the platform's default menu bar (Edit on macOS/Linux; none on
 	// others). Apps override via SetMenu. DefaultMenus is the single source of
 	// truth, defined per platform.
 	w.SetMenu(DefaultMenus(w)...)
+	if app.running {
+		if err := w.start(); err != nil {
+			_ = w.Close()
+			return nil, err
+		}
+	}
+	app.registryMu.Lock()
+	app.windows[w] = struct{}{}
+	app.registryMu.Unlock()
 	return w, nil
 }
 
@@ -192,47 +215,77 @@ func buildChrome(opts Options, w *W, logger *debuglog.Logger) (Platform, error) 
 	p.Logger = logger
 	p.BoundFuncs = w.bridge.funcNames
 	p.MessageFunc = func(body string) {
-		w.bridge.HandleMessage(body, p.EvalHost)
+		w.dispatchMessage(body, p.EvalHost)
 	}
+	p.ClosedFunc = func() { _ = w.Close() }
 	return p, nil
 }
 
-func (w *W) Run() error { return w.p.Run() }
+func (w *W) Run() error { return Run() }
 func (w *W) Close() error {
+	w.lifeMu.Lock()
+	if w.closed {
+		done := w.closeDone
+		w.lifeMu.Unlock()
+		if done != nil {
+			<-done
+		}
+		return nil
+	}
+	w.closeDone = make(chan struct{})
+	defer close(w.closeDone)
+	w.closed = true
+	if w.bridge != nil {
+		w.bridge.Close()
+	}
+	defer func() { app.registryMu.Lock(); delete(app.windows, w); app.registryMu.Unlock() }()
 	w.dropMu.Lock()
 	w.dropClosed = true
+	w.dropQueue = nil
+	if w.dropDone != nil {
+		close(w.dropDone)
+	}
 	w.dropFn = nil
 	w.dropMu.Unlock()
 	w.menuMu.Lock()
 	w.menuClosed = true
 	w.menuMu.Unlock()
+	w.lifeMu.Unlock()
 	return w.p.Close()
 }
-func (w *W) SetTitle(title string) { w.p.SetTitle(title) }
-func (w *W) SetSize(width, height int, hint types.SizeHint) {
-	w.p.SetSize(width, height, hint)
+func (w *W) SetTitle(title string) error {
+	return w.windowCall(func() error { return w.p.SetTitle(title) })
 }
-func (w *W) Navigate(url string) error { return w.p.Navigate(url) }
-func (w *W) SetHTML(html string) error { return w.p.SetHTML(html) }
+func (w *W) SetSize(width, height int, hint types.SizeHint) error {
+	return w.windowCall(func() error { w.p.SetSize(width, height, hint); return nil })
+}
+func (w *W) Navigate(url string) error {
+	return w.windowCall(func() error { return w.p.Navigate(url) })
+}
+func (w *W) SetHTML(html string) error {
+	return w.windowCall(func() error { return w.p.SetHTML(html) })
+}
 
 // Eval submits JavaScript to the current document. Call after Run starts and
 // the target page is ready; SetHTML and Navigate load asynchronously.
-func (w *W) Eval(js string) error { return w.p.Eval(js) }
+func (w *W) Eval(js string) error { return w.windowCall(func() error { return w.p.Eval(js) }) }
 
 // Init registers JavaScript for the start of future documents. It is safe before
 // Run and does not immediately execute in an already-loaded document.
-func (w *W) Init(js string) error { return w.p.Init(js) }
+func (w *W) Init(js string) error { return w.windowCall(func() error { return w.p.Init(js) }) }
 
 // ChooseFile blocks in a native chooser and returns one absolute file path.
 func (w *W) ChooseFile(filters ...FileFilter) (string, error) {
-	path, err := w.p.ChooseFile(filters...)
+	var path string
+	err := w.windowCall(func() error { var err error; path, err = w.p.ChooseFile(filters...); return err })
 	return cleanDialogPath(path), err
 }
 
 // SaveFile shows a native Save As dialog and returns the selected path. It
 // does not create or write the file.
 func (w *W) SaveFile(opts FileDialogOptions) (string, error) {
-	path, err := w.p.SaveFile(opts)
+	var path string
+	err := w.windowCall(func() error { var err error; path, err = w.p.SaveFile(opts); return err })
 	return cleanDialogPath(path), err
 }
 
@@ -248,32 +301,86 @@ func cleanDialogPath(path string) string {
 }
 
 // ChooseDir blocks in a native chooser and returns one absolute directory path.
-func (w *W) ChooseDir() (string, error) { return w.p.ChooseDir() }
+func (w *W) ChooseDir() (string, error) {
+	var path string
+	err := w.windowCall(func() error { var err error; path, err = w.p.ChooseDir(); return err })
+	return path, err
+}
 
 func (w *W) Bind(name string, fn any) error {
-	return w.bridge.Bind(name, fn)
+	return w.windowCall(func() error { return w.bridge.Bind(name, fn) })
 }
 
-func (w *W) Unbind(name string) {
-	w.bridge.Unbind(name)
+func (w *W) Unbind(name string) error {
+	return w.windowCall(func() error { w.bridge.Unbind(name); return nil })
 }
 
-func (w *W) InterceptResource(scheme string, handler ResourceHandler) {
-	w.p.InterceptResource(scheme, handler)
+func (w *W) InterceptResource(scheme string, handler ResourceHandler) error {
+	return w.windowCall(func() error {
+		if handler != nil {
+			fn := handler
+			handler = func(req ResourceRequest, respond func(*ResourceResponse)) {
+				go func() {
+					w.lifeMu.Lock()
+					valid := !w.closed && !app.quitting.Load()
+					w.lifeMu.Unlock()
+					if !valid {
+						respond(nil)
+						return
+					}
+					defer func() {
+						if recover() != nil {
+							respond(nil)
+						}
+					}()
+					fn(req, respond)
+				}()
+			}
+		}
+		w.p.InterceptResource(scheme, handler)
+		return nil
+	})
 }
 
 // SetMenu replaces the native menu bar. Each Menu becomes a top-level menu.
 // Call before Run() for the initial bar, or after for live updates (not
 // supported on all platforms — Linux requires re-layout).
-func (w *W) SetMenu(menus ...Menu) {
-	w.p.SetMenus(menus)
+func (w *W) SetMenu(menus ...Menu) error {
+	return w.windowCall(func() error {
+		snapshot := append([]Menu(nil), menus...)
+		for i := range snapshot {
+			snapshot[i].Items = w.menuCallbacks(snapshot[i].Items)
+		}
+		w.p.SetMenus(snapshot)
+		return nil
+	})
 }
 
 // MainThread runs f on the platform's UI thread, blocking until it completes.
 // Use this when calling platform APIs that must be invoked from the main thread
 // (e.g., native dialogs, window manipulation).
-func (w *W) MainThread(f func()) {
-	w.p.MainThread(f)
+func (w *W) MainThread(f func()) error {
+	w.lifeMu.Lock()
+	closed, started := w.closed, w.started
+	w.lifeMu.Unlock()
+	if closed {
+		return ErrClosed
+	}
+	if !started {
+		return errors.New("webview: MainThread requires a running window")
+	}
+	var err error
+	w.p.MainThread(func() {
+		w.lifeMu.Lock()
+		closed := w.closed
+		w.lifeMu.Unlock()
+		if closed {
+			err = ErrClosed
+			return
+		}
+		f()
+	})
+	return err
 }
 
 // OnFilesDropped receives local files and directories dropped on the native
@@ -282,10 +389,13 @@ func (w *W) MainThread(f func()) {
 // platform UI thread. Passing nil removes the handler and restores the
 // browser's normal drag-and-drop behaviour.
 func (w *W) OnFilesDropped(fn func(paths []string)) error {
+	return w.windowCall(func() error { return w.onFilesDropped(fn) })
+}
+func (w *W) onFilesDropped(fn func([]string)) error {
 	w.dropMu.Lock()
 	defer w.dropMu.Unlock()
 	if w.dropClosed {
-		return errors.New("webview: cannot register file drop handler after Close")
+		return ErrClosed
 	}
 	if err := w.p.SetFilesDropped(w.captureFilesDropped(fn)); err != nil {
 		if errors.Is(err, chrome.ErrDropUnsupported) {
@@ -328,6 +438,7 @@ func (w *W) filesDropped(paths []string) {
 	e := dropEvent{fn: w.dropFn, paths: clean}
 	w.dropOnce.Do(func() {
 		w.dropWake = make(chan struct{}, 1)
+		w.dropDone = make(chan struct{})
 		go w.runDropQueue()
 	})
 	w.dropQueue = append(w.dropQueue, e)
@@ -342,7 +453,12 @@ func (w *W) filesDropped(paths []string) {
 }
 
 func (w *W) runDropQueue() {
-	for range w.dropWake {
+	for {
+		select {
+		case <-w.dropDone:
+			return
+		case <-w.dropWake:
+		}
 		for {
 			w.dropMu.Lock()
 			if len(w.dropQueue) == 0 {
@@ -352,11 +468,28 @@ func (w *W) runDropQueue() {
 			e := w.dropQueue[0]
 			w.dropQueue[0] = dropEvent{}
 			w.dropQueue = w.dropQueue[1:]
-			closed := w.dropClosed
+			closed := w.dropClosed || app.quitting.Load()
 			w.dropMu.Unlock()
 			if !closed {
 				e.fn(append([]string(nil), e.paths...))
 			}
 		}
 	}
+}
+
+func (w *W) menuCallbacks(items []MenuItem) []MenuItem {
+	result := append([]MenuItem(nil), items...)
+	for i := range result {
+		if fn := result[i].Action; fn != nil {
+			result[i].Action = func() {
+				w.menuMu.Lock()
+				valid := !w.menuClosed && !app.quitting.Load()
+				w.menuMu.Unlock()
+				if valid {
+					fn()
+				}
+			}
+		}
+	}
+	return result
 }

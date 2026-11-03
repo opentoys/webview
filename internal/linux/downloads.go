@@ -74,12 +74,13 @@ func downloadDecideDestFn() uintptr {
 }
 
 var (
-	downloadDecidePolicy uintptr
-	downloadDecideDest   uintptr
-	downloadStartedVar   uintptr
-	downloadFinishedVar  uintptr
-	downloadFailedVar    uintptr
-	dialogResponse       uintptr
+	webkitDownloadGetWebView func(uintptr) uintptr
+	downloadDecidePolicy     uintptr
+	downloadDecideDest       uintptr
+	downloadStartedVar       uintptr
+	downloadFinishedVar      uintptr
+	downloadFailedVar        uintptr
+	dialogResponse           uintptr
 )
 
 func downloadFinishedFn() uintptr {
@@ -119,7 +120,10 @@ func downloadStartedFn() uintptr {
 			fmt.Fprintf(os.Stderr, "webview: download-started nil download, skip\n")
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "webview: download-started download=%x\n", download)
+		p := lookupPlatform(userData)
+		if p == nil || webkitDownloadGetWebView(download) != p.webview {
+			return 0
+		}
 		gObjectRef(download)
 		gSignalConnectData(download, "decide-destination", downloadDecideDestFn(), userData, 0, 0)
 		gSignalConnectData(download, "finished", downloadFinishedFn(), download, 0, 0)
@@ -130,6 +134,7 @@ func downloadStartedFn() uintptr {
 }
 
 func connectDownloadCallbacks() {
+	purego.RegisterLibFunc(&webkitDownloadGetWebView, libWebKit, "webkit_download_get_web_view")
 	// Build callbacks eagerly so the decide-policy / download-started hooks can
 	// reference them.
 	downloadDecidePolicyFn()

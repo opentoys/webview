@@ -22,7 +22,7 @@ func buildPlatform(opts Options, w *W, logger *debuglog.Logger) (Platform, error
 	p.Logger = logger
 	p.BoundFuncs = w.bridge.funcNames
 	p.MessageFunc = func(body string) {
-		w.bridge.HandleMessage(body, p.EvalHost)
+		w.dispatchMessage(body, p.EvalHost)
 	}
 	return p, nil
 }

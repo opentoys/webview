@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"unsafe"
 )
 
@@ -21,32 +20,16 @@ func (p *Platform) setup() error {
 		pSetThreadExecutionState.Call(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
 		p.offscreenActive = true
 	}
-	// COM initialization (STA).
-	r, _, err := pCoInitializeEx.Call(0, COINIT_APARTMENTTHREADED)
-	if r != S_OK && r != 1 { // S_FALSE = already initialized
-		return fmt.Errorf("webview: CoInitializeEx failed: %w", err)
-	}
-
 	// Load WebView2Loader.
 	createEnv, err := loadWebView2Loader()
 	if err != nil {
-		pCoUninitialize.Call()
 		return err
 	}
 	p.createEnv = createEnv
 
 	// Register window class.
 	hInst, _, _ := pGetModuleHandleW.Call(0)
-	className := utf16PtrFromStr("GoWebviewWindow")
-	p.wndProc = syscall.NewCallback(p.wndproc)
-
-	wc := WNDCLASSEXW{
-		CbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
-		LpfnWndProc:   p.wndProc,
-		HInstance:     hInst,
-		LpszClassName: className,
-	}
-	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	className := registerNativeClass()
 
 	// Determine initial window size (use pending size if SetSize was called before Run).
 	initW, initH := 800, 600
@@ -65,6 +48,10 @@ func (p *Platform) setup() error {
 		0, 0, hInst, 0,
 	)
 	runtime.KeepAlive(title)
+	if p.hwnd == 0 {
+		return fmt.Errorf("webview: failed to create native window")
+	}
+	nativeWindowOwners[p.hwnd] = p
 
 	// Create child widget to host WebView2 controller.
 	p.hwndWidget, _, _ = pCreateWindowExW.Call(
@@ -76,6 +63,10 @@ func (p *Platform) setup() error {
 		p.hwnd, 0, hInst, 0,
 	)
 	runtime.KeepAlive(className)
+	if p.hwndWidget == 0 {
+		return fmt.Errorf("webview: failed to create WebView host")
+	}
+	nativeWindowOwners[p.hwndWidget] = p
 
 	// Don't show the window yet — wait until WebView2 is initialized
 	// and content is loaded (in InvokeControllerCompleted).
@@ -106,10 +97,9 @@ func (p *Platform) setup() error {
 	pDataDir := utf16PtrFromStr(dataDir)
 	pDataDirUPtr := uintptr(unsafe.Pointer(pDataDir))
 
-	r = p.createEnv(0, pDataDirUPtr, 0, p.envCompletedHandler)
+	r := p.createEnv(0, pDataDirUPtr, 0, p.envCompletedHandler)
 	runtime.KeepAlive(pDataDir)
 	if r != S_OK {
-		pCoUninitialize.Call()
 		return fmt.Errorf("webview: CreateEnvironmentWithOptions failed: 0x%X", r)
 	}
 
@@ -196,6 +186,10 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case WM_CLOSE:
+		if hwnd == p.hwnd && p.closeRequest != nil {
+			p.closeRequest()
+			return 0
+		}
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case WM_DESTROY:
@@ -206,14 +200,31 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			p.mu.Unlock()
 			p.removeSystray()
 			p.closeContextMenu()
+			if p.webview4 != nil {
+				p.webview4.vtbl.Release.Call(uintptr(unsafe.Pointer(p.webview4)))
+				p.webview4 = nil
+			}
 
 			if p.offscreenActive {
 				pSetThreadExecutionState.Call(ES_CONTINUOUS)
 				p.offscreenActive = false
 			}
 			p.Logger.Log(BackendName, "closed", nil)
-			pPostQuitMessage.Call(0)
-			pCoUninitialize.Call()
+			if p.controller != nil {
+				p.controller.Close()
+				p.controller.vtbl.Release.Call(uintptr(unsafe.Pointer(p.controller)))
+				p.controller = nil
+			}
+			if p.webview != nil {
+				p.webview.vtbl.Release.Call(uintptr(unsafe.Pointer(p.webview)))
+				p.webview = nil
+			}
+			if p.env != nil {
+				p.env.vtbl.Release.Call(uintptr(unsafe.Pointer(p.env)))
+				p.env = nil
+			}
+			p.hwnd = 0
+
 			close(p.runDone)
 		}
 		return 0

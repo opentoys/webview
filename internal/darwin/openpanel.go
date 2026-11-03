@@ -78,7 +78,7 @@ func invokeBlock(block objc.ID, arg objc.ID) {
 // runOpenPanel is the WKUIDelegate runOpenPanelWithParameters:initiatedByFrame:
 // completionHandler: implementation.
 func runOpenPanel(id objc.ID, cmd objc.SEL, webView objc.ID, paramsObj objc.ID, frame objc.ID, completion objc.ID) {
-	p := activePlatform
+	p := platformFor(webView)
 	if p == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func (p *Platform) showOpenPanel(wv objc.ID, params OpenPanelParams, completion 
 
 	// Read <input accept> stored by the __accept__ bridge callback and
 	// apply content-type filter BEFORE showing the panel.
-	readAcceptAndFilter(panel)
+	p.readAcceptAndFilter(panel)
 
 	// NSModalResponseOK = 1.
 	result := panel.Send(runModalSel)
@@ -164,6 +164,19 @@ func readAcceptAndFilter(panel objc.ID) {
 	types := buildUTTypes(parseAccept(accept))
 	if types != 0 {
 		panel.Send(setAllowedContentTypesSel, types)
+	}
+}
+
+func (p *Platform) SetAccept(v string) { p.acceptMu.Lock(); p.acceptVal = v; p.acceptMu.Unlock() }
+func (p *Platform) readAcceptAndFilter(panel objc.ID) {
+	p.acceptMu.Lock()
+	accept := p.acceptVal
+	p.acceptVal = ""
+	p.acceptMu.Unlock()
+	if panel.Send(respondsToSelectorSel, setAllowedContentTypesSel) != 0 {
+		if values := buildUTTypes(parseAccept(accept)); values != 0 {
+			panel.Send(setAllowedContentTypesSel, values)
+		}
 	}
 }
 

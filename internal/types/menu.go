@@ -34,6 +34,7 @@ type MenuItem struct {
 
 // SystrayOptions configures a native notification-area icon and its menu.
 type SystrayOptions struct {
+	OnClick func() // Optional asynchronous primary-click action.
 	Title   string // Visible tray text on macOS; ignored on unsupported platforms.
 	Icon    []byte // PNG image; optional on macOS when Title is nonempty.
 	Tooltip string

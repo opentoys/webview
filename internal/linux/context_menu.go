@@ -63,8 +63,10 @@ func bindContextMenus() error {
 	return contextBindingError
 }
 func (p *gtk) ApplyContextMenu(opts types.ContextMenuConfig) error {
-	if err := bindContextMenus(); err != nil {
-		return err
+	if p.uiTID.Load() != 0 {
+		if err := bindContextMenus(); err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

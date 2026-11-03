@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"log"
+	"sync"
 	"sync/atomic"
 
 	"github.com/opentoys/webview"
@@ -34,14 +35,34 @@ func main() {
 		log.Fatal(err)
 	}
 	var count atomic.Int64
+	var trayMu sync.Mutex
+	var nativeTray *webview.Systray
+	removeTray := func() error {
+		trayMu.Lock()
+		defer trayMu.Unlock()
+		if nativeTray == nil {
+			return nil
+		}
+		err := nativeTray.Close()
+		nativeTray = nil
+		return err
+	}
 	var tray func() error
 	tray = func() error {
-		return w.SetSystray(webview.SystrayOptions{Icon: pngData.Bytes(), Title: fmt.Sprintf("WebView %d", count.Load()), Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()), Items: []webview.MenuItem{
+		trayMu.Lock()
+		defer trayMu.Unlock()
+		opts := webview.SystrayOptions{Icon: pngData.Bytes(), Title: fmt.Sprintf("WebView %d", count.Load()), Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()), Items: []webview.MenuItem{
 			{ID: "update", Label: "Update tray", Action: func() { count.Add(1); report(tray()) }},
-			{ID: "remove", Label: "Remove tray", Action: func() { report(w.RemoveSystray()) }},
+			{ID: "remove", Label: "Remove tray", Action: func() { report(removeTray()) }},
 			{ID: "separator", Separator: true},
-			{ID: "quit", Label: "Quit", Action: func() { report(w.Close()) }},
-		}})
+			{ID: "quit", Label: "Quit", Action: func() { report(webview.Quit()) }},
+		}}
+		if nativeTray == nil {
+			var err error
+			nativeTray, err = webview.NewSystray(opts)
+			return err
+		}
+		return nativeTray.Update(opts)
 	}
 	report(tray())
 	for _, item := range []webview.MenuItem{
@@ -52,7 +73,7 @@ func main() {
 	}
 	report(w.RemoveContextMenuItemRole(webview.MenuItemRoleCopy))
 	report(w.Bind("restoreTray", tray))
-	report(w.Bind("removeTray", w.RemoveSystray))
+	report(w.Bind("removeTray", removeTray))
 	report(w.Bind("addItem", func() error {
 		return w.AddContextMenuItem(webview.MenuItem{ID: "added", Label: "Added at runtime", Action: func() { report(w.Eval(`alert('Added item clicked')`)) }})
 	}))

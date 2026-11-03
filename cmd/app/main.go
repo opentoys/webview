@@ -79,7 +79,7 @@ func main() {
 	w.SetSize(cfg.Width, cfg.Height, webview.SizeNone)
 
 	w.Bind("app.version", func() string { return cfg.Version })
-	w.Bind("app.close", func() { w.Close() })
+	w.Bind("app.close", func() { webview.Quit() })
 	w.Bind("app.debug", func(msg string) { fmt.Println("[app]", msg) })
 
 	w.InterceptResource(cfg.Scheme, serveFS(efs, cfg.Dist))

@@ -88,15 +88,6 @@ func respondToSchemeTask(task objc.ID, resp ResourceResponse, reqURL objc.ID) {
 		resp.StatusCode = 200
 	}
 
-	// Inject bootstrap JS into HTML responses so Bind works on custom schemes.
-	ct := resp.Headers.Get("Content-Type")
-	if ct == "" {
-		ct = resp.Headers.Get("content-type")
-	}
-	if strings.HasPrefix(ct, "text/html") || (ct == "" && len(resp.Body) > 0 && looksLikeHTML(resp.Body)) {
-		resp.Body = []byte(prependBootstrap(string(resp.Body)))
-	}
-
 	// Build header NSDictionary.
 	var hdrDict objc.ID
 	if len(resp.Headers) > 0 {
