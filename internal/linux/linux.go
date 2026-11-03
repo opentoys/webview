@@ -57,6 +57,16 @@ type Gtk interface {
 // gtk is the shared Linux GTK/WebKitGTK backend. The GTK4 adapters supply the
 // version-specific hooks through the function fields below.
 type gtk struct {
+	uiDone                      chan struct{}
+	contextSignalID             uint64
+	extensionMu                 sync.Mutex
+	trayOptions                 *types.SystrayOptions
+	tray                        *linuxTray
+	trayActions, contextActions types.MenuActions
+	contextOptions              types.ContextMenuConfig
+	contextCallbackIDs          []uintptr
+	extensionsClosed            bool
+
 	id      uintptr
 	window  uintptr
 	webview uintptr
@@ -115,6 +125,7 @@ type gtk struct {
 // in Run once the libraries are loaded.
 func New() (*gtk, error) {
 	return &gtk{
+		uiDone:         make(chan struct{}),
 		schemeHandlers: make(map[string]ResourceHandler),
 	}, ensureInit()
 }
@@ -142,6 +153,8 @@ func newgtk4(p *gtk) error {
 // called or the window is destroyed.
 func (p *gtk) Run() error {
 	p.Logger.Log(BackendName, "run_start", nil)
+	defer close(p.uiDone)
+	defer p.closeExtendedMenus()
 
 	uiThreadOnce.Do(runtime.LockOSThread)
 	p.uiTID.Store(int64(syscall.Gettid()))
@@ -163,6 +176,17 @@ func (p *gtk) Run() error {
 		return err
 	}
 	p.windowSettings()
+	if err := bindContextMenus(); err == nil {
+		p.contextSignalID = gSignalConnectData(p.webview, "context-menu", contextSignal, p.id, 0, 0)
+	}
+	p.extensionMu.Lock()
+	trayErr := p.applySystray()
+	p.extensionMu.Unlock()
+	if trayErr != nil {
+		p.destroy()
+		return trayErr
+	}
+
 	// The default Edit menu is installed by buildPlatform via SetMenus; custom
 	// apps append/replace through SetMenu before Run.
 	if p.hasCustomMenus {
@@ -201,7 +225,10 @@ func (p *gtk) MainThread(f func()) {
 		f()
 		close(done)
 	})
-	<-done
+	select {
+	case <-done:
+	case <-p.uiDone:
+	}
 }
 
 // Close destroys the window and signals the main loop to stop.
@@ -285,6 +312,7 @@ func (p *gtk) windowSettings() {
 }
 
 func (p *gtk) onWindowDestroy() {
+	p.closeExtendedMenus()
 	p.Logger.Log(BackendName, "closed", nil)
 	unregisterPlatform(p.id)
 	p.window = 0
@@ -406,6 +434,17 @@ func (p *gtk) SetHTML(html string) error {
 
 // Eval evaluates JavaScript in the webview.
 func (p *gtk) Eval(js string) error {
+	p.mu.Lock()
+	closed := p.extensionsClosed
+	p.mu.Unlock()
+	if closed {
+		return nil
+	}
+	if p.uiTID.Load() != 0 && p.uiTID.Load() != int64(syscall.Gettid()) {
+		var err error
+		p.MainThread(func() { err = p.Eval(js) })
+		return err
+	}
 	if p.webview == 0 {
 		return nil
 	}

@@ -37,6 +37,20 @@ type FileFilter = types.FileFilter
 
 // Platform implements the webview Platform interface for Windows/WebView2.
 type Platform struct {
+	trayOptions                 *types.SystrayOptions
+	trayIcon                    uintptr
+	trayAdded                   bool
+	trayItems                   []types.MenuItem
+	trayActions, contextActions types.MenuActions
+	taskbarCreated              uintptr
+	contextOptions              types.ContextMenuConfig
+	contextConfigured           bool
+	contextView, contextEnv     uintptr
+	contextToken                eventToken
+	contextHandler              *nativeMenuEvent
+	contextItems                []nativeContextItem
+	menuInitErr                 error
+
 	// COM state (set during async init, read after ready==1).
 	env        *iCoreWebView2Environment
 	controller *iCoreWebView2Controller
@@ -148,7 +162,10 @@ func (p *Platform) MainThread(f func()) {
 		close(done)
 	})
 	pPostMessageW.Call(p.hwnd, WM_APP, 0, 0)
-	<-done
+	select {
+	case <-done:
+	case <-p.runDone:
+	}
 }
 
 // Run blocks until the window is closed.
@@ -178,7 +195,7 @@ func (p *Platform) Run() error {
 		pTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		pDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
-	return nil
+	return p.menuInitErr
 }
 
 // setup creates the Win32 window and initializes WebView2.
@@ -278,7 +295,14 @@ func (p *Platform) Eval(js string) error {
 	if p.ready.Load() == 0 {
 		return nil
 	}
-	p.webview.ExecuteScript(js, 0)
+	p.MainThread(func() {
+		p.mu.Lock()
+		closed := p.closed
+		p.mu.Unlock()
+		if !closed {
+			p.webview.ExecuteScript(js, 0)
+		}
+	})
 	return nil
 }
 

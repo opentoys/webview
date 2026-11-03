@@ -51,6 +51,14 @@ func (p *Platform) InvokeControllerCompleted(errorCode uintptr, controller *iCor
 // initWebView finishes WebView2 setup after the controller-completed callback
 // has returned. It runs on the UI thread via the message loop.
 func (p *Platform) initWebView() {
+	name := utf16PtrFromStr("TaskbarCreated")
+	p.taskbarCreated, _, _ = registerTrayMessage.Call(uintptr(unsafe.Pointer(name)))
+	if err := p.initializeExtendedMenus(); err != nil {
+		p.menuInitErr = err
+		_ = p.Close()
+		return
+	}
+
 	if err := p.setDropTarget(p.filesDropped); err != nil {
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "file_drop", "error": err.Error()})
 		_ = p.Close()

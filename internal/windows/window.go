@@ -141,7 +141,18 @@ func (p *Platform) resizeWidget() {
 
 // wndproc handles Win32 messages.
 func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	if p.taskbarCreated != 0 && msg == p.taskbarCreated && hwnd == p.hwnd {
+		p.trayAdded = false
+		_ = p.applySystray()
+		return 0
+	}
 	switch msg {
+	case trayMessage:
+		if lParam == 0x205 || lParam == 0x203 {
+			p.showTrayMenu()
+		}
+		return 0
+
 	case WM_SIZE:
 		p.resizeWidget()
 		if wParam == SIZE_MINIMIZED && p.Offscreen && p.controller != nil {
@@ -159,7 +170,7 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		cmdID := wParam & 0xFFFF
 		// Custom menu callbacks.
 		if cb, ok := p.menuCallbacks[cmdID]; ok {
-			cb()
+			go cb()
 			return 0
 		}
 		// Built-in Edit menu.
@@ -190,6 +201,12 @@ func (p *Platform) wndproc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case WM_DESTROY:
 		// Only clean up for the main window, not the widget child window.
 		if hwnd == p.hwnd {
+			p.mu.Lock()
+			p.closed = true
+			p.mu.Unlock()
+			p.removeSystray()
+			p.closeContextMenu()
+
 			if p.offscreenActive {
 				pSetThreadExecutionState.Call(ES_CONTINUOUS)
 				p.offscreenActive = false

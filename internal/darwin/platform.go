@@ -75,6 +75,13 @@ func mainThread(fn func()) {
 }
 
 type Platform struct {
+	trayOptions                 *types.SystrayOptions
+	contextOptions              types.ContextMenuConfig
+	trayActions, contextActions types.MenuActions
+	trayNative, contextNative   nativeMenu
+	statusItem                  objc.ID
+	barTags                     []uintptr
+
 	window           objc.ID
 	webview          objc.ID
 	dropView         objc.ID // NSView subclass that receives native file drops.
@@ -159,10 +166,17 @@ func New() (*Platform, error) {
 
 // SetMenus replaces the native menu bar. Safe to call before or after Run().
 func (p *Platform) SetMenus(menus []Menu) {
-	p.pendingMenus = menus
-	// If the host thread is already running, apply immediately.
-	if p.window != 0 {
-		mainThread(func() { p.applyMenus(menus) })
+	snapshot := make([]Menu, len(menus))
+	for i, menu := range menus {
+		snapshot[i] = menu
+		snapshot[i].Items = append([]MenuItem(nil), menu.Items...)
+	}
+	p.mu.Lock()
+	p.pendingMenus = snapshot
+	ready := p.window != 0 && !p.closed
+	p.mu.Unlock()
+	if ready {
+		mainThread(func() { p.applyMenus(snapshot) })
 	}
 }
 
@@ -263,11 +277,13 @@ func (p *Platform) Run() error {
 	var setupErr error
 	mainThread(func() { setupErr = p.setup() })
 	if setupErr != nil {
+		_ = p.Close()
+		mainThread(func() { p.closeExtendedMenus(); p.endOffscreenActivity() })
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "setup", "error": debuglog.Error(setupErr)})
 		return setupErr
 	}
 	<-p.runDone
-	mainThread(p.endOffscreenActivity)
+	mainThread(func() { p.closeExtendedMenus(); p.endOffscreenActivity() })
 	p.Logger.Log(BackendName, "closed", nil)
 	return nil
 }

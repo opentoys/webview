@@ -328,3 +328,17 @@ CGO_ENABLED=0 go run ./cmd/app
 ```
 
 The shell binds `app.version()`, `app.close()`, and `app.debug(message)` into the page. See [`cmd/app`](./cmd/app) for the complete implementation.
+
+### Native tray and context menus
+
+Run [`example/native-menus`](example/native-menus/main.go) with `go run ./example/native-menus`.
+
+`SetSystray(SystrayOptions{Icon: pngBytes, Tooltip: "App", Items: items})` creates or replaces a tray icon. `RemoveSystray()` is idempotent.
+
+`SetContextMenu([]MenuItem)` completely replaces the browser's default context menu and previous custom entries. Passing nil or an empty slice disables the context menu; it does not restore defaults. Each Set also clears previous role-removal configuration. `AddContextMenuItem(item)` appends an entry: before any Set it preserves browser defaults; after Set it appends to the replacement menu. `RemoveContextMenuItem(id)` removes a custom entry by ID; an unknown ID is harmless. Custom entries, including separators, require unique nonempty IDs. Leading, trailing and repeated separators are cleaned up.
+
+`RemoveContextMenuItemRole(MenuItemRoleCopy, MenuItemRoleCut)` hides these default actions and removes custom entries whose Role matches. Supported roles are MenuItemRoleUndo, MenuItemRoleRedo, MenuItemRoleCut, MenuItemRoleCopy, MenuItemRolePaste and MenuItemRoleSelectAll. None and unknown roles return an error; absent actions are ignored. To keep browser defaults while extending the menu, call Add and RemoveContextMenuItemRole without calling SetContextMenu first.
+
+Configure before Run or update at runtime. Callbacks run asynchronously and may update menus, call Eval or Close; synchronize shared state when callbacks overlap. The menu bar, tray and context menu own callbacks independently. Closing the window removes the tray and ends Run.
+
+Native backends use NSStatusItem on macOS, notification icons and WebView2 ContextMenuRequested on Windows (including Explorer restart recovery), and StatusNotifierItem/DBusMenu on Linux. Linux requires WebKitGTK 6.0, a session D-Bus and a StatusNotifier host. Chrome and unavailable native capabilities return ErrMenuUnsupported (check with errors.Is). Initialization failures discovered after pre-Run configuration are returned by Run.

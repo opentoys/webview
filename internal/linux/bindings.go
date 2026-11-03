@@ -219,6 +219,7 @@ func ensureInit() error {
 		}
 
 		gtkLib = gtk
+		libWebKit = webkit
 		libGLib, libGObject, libGIO = glib, gobject, gio
 
 		registerShared(glib, gobject, gio, webkit, gtk)

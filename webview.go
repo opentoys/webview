@@ -116,6 +116,10 @@ type Options struct {
 // W is the top-level webview handle. Darwin includes handler fields for
 // dialog, file-panel, and download overrides.
 type W struct {
+	menuMu      sync.Mutex
+	contextMenu types.ContextMenuConfig
+	menuClosed  bool
+
 	p      Platform
 	bridge *bridge
 
@@ -199,6 +203,9 @@ func (w *W) Close() error {
 	w.dropClosed = true
 	w.dropFn = nil
 	w.dropMu.Unlock()
+	w.menuMu.Lock()
+	w.menuClosed = true
+	w.menuMu.Unlock()
 	return w.p.Close()
 }
 func (w *W) SetTitle(title string) { w.p.SetTitle(title) }

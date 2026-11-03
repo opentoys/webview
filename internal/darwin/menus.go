@@ -13,13 +13,19 @@ import (
 func (p *Platform) applyMenus(menus []Menu) {
 	// Clear old callbacks.
 	menuCallbackMu.Lock()
-	menuCallbacks = map[uintptr]func(){}
+	for _, tag := range p.barTags {
+		delete(menuCallbacks, tag)
+	}
+	p.barTags = nil
 	menuCallbackMu.Unlock()
 
 	handler := objc.ID(menuHandlerClass).Send(allocSel).Send(initSel)
 
 	menuBar := objc.ID(nsMenuClass).Send(allocSel).Send(initSel)
-	tag := uintptr(1)
+	defer menuBar.Send(releaseSel)
+	defer handler.Send(releaseSel)
+	nextExtensionTag++
+	tag := nextExtensionTag
 
 	for _, m := range menus {
 		topItem := objc.ID(nsMenuItemClass).Send(allocSel)
@@ -28,6 +34,7 @@ func (p *Platform) applyMenus(menus []Menu) {
 		submenu.Send(autoreleaseSel)
 		topItem.Send(setSubmenuSel, submenu)
 		menuBar.Send(addItemSel, topItem)
+		topItem.Send(releaseSel)
 
 		for _, mi := range m.Items {
 			if mi.Separator {
@@ -43,6 +50,7 @@ func (p *Platform) applyMenus(menus []Menu) {
 			item = item.Send(initWithTitleSel, nsString(mi.Label), action, nsString(""))
 			if nativeAction == "" {
 				item.Send(setTargetSel, handler)
+				item.Send(objc.RegisterName("setRepresentedObject:"), handler)
 				item.Send(setTagSel, tag)
 			}
 
@@ -59,9 +67,12 @@ func (p *Platform) applyMenus(menus []Menu) {
 				menuCallbacks[tag] = mi.Action
 				menuCallbackMu.Unlock()
 			}
-			tag++
+			p.barTags = append(p.barTags, tag)
+			nextExtensionTag++
+			tag = nextExtensionTag
 
 			submenu.Send(addItemSel, item)
+			item.Send(releaseSel)
 		}
 	}
 

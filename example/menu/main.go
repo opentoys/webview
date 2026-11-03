@@ -50,6 +50,21 @@ func main() {
 		},
 	})
 
+	w.Bind("setMenu", func(menus []map[string]any) {
+		w.RemoveContextMenuItem("reload")
+		w.SetContextMenu([]webview.MenuItem{
+			{
+				ID:       "1111",
+				Label:    "自定义",
+				Shortcut: "Ctrl+X",
+				Action: func() {
+					fmt.Println("xxxxx")
+					w.Eval("alert(11)")
+				},
+			},
+		})
+	})
+
 	w.SetMenu(menus...)
 
 	w.Bind("opendir", w.ChooseDir)
@@ -96,6 +111,10 @@ func main() {
   <textarea id="box">Type here to test Cut/Copy/Paste/Undo/Redo.</textarea>
 </body>
 <script>
+document.addEventListener('contextmenu', function (e) {
+	console.log(e)
+    setMenu([])
+})
 document.addEventListener('appdrop',function(e){
 	console.log(e)
 	alert(e.detail)

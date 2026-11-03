@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 	"github.com/opentoys/webview/internal/types"
 )
@@ -110,12 +111,28 @@ func registerDelegateClasses() {
 		probeErr = fmt.Errorf("webview: register file drop view class: %w", err)
 		return
 	}
+	// Resolve the superclass implementation from WKWebView itself. SendSuper
+	// starts from the receiver's dynamic class; WebKit can add another subclass
+	// above ours, making SendSuper re-enter this inherited override indefinitely.
+	willOpenMenu := objc.RegisterName("willOpenMenu:withEvent:")
+	var superWillOpenMenu func(objc.ID, objc.SEL, objc.ID, objc.ID)
+	if implementation := objc.ID(wkWebViewClass).Send(objc.RegisterName("instanceMethodForSelector:"), willOpenMenu); implementation != 0 {
+		purego.RegisterFunc(&superWillOpenMenu, uintptr(implementation))
+	}
 	fileDropWebViewClass, err = objc.RegisterClass(
 		"GoWebviewFileDropWebView",
 		wkWebViewClass,
 		nil,
 		nil,
 		[]objc.MethodDef{
+			{Cmd: willOpenMenu, Fn: func(id objc.ID, cmd objc.SEL, menu, event objc.ID) {
+				if superWillOpenMenu != nil {
+					superWillOpenMenu(id, cmd, menu, event)
+				}
+				if p := activePlatform; p != nil {
+					p.extendContextMenu(menu)
+				}
+			}},
 			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
 			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: draggingUpdated},
 			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
@@ -384,7 +401,7 @@ func registerDelegateClasses() {
 				cb := menuCallbacks[uintptr(tag)]
 				menuCallbackMu.Unlock()
 				if cb != nil {
-					cb()
+					go cb()
 				}
 			}},
 		},

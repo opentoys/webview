@@ -196,6 +196,10 @@ func (p *Platform) setup() error {
 	// buildPlatform wires DefaultMenus(w) through that same path so all
 	// platforms share one entry point).
 	p.applyMenus(p.pendingMenus)
+	if err := p.applySystray(); err != nil {
+		p.closeExtendedMenus()
+		return err
+	}
 
 	// Apply a title set before Run().
 	p.mu.Lock()

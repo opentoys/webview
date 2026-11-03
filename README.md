@@ -352,3 +352,93 @@ CGO_ENABLED=0 go run ./cmd/app
 ```
 
 外壳向页面绑定了 `app.version()`、`app.close()` 和 `app.debug(message)`。完整实现见 [`cmd/app`](./cmd/app)。
+
+### 系统托盘与原生右键菜单
+
+完整示例：[`example/native-menus`](example/native-menus/main.go)，运行 `go run ./example/native-menus`。
+
+```go
+if err := w.SetSystray(webview.SystrayOptions{
+    Icon: pngBytes, // PNG 图片数据
+    Tooltip: "我的应用",
+    Items: []webview.MenuItem{
+        {ID: "quit", Label: "退出", Action: func() { w.Close() }},
+    },
+}); err != nil {
+    panic(err)
+}
+// 再次 SetSystray 整体更新托盘；RemoveSystray() 移除托盘，可重复调用。
+```
+
+#### 右键菜单接口
+
+| 方法 | 行为 |
+| --- | --- |
+| `SetContextMenu([]webview.MenuItem)` | 完全替换默认右键菜单和之前的自定义项，仅显示传入的菜单项；同时清除之前按 role 移除的配置 |
+| `AddContextMenuItem(webview.MenuItem)` | 追加一个自定义项；未调用 SetContextMenu 时保留浏览器默认项，调用后则追加到替换后的菜单 |
+| `RemoveContextMenuItem(id string)` | 按 ID 移除自定义项；不存在的 ID 无副作用 |
+| `RemoveContextMenuItemRole(...webview.MenuItemRole)` | 按标准编辑角色隐藏默认项，并移除具有相同 Role 的自定义项；支持一次传入多个 role |
+
+`SetContextMenu(nil)` 或空切片表示使用空菜单，禁用右键菜单，**不会恢复默认菜单**。删除替换菜单中的最后一项后仍为空菜单，也不会自动恢复默认项。自定义项（包括分隔符）必须有非空且唯一的 ID；重复追加 ID 会返回错误。菜单会自动清理首尾及连续分隔符。
+
+完全替换默认右键菜单，然后追加、移除自定义项：
+
+```go
+if err := w.SetContextMenu([]webview.MenuItem{
+    {
+        ID: "hello",
+        Label: "自定义动作",
+        Action: func() { w.Eval(`alert('Hello from Go')`) },
+    },
+}); err != nil {
+    panic(err)
+}
+if err := w.AddContextMenuItem(webview.MenuItem{
+    ID: "extra",
+    Label: "追加项",
+    Action: func() { w.Eval(`alert('Extra')`) },
+}); err != nil {
+    panic(err)
+}
+if err := w.RemoveContextMenuItem("extra"); err != nil {
+    panic(err)
+}
+```
+
+#### 按 role 移除菜单项
+
+预定义 role 如下。匹配使用原生动作标识，不依赖菜单显示语言；当前菜单中不存在的动作会忽略，其他默认项保持原生行为。
+
+| 预定义 role | 动作 |
+| --- | --- |
+| `webview.MenuItemRoleUndo` | 撤销 |
+| `webview.MenuItemRoleRedo` | 重做 |
+| `webview.MenuItemRoleCut` | 剪切 |
+| `webview.MenuItemRoleCopy` | 复制 |
+| `webview.MenuItemRolePaste` | 粘贴 |
+| `webview.MenuItemRoleSelectAll` | 全选 |
+| `webview.MenuItemRoleNone` | 无标准动作（MenuItem.Role 的零值），不能传给 RemoveContextMenuItemRole，否则返回错误 |
+
+例如，保留浏览器默认菜单，隐藏“复制”和“剪切”，并追加 Go 回调项。此场景直接使用 Add，**不要先调用 SetContextMenu**：
+
+```go
+if err := w.RemoveContextMenuItemRole(
+    webview.MenuItemRoleCopy,
+    webview.MenuItemRoleCut,
+); err != nil {
+    panic(err)
+}
+if err := w.AddContextMenuItem(webview.MenuItem{
+    ID: "hello",
+    Label: "自定义动作",
+    Action: func() { w.Eval(`alert('Hello from Go')`) },
+}); err != nil {
+    panic(err)
+}
+```
+
+自定义项可通过 `Role: webview.MenuItemRoleCopy` 等标记编辑角色；RemoveContextMenuItemRole 会连同这些匹配的自定义项一起移除，未标记 Role 的自定义项继续保留。重复移除同一 role 无额外副作用，传入未知 role 返回错误。
+
+可在 Run 前配置，也可在运行时更新。回调异步执行，可调用菜单更新、Eval 和 Close；多个回调可能并发，应用共享状态应自行同步。菜单栏、托盘、右键菜单独立管理回调。窗口关闭时移除托盘并释放扩展菜单资源，关闭窗口仍会结束 Run。
+
+macOS 使用 NSStatusItem 和原生菜单打开钩子；Windows 使用通知图标及 WebView2 ContextMenuRequested，需要支持该接口的运行时，支持 Explorer 重启后恢复图标；Linux 使用 WebKitGTK 6.0、会话 D-Bus 的 StatusNotifierItem 与 DBusMenu，需要桌面提供 StatusNotifier 托盘宿主。Chrome 或缺失原生能力时返回可用 `errors.Is(err, webview.ErrMenuUnsupported)` 判断的错误。Run 前无法确定的运行时或桌面初始化失败由 Run 返回。

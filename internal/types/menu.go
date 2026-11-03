@@ -24,9 +24,24 @@ const (
 // MenuItem is a single entry inside a Menu.
 // If Separator is true the other fields are ignored.
 type MenuItem struct {
+	ID        string // Required for systray and context menu entries, including separators.
 	Label     string
 	Shortcut  string // e.g. "Ctrl+Z", "Cmd+Shift+Z"; empty = none
 	Action    func()
 	Role      MenuItemRole
 	Separator bool
+}
+
+// SystrayOptions configures a native notification-area icon and its menu.
+type SystrayOptions struct {
+	Icon    []byte // PNG encoded image.
+	Tooltip string
+	Items   []MenuItem
+}
+
+// ContextMenuConfig is the internal snapshot sent to native menu backends.
+type ContextMenuConfig struct {
+	ReplaceDefault bool
+	Items          []MenuItem
+	RemoveDefault  []MenuItemRole
 }
