@@ -67,34 +67,21 @@ func (c *Chrome) Start() error {
 		c.Unlock()
 	}
 	c.send("Runtime.addBinding", h{"name": "webviewBridge"})
-	c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": bootstrapJS()})
+
 	// The initial --app document is created before Run() connects, so
 	// addScriptToEvaluateOnNewDocument (which fires only on new documents)
 	// won't cover it. Eval the bootstrap directly on the live page now; its
 	// installer polls until the native binding appears, then wraps it.
 	c.Eval(bootstrapJS())
 	c.injectBridge()
-	if c.BoundFuncs != nil {
-		c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": stubJS(c.BoundFuncs())})
+	c.Lock()
+	c.initScriptsReady = true
+	c.Unlock()
+	if err := c.rebuildBindingScript(); err != nil {
+		_ = c.Close()
+		return err
 	}
-	// Register all pre-Run Init scripts before opening the application's page.
-	for {
-		c.Lock()
-		scripts := c.pendingInitScripts
-		c.pendingInitScripts = nil
-		if len(scripts) == 0 {
-			c.initScriptsReady = true
-			c.Unlock()
-			break
-		}
-		c.Unlock()
-		for _, script := range scripts {
-			if _, err := c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": script}); err != nil {
-				_ = c.Close()
-				return err
-			}
-		}
-	}
+
 	target := c.deferredURL
 	if target == "" {
 		target = c.initialURL

@@ -137,8 +137,8 @@ w, err := webview.New(webview.Options{
 | `SetHTML(html) error` | 加载 HTML 字符串 |
 | `Eval(js) error` | 在当前页面执行 JavaScript |
 | `Init(js) error` | 注册每次页面加载前执行的 JavaScript |
-| `Bind(name, fn) error` | 将 Go 函数暴露给 JavaScript |
-| `Unbind(name) error` | 删除已绑定的函数 |
+| `Bind(name, value) error` | 暴露 Go 函数、对象方法及只读属性 |
+| `Unbind(name) error` | 删除整个绑定 |
 | `SetMenu(menus...) error` | 替换原生菜单栏 |
 | `MainThread(fn)` | 在 UI 线程执行函数并等待完成 |
 | `InterceptResource(scheme, handler)` | 注册自定义 URL Scheme 处理器；应在 `Run` 前调用 |
@@ -235,6 +235,50 @@ path, err := webview.SaveFile(webview.FileDialogOptions{
 | `SizeFixed` | 固定尺寸 |
 
 ### JavaScript 桥接
+
+`Bind` 也接受 struct 或非 nil 的 `*struct`，统一推荐传指针，以包含指针接收者方法。struct 值仅暴露值方法集，不自动取地址。所有导出方法（包括提升方法）都会按 Go 原有名称及大小写暴露；导出字段暴露为只读 JSON 快照，未导出成员不会暴露。
+
+```go
+type App struct{}
+
+func (*App) Greet(name string) string { return "你好，" + name }
+
+// 在初始化函数中：
+if err := w.Bind("greet", (&App{}).Greet); err != nil { panic(err) }
+if err := w.Bind("app", &App{}); err != nil { panic(err) }
+```
+
+```javascript
+const greeting = await window.greet("张三");
+const objectGreeting = await window.app.Greet("张三");
+```
+
+```go
+// 后续解绑整个对象：
+if err := w.Unbind("app"); err != nil { panic(err) }
+```
+
+同名绑定整体替换，也支持函数和对象互换；无效输入保留原绑定。名称按字面处理：`Bind("app.Greet", fn)` 对应 `window["app.Greet"]`，与 `window.app.Greet` 独立。运行中的变更会更新当前页面和后续导航。`Unbind` 删除框架生成的整个页面入口；旧代理引用按当前 Go 注册表调用，目标不存在时 Promise 会 reject。已开始执行的调用允许完成。
+
+调用异步执行且可能并发，共享可变状态需自行同步。参数与返回值沿用函数绑定的 JSON / Promise 规则；字段和返回对象不递归绑定。nil、nil 函数、nil 指针、nil map、不支持的类型、没有导出字段或方法的对象，以及无法 JSON 编码的属性均返回错误。
+
+`Bind` 也接受非 nil 的 `map[string]any`：顶层函数值暴露为异步方法，其他值暴露为只读属性，允许空 map。struct 属性使用 Go 字段名，包含提升的导出字段；外层字段的 `json` 标签不会重命名或隐藏属性。字段与方法同名时返回错误。
+
+```go
+if err := w.Bind("config", map[string]any{
+    "version": "1.0",
+    "features": []string{"search", "export"},
+    "greet": func(name string) string { return "你好，" + name },
+}); err != nil { panic(err) }
+```
+
+```javascript
+console.log(window.config.version); // "1.0"，无需 await
+const greeting = await window.config.greet("张三");
+// config.version = "2.0" 无法改变属性值，严格模式下抛出 TypeError。
+```
+
+属性在 Bind 时通过 JSON 生成快照，页面中的嵌套对象和数组也递归冻结。Go 后续修改不会自动反映到页面，需要重新 Bind 更新；Bind 读取 Go 数据期间也需自行同步。嵌套值是普通 JSON 数据，不是实时 Go 对象，不支持嵌套函数。Unbind 删除页面入口，但旧引用仍可读取其不可变快照。
 
 `Bind` 接受以下返回形式：
 

@@ -106,7 +106,7 @@ func TestDispatchDebugLogIsSummaryOnly(t *testing.T) {
 
 func TestStubJSPerName(t *testing.T) {
 	s := stubJS([]string{"foo", "bar"})
-	if !strings.Contains(s, `window["foo"]`) || !strings.Contains(s, `window["bar"]`) {
+	if !strings.Contains(s, `\"name\":\"foo\"`) || !strings.Contains(s, `\"name\":\"bar\"`) {
 		t.Errorf("stubJS missing name stubs:\n%s", s)
 	}
 	if !strings.Contains(s, "webviewBridge.call") {
@@ -165,5 +165,12 @@ func TestInitBeforeRunQueuesScripts(t *testing.T) {
 	}
 	if err := c.Eval("window.first=3"); err == nil {
 		t.Fatal("Eval before Run silently succeeded")
+	}
+}
+
+func TestBindingScriptCallback(t *testing.T) {
+	c := &Chrome{BindingScript: func() string { return "current-object-methods" }, BoundFuncs: func() []string { return []string{"legacy"} }}
+	if got := c.bindingScript(); got != "current-object-methods" {
+		t.Fatal(got)
 	}
 }

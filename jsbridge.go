@@ -4,57 +4,142 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"sync"
+
+	"github.com/opentoys/webview/internal/bridgejs"
 )
 
 type bridge struct {
 	closed bool
 	mu     sync.Mutex
-	funcs  map[string]any
+	funcs  map[string]binding
 }
 
 func newBridge() *bridge {
-	return &bridge{funcs: map[string]any{}}
+	return &bridge{funcs: map[string]binding{}}
 }
 
-func (b *bridge) Bind(name string, fn any) error {
-	if fn == nil {
-		return fmt.Errorf("webview: nil func for %q", name)
+type binding struct {
+	fn         any
+	methods    map[string]any
+	properties map[string]json.RawMessage
+}
+
+func (b *bridge) Bind(name string, value any) error {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return fmt.Errorf("webview: nil binding for %q", name)
 	}
-	typ := reflect.TypeOf(fn)
-	if typ.Kind() != reflect.Func {
-		return fmt.Errorf("webview: %q not a func", name)
+	next := binding{}
+	switch v.Kind() {
+	case reflect.Func:
+		if v.IsNil() {
+			return fmt.Errorf("webview: nil func for %q", name)
+		}
+		next.fn = value
+	case reflect.Pointer, reflect.Struct:
+		if v.Kind() == reflect.Pointer && (v.IsNil() || v.Type().Elem().Kind() != reflect.Struct) {
+			return fmt.Errorf("webview: %q requires a non-nil *struct", name)
+		}
+		next.methods = make(map[string]any)
+		for i := 0; i < v.NumMethod(); i++ {
+			method := v.Type().Method(i)
+			if method.PkgPath == "" {
+				next.methods[method.Name] = v.Method(i).Interface()
+			}
+		}
+		fields := v
+		if fields.Kind() == reflect.Pointer {
+			fields = fields.Elem()
+		}
+		next.properties = make(map[string]json.RawMessage)
+		for _, field := range reflect.VisibleFields(fields.Type()) {
+			if field.PkgPath != "" {
+				continue
+			}
+			fv, err := fields.FieldByIndexErr(field.Index)
+			if err != nil {
+				continue
+			} // Promoted field behind a nil embedded pointer.
+			if _, exists := next.methods[field.Name]; exists {
+				return fmt.Errorf("webview: field and method %q conflict on %q", field.Name, name)
+			}
+			data, err := json.Marshal(fv.Interface())
+			if err != nil {
+				return fmt.Errorf("webview: field %q on %q: %w", field.Name, name, err)
+			}
+			next.properties[field.Name] = data
+		}
+		if len(next.methods) == 0 && len(next.properties) == 0 {
+			return fmt.Errorf("webview: %q has no exported fields or methods", name)
+		}
+	case reflect.Map:
+		values, ok := value.(map[string]any)
+		if !ok || values == nil {
+			return fmt.Errorf("webview: %q requires a non-nil map[string]any", name)
+		}
+		next.methods = make(map[string]any)
+		next.properties = make(map[string]json.RawMessage)
+		for key, member := range values {
+			mv := reflect.ValueOf(member)
+			if mv.IsValid() && mv.Kind() == reflect.Func {
+				if mv.IsNil() {
+					return fmt.Errorf("webview: nil func %q on %q", key, name)
+				}
+				next.methods[key] = member
+			} else {
+				data, err := json.Marshal(member)
+				if err != nil {
+					return fmt.Errorf("webview: property %q on %q: %w", key, name, err)
+				}
+				next.properties[key] = data
+			}
+		}
+	default:
+		return fmt.Errorf("webview: %q requires a func, struct, *struct, or map[string]any", name)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.funcs[name] = fn
+	b.funcs[name] = next
 	return nil
 }
 
-func (b *bridge) Unbind(name string) {
+func (b *bridge) bindingScript() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	delete(b.funcs, name)
-}
-
-// funcNames returns the bound names, for bootstrap injection.
-func (b *bridge) funcNames() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, 0, len(b.funcs))
-	for name := range b.funcs {
-		out = append(out, name)
+	bindings := make([]bridgejs.Binding, 0, len(b.funcs))
+	for name, entry := range b.funcs {
+		description := bridgejs.Binding{Name: name, Properties: entry.properties}
+		if entry.methods != nil {
+			description.Methods = make([]string, 0, len(entry.methods))
+			for method := range entry.methods {
+				description.Methods = append(description.Methods, method)
+			}
+			sort.Strings(description.Methods)
+		}
+		bindings = append(bindings, description)
 	}
-	return out
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].Name < bindings[j].Name })
+	return bridgejs.Proxies(bindings)
 }
 
-// HandleMessage processes a JS -> Go {id,name,args} message and emits reply JS.
+func (b *bridge) Unbind(name string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, exists := b.funcs[name]
+	delete(b.funcs, name)
+	return exists
+}
+
+// HandleMessage processes a JS -> Go {id,name,args,method?} message and emits reply JS.
 func (b *bridge) HandleMessage(msg string, emit func(string)) {
 	var in struct {
-		ID   int             `json:"id"`
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args"`
+		ID     int             `json:"id"`
+		Name   string          `json:"name"`
+		Method *string         `json:"method"`
+		Args   json.RawMessage `json:"args"`
 	}
 	if err := json.Unmarshal([]byte(msg), &in); err != nil {
 		emit(renderError(0, err))
@@ -65,10 +150,22 @@ func (b *bridge) HandleMessage(msg string, emit func(string)) {
 		b.mu.Unlock()
 		return
 	}
-	fn, ok := b.funcs[in.Name]
+	entry, ok := b.funcs[in.Name]
+	var fn any
+	if ok {
+		if in.Method == nil {
+			fn = entry.fn
+		} else {
+			fn = entry.methods[*in.Method]
+		}
+	}
 	b.mu.Unlock()
-	if !ok {
-		emit(renderError(in.ID, fmt.Errorf("webview: no bound func %q", in.Name)))
+	if !ok || fn == nil {
+		if in.Method != nil {
+			emit(renderError(in.ID, fmt.Errorf("webview: no bound method %q on %q", *in.Method, in.Name)))
+		} else {
+			emit(renderError(in.ID, fmt.Errorf("webview: no bound func %q", in.Name)))
+		}
 		return
 	}
 	result, err := callFunc(fn, in.Args)

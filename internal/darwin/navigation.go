@@ -120,7 +120,7 @@ func indexHead(html string) int {
 // document start. This mirrors the Linux path where pushUserScript fires on
 // every navigation. Caller must hold p.mu.
 func (p *Platform) injectBootstrapLocked() {
-	src := bootstrapJS(p.boundFuncNames())
+	src := p.bootstrapScript()
 	if src == "" {
 		return
 	}
@@ -130,7 +130,7 @@ func (p *Platform) injectBootstrapLocked() {
 // prependBootstrap inserts the bridge bootstrap (webviewBridge + func stubs) as
 // an inline <script> so it is available before any user-supplied script runs.
 func (p *Platform) prependBootstrap(html string) string {
-	if js := bootstrapJS(p.boundFuncNames()); js != "" {
+	if js := p.bootstrapScript(); js != "" {
 		// HTML parsing closes <script> on </script>, </script>, or </SCRIPT>.
 		// Escape </ sequences so the script body is safe inside the tag.
 		js = strings.ReplaceAll(js, "</", `<\/`)
@@ -144,4 +144,26 @@ func (p *Platform) prependBootstrap(html string) string {
 	return html
 }
 
-// looksLikeHTML returns true if body starts with common HTML markers.
+func (p *Platform) bootstrapScript() string {
+	s := bootstrapJS(p.boundFuncNames())
+	if p.BindingScript != nil {
+		s += p.BindingScript()
+	}
+	return s
+}
+
+func (p *Platform) RefreshBindings() error {
+	p.mu.Lock()
+	ready := p.ucc != 0
+	p.mu.Unlock()
+	if !ready {
+		return nil
+	}
+	mainThread(func() {
+		p.mu.Lock()
+		p.rebuildScriptsLocked()
+		p.mu.Unlock()
+		p.evalOnHost(p.bootstrapScript())
+	})
+	return nil
+}

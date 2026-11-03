@@ -140,7 +140,8 @@ type Platform struct {
 
 	// MessageFunc is called with the string body of each JS postMessage to
 	// window.webkit.messageHandlers.webviewBridge.
-	MessageFunc func(string)
+	MessageFunc   func(string)
+	BindingScript func() string
 	// BoundFuncs returns the JS-visible func names; the bootstrap script
 	// defines window.<name> stubs from it at page start.
 	BoundFuncs func() []string

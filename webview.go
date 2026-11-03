@@ -118,6 +118,7 @@ type W struct {
 	onClose                               func()
 	closeDone                             chan struct{}
 	menuMu                                sync.Mutex
+	bindingMu                             sync.Mutex
 	contextMenu                           types.ContextMenuConfig
 	menuClosed                            bool
 
@@ -210,7 +211,7 @@ func buildChrome(opts Options, w *W, logger *debuglog.Logger) (Platform, error) 
 		Offscreen: opts.Offscreen,
 	})
 	p.Logger = logger
-	p.BoundFuncs = w.bridge.funcNames
+	p.BindingScript = w.bridge.bindingScript
 	p.MessageFunc = func(body string) {
 		w.dispatchMessage(body, p.EvalHost)
 	}
@@ -271,12 +272,31 @@ func (w *W) Eval(js string) error { return w.windowCall(func() error { return w.
 // Run and does not immediately execute in an already-loaded document.
 func (w *W) Init(js string) error { return w.windowCall(func() error { return w.p.Init(js) }) }
 
-func (w *W) Bind(name string, fn any) error {
-	return w.windowCall(func() error { return w.bridge.Bind(name, fn) })
+// Bind exposes a function, a struct/non-nil *struct's exported methods and
+// fields, or a non-nil map[string]any's functions and values. Properties are
+// read-only JSON snapshots taken at Bind time; struct property names use Go
+// field names. Names are literal window properties; rebinding replaces the entry.
+func (w *W) Bind(name string, value any) error {
+	return w.windowCall(func() error {
+		w.bindingMu.Lock()
+		defer w.bindingMu.Unlock()
+		if err := w.bridge.Bind(name, value); err != nil {
+			return err
+		}
+		return w.refreshBindings()
+	})
 }
 
+// Unbind removes the whole named binding. Unknown names have no effect.
 func (w *W) Unbind(name string) error {
-	return w.windowCall(func() error { w.bridge.Unbind(name); return nil })
+	return w.windowCall(func() error {
+		w.bindingMu.Lock()
+		defer w.bindingMu.Unlock()
+		if !w.bridge.Unbind(name) {
+			return nil
+		}
+		return w.refreshBindings()
+	})
 }
 
 func (w *W) InterceptResource(scheme string, handler ResourceHandler) error {
@@ -456,4 +476,11 @@ func (w *W) menuCallbacks(items []MenuItem) []MenuItem {
 		}
 	}
 	return result
+}
+
+func (w *W) refreshBindings() error {
+	if p, ok := w.p.(interface{ RefreshBindings() error }); ok {
+		return p.RefreshBindings()
+	}
+	return nil
 }

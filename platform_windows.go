@@ -20,7 +20,7 @@ func buildPlatform(opts Options, w *W, logger *debuglog.Logger) (Platform, error
 	p.Debug = opts.Debug
 	p.Offscreen = opts.Offscreen
 	p.Logger = logger
-	p.BoundFuncs = w.bridge.funcNames
+	p.BindingScript = w.bridge.bindingScript
 	p.MessageFunc = func(body string) {
 		w.dispatchMessage(body, p.EvalHost)
 	}

@@ -29,14 +29,13 @@ func (c *Chrome) EvalHost(js string) {
 
 func (c *Chrome) Init(js string) error {
 	c.Lock()
-	if !c.initScriptsReady {
-		c.pendingInitScripts = append(c.pendingInitScripts, js)
-		c.Unlock()
-		return nil
-	}
+	c.pendingInitScripts = append(c.pendingInitScripts, js)
+	ready := c.initScriptsReady
 	c.Unlock()
-	_, err := c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": js})
-	return err
+	if ready {
+		return c.rebuildBindingScript()
+	}
+	return nil
 }
 
 func (c *Chrome) Navigate(url string) error {

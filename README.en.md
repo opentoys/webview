@@ -137,7 +137,7 @@ Backend probing happens during `New`. Some native shared libraries are not loade
 | `SetHTML(html) error` | Load an HTML string |
 | `Eval(js) error` | Execute JavaScript in the current page |
 | `Init(js) error` | Register JavaScript to run before every page load |
-| `Bind(name, fn) error` | Expose a Go function to JavaScript |
+| `Bind(name, value) error` | Expose Go functions, object methods, and read-only properties |
 | `Unbind(name) error` | Remove a binding |
 | `SetMenu(menus...) error` | Replace the native menu bar |
 | `MainThread(fn)` | Run a function on the UI thread and wait for it |
@@ -173,6 +173,50 @@ See [`example/dialogs`](example/dialogs/main.go) for file selection before `Run`
 | `SizeFixed` | Fixed size |
 
 ### JavaScript bridge
+
+`Bind` also accepts a struct or a non-nil pointer to a struct. Prefer passing a pointer: its method set includes pointer receivers. A struct value exposes only its value method set. All exported methods, including promoted methods, are exposed with their Go names and case; exported fields are exposed as read-only JSON snapshots. Unexported members are not exposed.
+
+```go
+type App struct{}
+
+func (*App) Greet(name string) string { return "Hello " + name }
+
+// Inside your setup function:
+if err := w.Bind("greet", (&App{}).Greet); err != nil { panic(err) }
+if err := w.Bind("app", &App{}); err != nil { panic(err) }
+```
+
+```javascript
+const greeting = await window.greet("张三");
+const objectGreeting = await window.app.Greet("张三");
+```
+
+```go
+// Later, remove the whole object binding:
+if err := w.Unbind("app"); err != nil { panic(err) }
+```
+
+Binding an existing name replaces the whole binding, including when switching between a function and an object. Invalid input leaves the previous binding intact. Names are literal properties: `Bind("app.Greet", fn)` creates `window["app.Greet"]`, independently of `window.app.Greet`. Runtime changes update the current page and future navigations. `Unbind` removes the generated entry; calls through saved proxies use the current Go registry and reject when the target no longer exists. Calls already executing may complete.
+
+Calls run asynchronously and may overlap; synchronize shared mutable Go state yourself. Arguments and results keep the same JSON and Promise rules as function bindings. Fields and returned objects are not recursively bound. Nil values, nil functions, nil pointers, nil maps, unsupported types, objects without exported fields or methods, and properties that cannot be JSON-encoded return an error.
+
+`Bind` also accepts a non-nil `map[string]any`: top-level function values become asynchronous methods; other values become read-only properties. An empty map is allowed. Struct property names use Go field names, including promoted exported fields; outer field `json` tags do not rename or hide them. A field/method name collision returns an error.
+
+```go
+if err := w.Bind("config", map[string]any{
+    "version": "1.0",
+    "features": []string{"search", "export"},
+    "greet": func(name string) string { return "Hello " + name },
+}); err != nil { panic(err) }
+```
+
+```javascript
+console.log(window.config.version); // "1.0", no await needed
+const greeting = await window.config.greet("张三");
+// config.version = "2.0" cannot change the value; strict mode throws TypeError.
+```
+
+Properties are captured through JSON at Bind time and frozen recursively in JavaScript, including nested objects and arrays. Later Go mutations are not reflected automatically; call Bind again to replace the snapshot. Synchronize Go data while Bind reads it. Nested values are JSON data, not live Go objects; nested functions are unsupported. Unbind removes the window entry, but previously saved references can still read their immutable snapshots.
 
 `Bind` accepts these return forms:
 

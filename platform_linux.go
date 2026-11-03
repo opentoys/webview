@@ -17,7 +17,7 @@ func buildPlatform(opts Options, w *W, logger *debuglog.Logger) (Platform, error
 	p.Incognito = opts.Incognito
 	p.DataDir = opts.DataDir
 	p.Offscreen = opts.Offscreen
-	p.BoundFuncs = w.bridge.funcNames
+	p.BindingScript = w.bridge.bindingScript
 	p.MessageFunc = func(body string) {
 		w.dispatchMessage(body, p.EvalHost)
 	}

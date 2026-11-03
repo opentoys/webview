@@ -97,7 +97,7 @@ func (p *Platform) Init(js string) error {
 // Caller must hold p.mu.
 func (p *Platform) rebuildScriptsLocked() {
 	p.ucc.Send(removeAllUserScriptsSel)
-	if p.BoundFuncs != nil {
+	if p.BoundFuncs != nil || p.BindingScript != nil {
 		p.injectBootstrapLocked()
 	}
 	if len(p.schemeHandlers) > 0 {

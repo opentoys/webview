@@ -92,8 +92,9 @@ type gtk struct {
 	registerScriptHandlerFn func(*gtk, uintptr, string)
 
 	// Callback wiring (set by buildPlatform before Run).
-	MessageFunc func(string)
-	BoundFuncs  func() []string
+	MessageFunc   func(string)
+	BindingScript func() string
+	BoundFuncs    func() []string
 
 	// Options.
 	Debug     bool

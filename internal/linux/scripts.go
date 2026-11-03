@@ -2,8 +2,6 @@
 
 package linux
 
-import "encoding/json"
-
 // --- user scripts ----------------------------------------------------------
 
 func (p *gtk) pushUserScript(src string) {
@@ -23,16 +21,9 @@ func (p *gtk) rebuildScripts() {
 		return
 	}
 	webkitUserContentManagerRemoveAllScripts(p.manager)
-	addUserScript(p.manager, bootstrapJS(nil))
+	addUserScript(p.manager, p.bootstrapScript())
 	for _, src := range p.userScriptSrcs {
 		addUserScript(p.manager, src)
-	}
-	// Add bind script for currently bound functions.
-	if p.BoundFuncs != nil {
-		names := p.BoundFuncs()
-		if len(names) > 0 {
-			addUserScript(p.manager, bindScript(names))
-		}
 	}
 }
 
@@ -40,16 +31,6 @@ func addUserScript(manager uintptr, src string) {
 	script := webkitUserScriptNew(src, injectTopFrame, injectAtDocumentStart, 0, 0)
 	webkitUserContentManagerAddScript(manager, script)
 	webkitUserScriptUnref(script)
-}
-
-// bindScript returns JS that creates window.<name> stubs for each bound func.
-func bindScript(names []string) string {
-	s := ""
-	for _, name := range names {
-		lit := marshalJSON(name)
-		s += "window[" + lit + "] = function() { return window.webviewBridge.call(" + lit + ", Array.prototype.slice.call(arguments)); };"
-	}
-	return s
 }
 
 // --- message routing -------------------------------------------------------
@@ -73,9 +54,28 @@ func pgtk4RegisterScriptHandler(p *gtk, manager uintptr, name string) {
 	webkitRegisterHandler3(manager, name, 0)
 }
 
-// --- helpers ---------------------------------------------------------------
+func (p *gtk) RefreshBindings() error {
+	p.mu.Lock()
+	ready := p.manager != 0
+	p.mu.Unlock()
+	if !ready {
+		return nil
+	}
+	p.MainThread(p.rebuildScripts)
+	if p.BindingScript != nil {
+		return p.Eval(p.BindingScript())
+	}
+	return nil
+}
 
-func marshalJSON(msg string) string {
-	data, _ := json.Marshal(msg)
-	return string(data)
+func (p *gtk) bootstrapScript() string {
+	var names []string
+	if p.BoundFuncs != nil {
+		names = p.BoundFuncs()
+	}
+	src := bootstrapJS(names)
+	if p.BindingScript != nil {
+		src += p.BindingScript()
+	}
+	return src
 }

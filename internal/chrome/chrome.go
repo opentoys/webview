@@ -101,8 +101,11 @@ type Chrome struct {
 	deferredURL string
 
 	// Wired by webview.buildChrome before Run.
-	BoundFuncs  func() []string
-	MessageFunc func(string)
+	scriptMu          sync.Mutex
+	documentScriptIDs []string
+	BindingScript     func() string
+	BoundFuncs        func() []string
+	MessageFunc       func(string)
 }
 
 // New creates a Chrome backend. Chrome is launched lazily in Run.

@@ -67,8 +67,12 @@ type Platform struct {
 	wndProc    uintptr
 
 	// Callback wiring.
-	MessageFunc func(string)
-	BoundFuncs  func() []string
+	MessageFunc             func(string)
+	documentScriptIDs       []string
+	bindingScriptGeneration uint64
+	bindingScriptHandlers   map[*scriptCompletedHandler]struct{}
+	BindingScript           func() string
+	BoundFuncs              func() []string
 
 	// Options.
 	Debug     bool
@@ -287,25 +291,14 @@ func (p *Platform) Init(js string) error {
 		p.mu.Unlock()
 		return errors.New("webview: Init after Close")
 	}
-	if p.webview == nil {
-		p.userScriptSrcs = append(p.userScriptSrcs, js)
-		p.mu.Unlock()
+	p.userScriptSrcs = append(p.userScriptSrcs, js)
+	ready := p.webview != nil
+	p.mu.Unlock()
+	if !ready {
 		return nil
 	}
-	p.mu.Unlock()
 	var err error
-	p.MainThread(func() {
-		p.mu.Lock()
-		closed := p.closed
-		p.mu.Unlock()
-		if closed {
-			err = errors.New("webview: Init after Close")
-			return
-		}
-		if hr := p.webview.AddScriptToExecuteOnDocumentCreated(js, 0); hr != S_OK {
-			err = fmt.Errorf("webview: register Init script failed: 0x%X", hr)
-		}
-	})
+	p.MainThread(func() { err = p.rebuildBindingScript() })
 	return err
 }
 

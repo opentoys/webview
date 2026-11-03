@@ -1,6 +1,10 @@
 package chrome
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/opentoys/webview/internal/bridgejs"
+)
 
 // bootstrapJS builds the bridge transport object. CDP Runtime.addBinding
 // exposes a global function window.webviewBridge (the native binding). We
@@ -14,45 +18,78 @@ import "encoding/json"
 // binding global appears rather than capturing it once.
 func bootstrapJS() string {
 	return `(() => {
-  if (window.__wvInstalled) return;
-  function setup() {
-    var transport = window.webviewBridge;
-    if (typeof transport !== 'function') return; // binding not ready yet
-    window.__wvInstalled = true;
-    window.webviewBridge = {
-      _pending: {}, _next: 0,
-      postMessage(msg) { transport(String(JSON.stringify(msg))); },
-      resolve(id, result) { var p = this._pending[id]; if (p) { p.resolve(result); delete this._pending[id]; } },
-      reject(id, err) { var p = this._pending[id]; if (p) { p.reject(new Error(err)); delete this._pending[id]; } },
-      call(name, args) { return new Promise((resolve, reject) => {
-        var id = ++this._next;
-        this._pending[id] = {resolve: resolve, reject: reject};
-        this.postMessage({id: id, name: name, args: args});
-      }); }
-    };
-  }
-  setup();
-  var t = setInterval(function() { setup(); if (window.__wvInstalled) clearInterval(t); }, 50);
+ if (window.webviewBridge && typeof window.webviewBridge === "object" && typeof window.webviewBridge.call === "function") return;
+ function setup() {
+  var transport = window.webviewBridge;
+  if (typeof transport !== 'function') return;
+  ` + bridgejs.Transport(`transport(String(JSON.stringify(msg)));`) + `
+ }
+ setup();
+ if (!window.webviewBridge || typeof window.webviewBridge !== "object" || typeof window.webviewBridge.call !== "function") {
+  var t = setInterval(function() { setup(); if (window.webviewBridge && typeof window.webviewBridge === "object" && typeof window.webviewBridge.call === "function") clearInterval(t); }, 50);
+ }
 })();`
 }
 
-// stubJS adds a window.<name> callable for each bound function. Evaluated after
-// each navigation (when the bound set may have changed).
-func stubJS(names []string) string {
-	s := ""
-	for _, name := range names {
-		lit, _ := json.Marshal(name)
-		s += "window[" + string(lit) + "] = function() { return window.webviewBridge.call(" + string(lit) + ", Array.prototype.slice.call(arguments)); };"
-	}
-	return s
-}
+func stubJS(names []string) string { return bridgejs.Proxies(bridgejs.Functions(names)) }
 
 // injectBridge (re)installs per-name stubs for the functions bound so far.
 func (c *Chrome) injectBridge() {
-	if c.BoundFuncs == nil {
-		return
+	c.Eval(c.bindingScript())
+}
+
+func (c *Chrome) bindingScript() string {
+	if c.BindingScript != nil {
+		return c.BindingScript()
 	}
-	if s := stubJS(c.BoundFuncs()); s != "" {
-		c.Eval(s)
+	if c.BoundFuncs != nil {
+		return stubJS(c.BoundFuncs())
 	}
+	return stubJS(nil)
+}
+
+// RefreshBindings replaces document-start scripts and updates the live page.
+func (c *Chrome) RefreshBindings() error {
+	c.Lock()
+	ready := c.initScriptsReady
+	c.Unlock()
+	if !ready {
+		return nil
+	}
+	if err := c.rebuildBindingScript(); err != nil {
+		return err
+	}
+	return c.Eval(c.bindingScript())
+}
+
+// scriptMu serializes script replacement with Init and live binding changes.
+func (c *Chrome) rebuildBindingScript() error {
+	c.scriptMu.Lock()
+	defer c.scriptMu.Unlock()
+	c.Lock()
+	scripts := append([]string(nil), c.pendingInitScripts...)
+	c.Unlock()
+	// Keep Init sources as separate scripts, preserving directive prologues
+	// and independent execution if one source throws.
+	for _, id := range c.documentScriptIDs {
+		if _, err := c.send("Page.removeScriptToEvaluateOnNewDocument", h{"identifier": id}); err != nil {
+			return err
+		}
+	}
+	c.documentScriptIDs = nil
+	sources := append([]string{bootstrapJS() + c.bindingScript()}, scripts...)
+	for _, src := range sources {
+		result, err := c.send("Page.addScriptToEvaluateOnNewDocument", h{"source": src})
+		if err != nil {
+			return err
+		}
+		var added struct {
+			Identifier string `json:"identifier"`
+		}
+		if err := json.Unmarshal(result, &added); err != nil {
+			return err
+		}
+		c.documentScriptIDs = append(c.documentScriptIDs, added.Identifier)
+	}
+	return nil
 }

@@ -91,21 +91,11 @@ func (p *Platform) initWebView() {
 	var navTok eventToken
 	p.webview.AddNavigationCompleted(p.navCompletedHandler, &navTok)
 
-	// Inject bootstrap JS for all future pages.
-	var names []string
-	if p.BoundFuncs != nil {
-		names = p.BoundFuncs()
-	}
-	js := bootstrapJS(names)
-	p.webview.AddScriptToExecuteOnDocumentCreated(js, 0)
-
-	// Inject any user scripts accumulated before Run().
-	p.mu.Lock()
-	pendingScripts := p.userScriptSrcs
-	p.userScriptSrcs = nil
-	p.mu.Unlock()
-	for _, src := range pendingScripts {
-		p.webview.AddScriptToExecuteOnDocumentCreated(src, 0)
+	// Register one replaceable document-start bundle, before navigation.
+	if err := p.rebuildBindingScript(); err != nil {
+		p.initialized(err)
+		_ = p.Close()
+		return
 	}
 
 	// Configure settings.
@@ -251,16 +241,8 @@ func (p *Platform) InvokeNavigationCompleted(sender *iCoreWebView2, isSuccess bo
 		phase = "failed"
 	}
 	p.Logger.Log(BackendName, "navigate", map[string]string{"phase": phase})
-	// Inject the bootstrap JS after each navigation.
-	var names []string
-	if p.BoundFuncs != nil {
-		names = p.BoundFuncs()
-	}
-	if len(names) == 0 {
-		return 0
-	}
-	js := bootstrapJS(names)
-	p.webview.ExecuteScript(js, 0)
+	// Reapply current proxies without resetting pending promises.
+	p.webview.ExecuteScript(p.bootstrapScript(), 0)
 	return 0
 }
 
