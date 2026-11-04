@@ -24,7 +24,46 @@ func fetchShimScript(handlers map[string]ResourceHandler) string {
 		schemes = append(schemes, scheme)
 	}
 	encoded, _ := json.Marshal(schemes)
-	return `(function(){const schemes=new Set(` + string(encoded) + `);const nativeFetch=window.fetch.bind(window);let next=0;const pending=new Map();window.__webviewFetchResolve=function(id,ok,p){const x=pending.get(id);if(!x)return;pending.delete(id);if(!ok){x.reject(new TypeError(p));return}const bin=atob(p.body||'');const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);x.resolve(new Response(bytes,{status:p.status,headers:p.headers}))};window.fetch=async function(input,init){const req=new Request(input,init);const scheme=new URL(req.url).protocol.slice(0,-1);if(!schemes.has(scheme))return nativeFetch(input,init);const bytes=new Uint8Array(await req.arrayBuffer());let bin='';for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);const id=++next;return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});window.webkit.messageHandlers.webviewBridge.postMessage(JSON.stringify({__webviewFetch:{id:id,url:req.url,method:req.method,headers:Object.fromEntries(req.headers),body:btoa(bin)}}))})}})();`
+	return `(function() {
+ const schemes = new Set(` + string(encoded) + `);
+ const nativeFetch = window.fetch.bind(window);
+ let next = 0;
+ const pending = new Map();
+ window.__webviewFetchResolve = function(id, ok, p) {
+  const x = pending.get(id);
+  if (!x) return;
+  pending.delete(id);
+  if (!ok) {
+   x.reject(new TypeError(p));
+   return;
+  }
+  const bin = atob(p.body || '');
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  x.resolve(new Response(bytes, {status: p.status, headers: p.headers}));
+ };
+ window.fetch = async function(input, init) {
+  const req = new Request(input, init);
+  const scheme = new URL(req.url).protocol.slice(0, -1);
+  if (!schemes.has(scheme)) return nativeFetch(input, init);
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const id = ++next;
+  return new Promise((resolve, reject) => {
+   pending.set(id, {resolve, reject});
+   window.webkit.messageHandlers.webviewBridge.postMessage(JSON.stringify({
+    __webviewFetch: {
+     id: id,
+     url: req.url,
+     method: req.method,
+     headers: Object.fromEntries(req.headers),
+     body: btoa(bin)
+    }
+   }));
+  });
+ };
+})();`
 }
 
 func (p *Platform) handleFetchShimMessage(raw string) bool {

@@ -40,7 +40,12 @@ func (a *MenuActions) Replace(items []MenuItem) []MenuItem {
 	}
 	return result
 }
-func (a *MenuActions) Close() { a.mu.Lock(); a.closed = true; a.generation++; a.mu.Unlock() }
+func (a *MenuActions) Close() {
+	a.mu.Lock()
+	a.closed = true
+	a.generation++
+	a.mu.Unlock()
+}
 
 // NormalizeMenuItems removes leading, trailing and repeated separators.
 func NormalizeMenuItems(items []MenuItem) []MenuItem {

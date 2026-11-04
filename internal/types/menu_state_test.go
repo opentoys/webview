@@ -6,7 +6,14 @@ import (
 )
 
 func TestNormalizeMenuItems(t *testing.T) {
-	input := []MenuItem{{ID: "leading", Separator: true}, {ID: "a"}, {ID: "s1", Separator: true}, {ID: "s2", Separator: true}, {ID: "b"}, {ID: "trailing", Separator: true}}
+	input := []MenuItem{
+		{ID: "leading", Separator: true},
+		{ID: "a"},
+		{ID: "s1", Separator: true},
+		{ID: "s2", Separator: true},
+		{ID: "b"},
+		{ID: "trailing", Separator: true},
+	}
 	got := NormalizeMenuItems(input)
 	if len(got) != 3 || got[0].ID != "a" || got[1].ID != "s1" || got[2].ID != "b" {
 		t.Fatalf("%#v", got)
@@ -23,7 +30,11 @@ func TestMenuActionsIndependentAndReentrant(t *testing.T) {
 	called := make(chan string, 8)
 	old := tray.Replace([]MenuItem{{Action: func() { called <- "old" }}})
 	contextItems := context.Replace([]MenuItem{{Action: func() { called <- "context" }}})
-	current := tray.Replace([]MenuItem{{Action: func() { tray.Replace(nil); tray.Close(); called <- "current" }}})
+	current := tray.Replace([]MenuItem{{Action: func() {
+		tray.Replace(nil)
+		tray.Close()
+		called <- "current"
+	}}})
 	old[0].Action()
 	current[0].Action()
 	contextItems[0].Action()

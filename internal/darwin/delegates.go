@@ -89,7 +89,10 @@ func registerDelegateClasses() {
 					p.applyMenus(p.pendingMenus)
 				}
 			}},
-			{Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"), Fn: terminateAfterLastWindowClosed},
+			{
+				Cmd: objc.RegisterName("applicationShouldTerminateAfterLastWindowClosed:"),
+				Fn:  terminateAfterLastWindowClosed,
+			},
 			{Cmd: objc.RegisterName("draggingEntered:"), Fn: draggingEntered},
 			{Cmd: objc.RegisterName("prepareForDragOperation:"), Fn: prepareForDragOperation},
 			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: draggingUpdated},
@@ -381,9 +384,15 @@ func registerDelegateClasses() {
 		[]objc.MethodDef{
 			{Cmd: objc.RegisterName("webView:navigationAction:didBecomeDownload:"), Fn: downloadDidBecome},
 			{Cmd: objc.RegisterName("webView:navigationResponse:didBecomeDownload:"), Fn: downloadDidBecomeFromResponse},
-			{Cmd: objc.RegisterName("webView:decidePolicyForNavigationResponse:decisionHandler:"), Fn: decidePolicyForNavigationResponse},
+			{
+				Cmd: objc.RegisterName("webView:decidePolicyForNavigationResponse:decisionHandler:"),
+				Fn:  decidePolicyForNavigationResponse,
+			},
 			{Cmd: objc.RegisterName("webView:didFinishNavigation:"), Fn: didFinishNavigation},
-			{Cmd: objc.RegisterName("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"), Fn: decideDestination},
+			{
+				Cmd: objc.RegisterName("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"),
+				Fn:  decideDestination,
+			},
 			{Cmd: objc.RegisterName("downloadDidFinish:"), Fn: downloadDidFinish},
 			{Cmd: objc.RegisterName("download:didFailWithError:"), Fn: downloadDidFail},
 		},

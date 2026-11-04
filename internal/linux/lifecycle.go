@@ -67,7 +67,10 @@ func applicationThread(fn func()) {
 		return
 	}
 	done := make(chan struct{})
-	dispatchMain(func() { fn(); close(done) })
+	dispatchMain(func() {
+		fn()
+		close(done)
+	})
 	select {
 	case <-done:
 	case <-applicationDone:

@@ -18,7 +18,10 @@ import (
 func dialogHostProbe(mode string) error {
 	if mode == "thread" {
 		result := make(chan error, 1)
-		go func() { _, err := ChooseDir(); result <- err }()
+		go func() {
+			_, err := ChooseDir()
+			result <- err
+		}()
 		if err := <-result; !errors.Is(err, ErrDialogMainThread) {
 			return fmt.Errorf("wrong thread: %v", err)
 		}
@@ -30,7 +33,11 @@ func dialogHostProbe(mode string) error {
 		choose = func() (string, error) { return ChooseFile(FileFilter{Name: "Text", Extensions: []string{"txt"}}) }
 	case "save":
 		choose = func() (string, error) {
-			return SaveFile(FileDialogOptions{Title: "Standalone save verification", Directory: os.TempDir(), Filename: "webview-dialog-probe.txt"})
+			return SaveFile(FileDialogOptions{
+				Title:     "Standalone save verification",
+				Directory: os.TempDir(),
+				Filename:  "webview-dialog-probe.txt",
+			})
 		}
 	}
 	cancelDone := make(chan struct{})
@@ -50,7 +57,10 @@ func dialogHostProbe(mode string) error {
 	}()
 	defer close(cancelDone)
 	if mode == "quit" {
-		go func() { time.Sleep(500 * time.Millisecond); _ = Quit() }()
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			_ = Quit()
+		}()
 		if _, err := choose(); !errors.Is(err, ErrApplicationStopped) {
 			return fmt.Errorf("quit: %v", err)
 		}
@@ -61,7 +71,11 @@ func dialogHostProbe(mode string) error {
 	}
 	ready := make(chan struct{})
 	app.runNative = func(start func() error, done <-chan struct{}) error {
-		return runNativeApplication(func() error { err := start(); close(ready); return err }, done)
+		return runNativeApplication(func() error {
+			err := start()
+			close(ready)
+			return err
+		}, done)
 	}
 	result := make(chan error, 1)
 	go func() {

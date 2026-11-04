@@ -12,7 +12,12 @@ func TestExecutableProxies(t *testing.T) {
 	if err != nil {
 		t.Skip("node is required to execute JavaScript tests")
 	}
-	object := Proxies([]Binding{{Name: "app", Methods: []string{"Greet", "Old", "__proto__"}}, {Name: "app.Greet"}, {Name: "__proto__", Methods: []string{"Say"}}, {Name: "quote\".\n"}})
+	object := Proxies([]Binding{
+		{Name: "app", Methods: []string{"Greet", "Old", "__proto__"}},
+		{Name: "app.Greet"},
+		{Name: "__proto__", Methods: []string{"Say"}},
+		{Name: "quote\".\n"},
+	})
 	replacement := Proxies([]Binding{{Name: "app", Methods: []string{"New"}}})
 	function := Proxies([]Binding{{Name: "app"}})
 	script := `const assert = require('node:assert/strict');
@@ -36,22 +41,30 @@ func TestExecutableProxies(t *testing.T) {
  assert.equal(typeof window['app.Greet'],'undefined');
  assert.equal(Object.hasOwn(window,'__proto__'),false);
  assert.equal(Object.hasOwn(window,'quote".\n'),false);
- transport.resolve(1,'done'); transport.resolve(2,'literal');
- assert.equal(await first,'done'); assert.equal(await literal,'literal');
+ transport.resolve(1,'done');
+ transport.resolve(2,'literal');
+ assert.equal(await first,'done');
+ assert.equal(await literal,'literal');
  const old = original.Old();
  assert.deepEqual(messages.pop(),{id:3,name:'app',method:'Old',args:[]});
- transport.reject(3,'removed'); await assert.rejects(old,/removed/);
+ transport.reject(3,'removed');
+ await assert.rejects(old,/removed/);
  ` + function + `
  assert.equal(typeof app,'function');
- const fn = app(42); assert.deepEqual(messages.pop(),{id:4,name:'app',args:[42]});
- transport.resolve(4,42); assert.equal(await fn,42);
+ const fn = app(42);
+ assert.deepEqual(messages.pop(),{id:4,name:'app',args:[42]});
+ transport.resolve(4,42);
+ assert.equal(await fn,42);
  ` + object + `
  assert.equal(typeof app.Greet,'function');
  window.app = 'page owned';
  ` + Proxies(nil) + `
  assert.equal(window.app,'page owned');
  assert.deepEqual(Object.keys(transport._pending),[]);
- })().catch(err=>{console.error(err);process.exitCode=1});`
+ })().catch(err=>{
+ console.error(err);
+ process.exitCode=1
+});`
 	cmd := exec.Command(node, "-")
 	cmd.Stdin = strings.NewReader(script)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -65,9 +78,14 @@ func TestExecutableReadOnlyProperties(t *testing.T) {
 		t.Skip("node unavailable")
 	}
 	src := Proxies([]Binding{{Name: "app", Methods: []string{"Greet"}, Properties: map[string]json.RawMessage{
-		"Name": json.RawMessage(`"张三"`), "nested": json.RawMessage(`{"__proto__":{"safe":true},"list":[1,2]}`), "__proto__": json.RawMessage(`"own"`), "quote\".": json.RawMessage(`null`),
+		"Name":      json.RawMessage(`"张三"`),
+		"nested":    json.RawMessage(`{"__proto__":{"safe":true},"list":[1,2]}`),
+		"__proto__": json.RawMessage(`"own"`),
+		"quote\".":  json.RawMessage(`null`),
 	}}})
-	script := `'use strict';const assert=require('node:assert/strict');global.window=global;` + src + `
+	script := `'use strict';
+ const assert=require('node:assert/strict');
+ global.window=global;` + src + `
  assert.equal(app.Name,'张三');
  assert.equal(app['__proto__'],'own');
  assert.equal(Object.getPrototypeOf(app),Object.prototype);
@@ -79,8 +97,13 @@ func TestExecutableReadOnlyProperties(t *testing.T) {
  assert.throws(()=>{app.nested.list.push(3)},TypeError);
  assert.throws(()=>{app.nested.__proto__.safe=false},TypeError);
  assert.equal(typeof app.Greet,'function');
- ` + Proxies([]Binding{{Name: "app", Methods: []string{}, Properties: map[string]json.RawMessage{"Name": json.RawMessage(`"李四"`)}}}) + `
- assert.equal(app.Name,'李四');assert.equal(typeof app.Greet,'undefined');
+ ` + Proxies([]Binding{{
+		Name:       "app",
+		Methods:    []string{},
+		Properties: map[string]json.RawMessage{"Name": json.RawMessage(`"李四"`)},
+	}}) + `
+ assert.equal(app.Name,'李四');
+ assert.equal(typeof app.Greet,'undefined');
  ` + Proxies(nil) + `assert.equal(typeof window.app,'undefined');`
 	cmd := exec.Command(node, "-")
 	cmd.Stdin = strings.NewReader(script)

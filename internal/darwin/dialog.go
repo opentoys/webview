@@ -56,7 +56,10 @@ func ShowDialog(kind types.DialogKind, opts types.FileDialogOptions, stopped fun
 		}
 		standalonePanel = panel
 		standaloneActive.Store(true)
-		defer func() { standalonePanel = 0; standaloneActive.Store(false) }()
+		defer func() {
+			standalonePanel = 0
+			standaloneActive.Store(false)
+		}()
 		applyFileDialogOptions(panel, opts)
 		if panel.Send(runModalSel) != 1 {
 			err = types.ErrDialogCancelled

@@ -53,7 +53,10 @@ func ShowDialog(kind types.DialogKind, opts types.FileDialogOptions, stopped fun
 			gtkFileChooserSetCurrentName(dlg, opts.Filename)
 		}
 		standaloneChooser = dlg
-		defer func() { standaloneChooser = 0; standaloneResponse = nil }()
+		defer func() {
+			standaloneChooser = 0
+			standaloneResponse = nil
+		}()
 		if runFallbackDialog(dlg) != gtkResponseAccept {
 			err = types.ErrDialogCancelled
 			return

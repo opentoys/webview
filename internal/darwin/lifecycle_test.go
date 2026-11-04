@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/bridgejs"
 	"github.com/opentoys/webview/internal/types"
 )
 
@@ -37,9 +38,13 @@ func TestIndependentNativeLifetimes(t *testing.T) {
 		}
 		messages := make(chan string, 8)
 		p.MessageFunc = func(body string) { messages <- body }
-		p.BoundFuncs = func() []string { return []string{name} }
+		p.BindingScript = func() string { return bridgejs.Proxies(bridgejs.Functions([]string{name})) }
 		p.InterceptResource("lifetime", func(req ResourceRequest, respond func(*ResourceResponse)) {
-			respond(&ResourceResponse{StatusCode: 200, Headers: http.Header{"Content-Type": {"text/html"}}, Body: []byte(fmt.Sprintf(`<!doctype html><input id="state" value="%s"><script>window.initialized=(window.initialized||0)+1;webkit.messageHandlers.webviewBridge.postMessage('%s:'+typeof %s)</script>`, name, name, name))})
+			respond(&ResourceResponse{
+				StatusCode: 200,
+				Headers:    http.Header{"Content-Type": {"text/html"}},
+				Body:       []byte(fmt.Sprintf(`<!doctype html><input id="state" value="%s"><script>window.initialized=(window.initialized||0)+1;webkit.messageHandlers.webviewBridge.postMessage('%s:'+typeof %s)</script>`, name, name, name)),
+			})
 		})
 		if err := p.Navigate("lifetime://window/index.html"); err != nil {
 			t.Fatal(err)

@@ -83,16 +83,34 @@ func TestDispatchDebugLogIsSummaryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Chrome{Logger: debuglog.New(w), Debug: true, attached: make(chan struct{}), schemeHandlers: map[string]types.ResourceHandler{"app": func(types.ResourceRequest, func(*types.ResourceResponse)) {}}}
-	c.dispatch(cdpMsg{Method: "Runtime.consoleAPICalled", Params: json.RawMessage(`{"type":"log","args":[{"value":"const secret = 'do not print'"}]}`)})
-	c.dispatch(cdpMsg{Method: "Fetch.requestPaused", Params: json.RawMessage(`{"request":{"method":"GET","url":"app://host/index.html?token=private"}}`)})
+	c := &Chrome{
+		Logger:         debuglog.New(w),
+		Debug:          true,
+		attached:       make(chan struct{}),
+		schemeHandlers: map[string]types.ResourceHandler{"app": func(types.ResourceRequest, func(*types.ResourceResponse)) {}},
+	}
+	c.dispatch(cdpMsg{
+		Method: "Runtime.consoleAPICalled",
+		Params: json.RawMessage(`{"type":"log","args":[{"value":"const secret = 'do not print'"}]}`),
+	})
+	c.dispatch(cdpMsg{
+		Method: "Fetch.requestPaused",
+		Params: json.RawMessage(`{"request":{"method":"GET","url":"app://host/index.html?token=private"}}`),
+	})
 	_ = w.Close()
 	out, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(out)
-	for _, want := range []string{`"backend":"chrome"`, `"event":"dispatch"`, `"cdp_event":"Runtime.consoleAPICalled"`, `"params_bytes":"`, `"url":"app://host/index.html"`, `"intercepted":"true"`} {
+	for _, want := range []string{
+		`"backend":"chrome"`,
+		`"event":"dispatch"`,
+		`"cdp_event":"Runtime.consoleAPICalled"`,
+		`"params_bytes":"`,
+		`"url":"app://host/index.html"`,
+		`"intercepted":"true"`,
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("debug log missing %q: %s", want, got)
 		}
@@ -104,16 +122,6 @@ func TestDispatchDebugLogIsSummaryOnly(t *testing.T) {
 	}
 }
 
-func TestStubJSPerName(t *testing.T) {
-	s := stubJS([]string{"foo", "bar"})
-	if !strings.Contains(s, `\"name\":\"foo\"`) || !strings.Contains(s, `\"name\":\"bar\"`) {
-		t.Errorf("stubJS missing name stubs:\n%s", s)
-	}
-	if !strings.Contains(s, "webviewBridge.call") {
-		t.Errorf("stubJS must call webviewBridge.call:\n%s", s)
-	}
-}
-
 func TestMainTargetLifecycleFiltering(t *testing.T) {
 	c := &Chrome{sessionID: "main-session", targetID: "main-target"}
 	tests := []struct {
@@ -122,8 +130,18 @@ func TestMainTargetLifecycleFiltering(t *testing.T) {
 		params string
 		want   bool
 	}{
-		{"main target detached", "Target.detachedFromTarget", `{"sessionId":"main-session","targetId":"main-target"}`, true},
-		{"transient target detached", "Target.detachedFromTarget", `{"sessionId":"other-session","targetId":"other-target"}`, false},
+		{
+			"main target detached",
+			"Target.detachedFromTarget",
+			`{"sessionId":"main-session","targetId":"main-target"}`,
+			true,
+		},
+		{
+			"transient target detached",
+			"Target.detachedFromTarget",
+			`{"sessionId":"other-session","targetId":"other-target"}`,
+			false,
+		},
 		{"main target destroyed", "Target.targetDestroyed", `{"targetId":"main-target"}`, true},
 		{"worker destroyed", "Target.targetDestroyed", `{"targetId":"worker-target"}`, false},
 		{"malformed event", "Target.targetDestroyed", `{`, false},
@@ -169,7 +187,7 @@ func TestInitBeforeRunQueuesScripts(t *testing.T) {
 }
 
 func TestBindingScriptCallback(t *testing.T) {
-	c := &Chrome{BindingScript: func() string { return "current-object-methods" }, BoundFuncs: func() []string { return []string{"legacy"} }}
+	c := &Chrome{BindingScript: func() string { return "current-object-methods" }}
 	if got := c.bindingScript(); got != "current-object-methods" {
 		t.Fatal(got)
 	}

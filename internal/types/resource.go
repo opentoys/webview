@@ -2,6 +2,7 @@ package types
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -49,4 +50,17 @@ func MayHaveRequestBody(method string, headers http.Header) bool {
 	}
 
 	return false
+}
+
+// LocalhostURL builds the secure-context URL used by Chrome and WebView2.
+// Preserve the existing decoded path and fragment behavior.
+func LocalhostURL(scheme string, u *url.URL) string {
+	out := "https://" + scheme + ".localhost/" + strings.TrimPrefix(u.Path, "/")
+	if u.RawQuery != "" {
+		out += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		out += "#" + u.Fragment
+	}
+	return out
 }

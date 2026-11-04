@@ -42,7 +42,11 @@ func main() {
 			{ID: "directory", Label: "Choose directory…", Action: func() { report(webview.ChooseDir()) }},
 			{ID: "open", Label: "Open file…", Action: func() { report(webview.ChooseFile()) }},
 			{ID: "save", Label: "Save file…", Action: func() {
-				report(webview.SaveFile(webview.FileDialogOptions{Title: "Save report", Filename: "report.txt", Filters: []webview.FileFilter{{Name: "Text", Extensions: []string{"txt"}}}}))
+				report(webview.SaveFile(webview.FileDialogOptions{
+					Title:    "Save report",
+					Filename: "report.txt",
+					Filters:  []webview.FileFilter{{Name: "Text", Extensions: []string{"txt"}}},
+				}))
 			}},
 			{ID: "quit", Label: "Quit", Action: func() {
 				if err := webview.Quit(); err != nil {

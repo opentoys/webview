@@ -72,7 +72,6 @@ type Platform struct {
 	bindingScriptGeneration uint64
 	bindingScriptHandlers   map[*scriptCompletedHandler]struct{}
 	BindingScript           func() string
-	BoundFuncs              func() []string
 
 	// Options.
 	Debug     bool

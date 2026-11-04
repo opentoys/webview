@@ -167,7 +167,11 @@ func readAcceptAndFilter(panel objc.ID) {
 	}
 }
 
-func (p *Platform) SetAccept(v string) { p.acceptMu.Lock(); p.acceptVal = v; p.acceptMu.Unlock() }
+func (p *Platform) SetAccept(v string) {
+	p.acceptMu.Lock()
+	p.acceptVal = v
+	p.acceptMu.Unlock()
+}
 func (p *Platform) readAcceptAndFilter(panel objc.ID) {
 	p.acceptMu.Lock()
 	accept := p.acceptVal

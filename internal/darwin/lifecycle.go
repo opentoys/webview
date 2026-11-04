@@ -52,7 +52,10 @@ func StopApplication() error {
 	mainThread(func() {
 		app := objc.ID(nsAppClass).Send(sharedApplicationSel)
 		app.Send(objc.RegisterName("stop:"), objc.ID(0))
-		event := objc.ID(objc.GetClass("NSEvent")).Send(objc.RegisterName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), uintptr(15), struct{ X, Y float64 }{}, uintptr(0), float64(0), int64(0), objc.ID(0), int16(0), int64(0), int64(0))
+		event := objc.ID(objc.GetClass("NSEvent")).Send(
+			objc.RegisterName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
+			uintptr(15), struct{ X, Y float64 }{}, uintptr(0), float64(0), int64(0), objc.ID(0), int16(0), int64(0), int64(0),
+		)
 		app.Send(objc.RegisterName("postEvent:atStart:"), event, true)
 	})
 	if objc.ID(nsThreadClass).Send(currentThreadSel) != hostThread {
@@ -81,10 +84,16 @@ func NewTray(opts types.SystrayOptions) (*Tray, error) {
 }
 func (t *Tray) Update(opts types.SystrayOptions) error {
 	var err error
-	mainThread(func() { t.owner.trayOptions = &opts; err = t.owner.applySystray() })
+	mainThread(func() {
+		t.owner.trayOptions = &opts
+		err = t.owner.applySystray()
+	})
 	return err
 }
-func (t *Tray) Close() error { mainThread(t.owner.removeSystray); return nil }
+func (t *Tray) Close() error {
+	mainThread(t.owner.removeSystray)
+	return nil
+}
 
 // primary tray button actions have a separate target from menu-item actions.
 var trayButtons = map[objc.ID]*Platform{}

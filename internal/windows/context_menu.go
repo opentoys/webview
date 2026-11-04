@@ -89,7 +89,10 @@ var nativeMenuEventTable = [4]ComProc{
 		}
 		return uintptr(refs)
 	}),
-	NewComProc(func(self *nativeMenuEvent, sender, args uintptr) uintptr { self.fn(args); return 0 }),
+	NewComProc(func(self *nativeMenuEvent, sender, args uintptr) uintptr {
+		self.fn(args)
+		return 0
+	}),
 }
 
 func newNativeMenuEvent(iid string, fn func(uintptr)) *nativeMenuEvent {
@@ -184,7 +187,14 @@ func (p *Platform) closeContextMenu() {
 	}
 }
 func (p *Platform) filterContextMenu(collection uintptr) {
-	names := map[types.MenuItemRole]string{types.MenuItemRoleUndo: "undo", types.MenuItemRoleRedo: "redo", types.MenuItemRoleCut: "cut", types.MenuItemRoleCopy: "copy", types.MenuItemRolePaste: "paste", types.MenuItemRoleSelectAll: "selectAll"}
+	names := map[types.MenuItemRole]string{
+		types.MenuItemRoleUndo:      "undo",
+		types.MenuItemRoleRedo:      "redo",
+		types.MenuItemRoleCut:       "cut",
+		types.MenuItemRoleCopy:      "copy",
+		types.MenuItemRolePaste:     "paste",
+		types.MenuItemRoleSelectAll: "selectAll",
+	}
 	count := int(menuUint(collection, 3))
 	for i := count - 1; i >= 0; i-- {
 		var item uintptr

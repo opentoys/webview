@@ -97,7 +97,7 @@ func (p *Platform) Init(js string) error {
 // Caller must hold p.mu.
 func (p *Platform) rebuildScriptsLocked() {
 	p.ucc.Send(removeAllUserScriptsSel)
-	if p.BoundFuncs != nil || p.BindingScript != nil {
+	if p.BindingScript != nil {
 		p.injectBootstrapLocked()
 	}
 	if len(p.schemeHandlers) > 0 {
@@ -114,12 +114,4 @@ func addWKUserScript(ucc objc.ID, src string) {
 	s = s.Send(initWithSourceInjectionTimeForMainFrameOnlySel, nsString(src), wkInjectionTimeAtDocumentStart, true)
 	ucc.Send(addUserScriptSel, s)
 	s.Send(releaseSel)
-}
-
-// boundFuncNames returns the current bound function names from BoundFuncs.
-func (p *Platform) boundFuncNames() []string {
-	if p.BoundFuncs != nil {
-		return p.BoundFuncs()
-	}
-	return nil
 }

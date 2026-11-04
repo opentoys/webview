@@ -5,10 +5,12 @@ package darwin
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ebitengine/purego/objc"
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/ebitengine/purego/objc"
+	"github.com/opentoys/webview/internal/bridgejs"
 )
 
 func TestInitAndEvalExecution(t *testing.T) {
@@ -19,7 +21,7 @@ func TestInitAndEvalExecution(t *testing.T) {
 	startAppHost()
 	messages := make(chan string, 16)
 	p.MessageFunc = func(body string) { messages <- body }
-	p.BoundFuncs = func() []string { return []string{"nativeProbe"} }
+	p.BindingScript = func() string { return bridgejs.Proxies(bridgejs.Functions([]string{"nativeProbe"})) }
 	p.InterceptResource("app", func(ResourceRequest, func(*ResourceResponse)) {})
 	if err := p.Eval("void 0"); err == nil {
 		t.Fatal("Eval before Run silently succeeded")
@@ -31,7 +33,10 @@ func TestInitAndEvalExecution(t *testing.T) {
 	p.SetHTML(html)
 	run := make(chan error, 1)
 	go func() { run <- p.Run() }()
-	defer func() { p.Close(); <-run }()
+	defer func() {
+		p.Close()
+		<-run
+	}()
 	expect := func(want string) {
 		t.Helper()
 		select {
@@ -105,7 +110,10 @@ func TestInitAndEvalAlertDispatch(t *testing.T) {
 	p.SetHTML(`<!doctype html><script>webkit.messageHandlers.webviewBridge.postMessage('loaded')</script>`)
 	run := make(chan error, 1)
 	go func() { run <- p.Run() }()
-	defer func() { p.Close(); <-run }()
+	defer func() {
+		p.Close()
+		<-run
+	}()
 	select {
 	case <-loaded:
 	case <-time.After(5 * time.Second):
@@ -139,7 +147,7 @@ func TestInitPromiseSurvivesHTMLBootstrap(t *testing.T) {
 	}
 	startAppHost()
 	reports := make(chan string, 1)
-	p.BoundFuncs = func() []string { return []string{"nativeProbe", "reportInit"} }
+	p.BindingScript = func() string { return bridgejs.Proxies(bridgejs.Functions([]string{"nativeProbe", "reportInit"})) }
 	p.MessageFunc = func(body string) {
 		var message struct {
 			ID   int      `json:"id"`
@@ -163,7 +171,10 @@ func TestInitPromiseSurvivesHTMLBootstrap(t *testing.T) {
 	p.SetHTML(`<!doctype html><html><body>Init promise regression</body></html>`)
 	run := make(chan error, 1)
 	go func() { run <- p.Run() }()
-	defer func() { p.Close(); <-run }()
+	defer func() {
+		p.Close()
+		<-run
+	}()
 	select {
 	case got := <-reports:
 		if got != "init:ok" {

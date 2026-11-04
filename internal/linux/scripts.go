@@ -69,11 +69,7 @@ func (p *gtk) RefreshBindings() error {
 }
 
 func (p *gtk) bootstrapScript() string {
-	var names []string
-	if p.BoundFuncs != nil {
-		names = p.BoundFuncs()
-	}
-	src := bootstrapJS(names)
+	src := bootstrapJS()
 	if p.BindingScript != nil {
 		src += p.BindingScript()
 	}

@@ -145,7 +145,7 @@ func (p *Platform) prependBootstrap(html string) string {
 }
 
 func (p *Platform) bootstrapScript() string {
-	s := bootstrapJS(p.boundFuncNames())
+	s := bootstrapJS()
 	if p.BindingScript != nil {
 		s += p.BindingScript()
 	}

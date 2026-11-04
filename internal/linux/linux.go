@@ -94,7 +94,6 @@ type gtk struct {
 	// Callback wiring (set by buildPlatform before Run).
 	MessageFunc   func(string)
 	BindingScript func() string
-	BoundFuncs    func() []string
 
 	// Options.
 	Debug     bool
@@ -220,7 +219,10 @@ func (p *gtk) Close() error {
 	select {
 	case <-applicationReady:
 		if applicationErr == nil {
-			applicationThread(func() { p.closeExtendedMenus(); p.destroy() })
+			applicationThread(func() {
+				p.closeExtendedMenus()
+				p.destroy()
+			})
 		}
 	default:
 		p.extensionsClosed = true

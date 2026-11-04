@@ -26,12 +26,15 @@ func bootstrapJS() string {
  }
  setup();
  if (!window.webviewBridge || typeof window.webviewBridge !== "object" || typeof window.webviewBridge.call !== "function") {
-  var t = setInterval(function() { setup(); if (window.webviewBridge && typeof window.webviewBridge === "object" && typeof window.webviewBridge.call === "function") clearInterval(t); }, 50);
+  var t = setInterval(function() {
+   setup();
+   if (window.webviewBridge && typeof window.webviewBridge === "object" && typeof window.webviewBridge.call === "function") {
+    clearInterval(t);
+   }
+  }, 50);
  }
 })();`
 }
-
-func stubJS(names []string) string { return bridgejs.Proxies(bridgejs.Functions(names)) }
 
 // injectBridge (re)installs per-name stubs for the functions bound so far.
 func (c *Chrome) injectBridge() {
@@ -42,10 +45,7 @@ func (c *Chrome) bindingScript() string {
 	if c.BindingScript != nil {
 		return c.BindingScript()
 	}
-	if c.BoundFuncs != nil {
-		return stubJS(c.BoundFuncs())
-	}
-	return stubJS(nil)
+	return bridgejs.Proxies(nil)
 }
 
 // RefreshBindings replaces document-start scripts and updates the live page.

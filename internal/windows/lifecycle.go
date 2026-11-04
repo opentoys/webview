@@ -45,7 +45,12 @@ func startApplication() error {
 			})
 			instance, _, _ := pGetModuleHandleW.Call(0)
 			name := utf16PtrFromStr("GoWebviewApplication")
-			wc := WNDCLASSEXW{CbSize: uint32(unsafe.Sizeof(WNDCLASSEXW{})), LpfnWndProc: proc, HInstance: instance, LpszClassName: name}
+			wc := WNDCLASSEXW{
+				CbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
+				LpfnWndProc:   proc,
+				HInstance:     instance,
+				LpszClassName: name,
+			}
 			pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 			applicationHWND, _, err = pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0, 0, 0, 0, 0, instance, 0)
 			runtime.KeepAlive(name)
@@ -83,7 +88,10 @@ func applicationThread(fn func()) {
 		return
 	}
 	done := make(chan struct{})
-	applicationDispatch.push(func() { fn(); close(done) })
+	applicationDispatch.push(func() {
+		fn()
+		close(done)
+	})
 	pPostMessageW.Call(applicationHWND, WM_APP, 0, 0)
 	select {
 	case <-done:
@@ -200,11 +208,18 @@ func (p *Platform) trayWndproc(hwnd, msg, wp, lp uintptr) uintptr {
 }
 func (t *Tray) Update(opts types.SystrayOptions) error {
 	var err error
-	applicationThread(func() { t.owner.trayOptions = &opts; err = t.owner.applySystray() })
+	applicationThread(func() {
+		t.owner.trayOptions = &opts
+		err = t.owner.applySystray()
+	})
 	return err
 }
 func (t *Tray) Close() error {
-	applicationThread(func() { t.owner.removeSystray(); pDestroyWindow.Call(t.owner.hwnd); t.owner.hwnd = 0 })
+	applicationThread(func() {
+		t.owner.removeSystray()
+		pDestroyWindow.Call(t.owner.hwnd)
+		t.owner.hwnd = 0
+	})
 	return nil
 }
 
@@ -236,7 +251,12 @@ func registerNativeClass() *uint16 {
 			return result
 		})
 		instance, _, _ := pGetModuleHandleW.Call(0)
-		wc := WNDCLASSEXW{CbSize: uint32(unsafe.Sizeof(WNDCLASSEXW{})), LpfnWndProc: proc, HInstance: instance, LpszClassName: nativeClassName}
+		wc := WNDCLASSEXW{
+			CbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
+			LpfnWndProc:   proc,
+			HInstance:     instance,
+			LpszClassName: nativeClassName,
+		}
 		pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	})
 	return nativeClassName

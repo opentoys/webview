@@ -122,7 +122,11 @@ func (s *Systray) Close() error {
 		return nil
 	}
 	s.closed = true
-	defer func() { app.registryMu.Lock(); delete(app.trays, s); app.registryMu.Unlock() }()
+	defer func() {
+		app.registryMu.Lock()
+		delete(app.trays, s)
+		app.registryMu.Unlock()
+	}()
 	s.actions.Close()
 	if s.p != nil {
 		return s.p.Close()

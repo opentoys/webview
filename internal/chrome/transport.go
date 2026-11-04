@@ -159,12 +159,21 @@ func (c *Chrome) dispatch(m cdpMsg) {
 			} `json:"request"`
 		}
 		if json.Unmarshal(m.Params, &p) == nil {
-			c.Logger.Log(BackendName, "dispatch", map[string]string{"cdp_event": m.Method, "method": p.Request.Method, "url": debuglog.URL(p.Request.URL), "intercepted": fmt.Sprintf("%t", c.isInterceptedURL(p.Request.URL))})
+			c.Logger.Log(BackendName, "dispatch", map[string]string{
+				"cdp_event":   m.Method,
+				"method":      p.Request.Method,
+				"url":         debuglog.URL(p.Request.URL),
+				"intercepted": fmt.Sprintf("%t", c.isInterceptedURL(p.Request.URL)),
+			})
 		}
 		go c.handleFetch(m.Params)
 	case "Target.targetDestroyed", "Target.detachedFromTarget":
 		main := c.isMainTargetClosed(m.Method, m.Params)
-		c.Logger.Log(BackendName, "dispatch", map[string]string{"cdp_event": m.Method, "is_main_target": fmt.Sprintf("%t", main), "action": map[bool]string{true: "close", false: "ignored"}[main]})
+		c.Logger.Log(BackendName, "dispatch", map[string]string{
+			"cdp_event":      m.Method,
+			"is_main_target": fmt.Sprintf("%t", main),
+			"action":         map[bool]string{true: "close", false: "ignored"}[main],
+		})
 		if main {
 			// The app window was closed. Terminate the remaining browser process
 			// so Run returns once cmd.Wait unblocks.

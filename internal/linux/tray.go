@@ -266,7 +266,10 @@ func (t *linuxTray) closeNative() {
 	delete(trayBus.trays, t.id)
 }
 func (t *linuxTray) close() error {
-	err := trayBus.do(func() error { t.closeNative(); return nil })
+	err := trayBus.do(func() error {
+		t.closeNative()
+		return nil
+	})
 	if err == errBusStopped {
 		// stop drains every registered tray before signaling completion.
 		trayBus.mu.Lock()

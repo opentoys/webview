@@ -138,12 +138,5 @@ func (c *Chrome) rewriteSchemeURL(rawURL string) string {
 	if err != nil {
 		return rawURL
 	}
-	out := "https://" + u.Scheme + ".localhost/" + strings.TrimPrefix(u.Path, "/")
-	if u.RawQuery != "" {
-		out += "?" + u.RawQuery
-	}
-	if u.Fragment != "" {
-		out += "#" + u.Fragment
-	}
-	return out
+	return types.LocalhostURL(u.Scheme, u)
 }

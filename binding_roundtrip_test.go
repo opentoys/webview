@@ -85,10 +85,25 @@ func exerciseObjectBackend(t *testing.T, p Platform, b *bridge) {
 	bind(struct{ Version string }{Version: "struct"})
 	eval(`report(app.Version + ':' + Object.isFrozen(app))`)
 	expect("struct:true")
-	values := map[string]any{"version": "1.0", "nested": map[string]any{"n": 1}, "greet": func() string { return "map function" }}
+	values := map[string]any{
+		"version": "1.0",
+		"nested":  map[string]any{"n": 1},
+		"greet":   func() string { return "map function" },
+	}
 	bind(values)
 	values["version"] = "changed"
-	eval(`(()=>{'use strict';let readonly=false;try{app.version='other'}catch(e){readonly=e instanceof TypeError}report(app.version+':'+readonly+':'+Object.isFrozen(app.nested));})();app.greet().then(report);void 0`)
+	eval(`(() => {
+ 'use strict';
+ let readonly = false;
+ try {
+  app.version = 'other';
+ } catch (e) {
+  readonly = e instanceof TypeError;
+ }
+ report(app.version + ':' + readonly + ':' + Object.isFrozen(app.nested));
+})();
+app.greet().then(report);
+void 0`)
 	expect("1.0:true:true")
 	expect("map function")
 	if err := p.Navigate("data:text/html," + url.PathEscape(`<!doctype html><script>report(app.version+':'+Object.isFrozen(app.nested));app.greet().then(report)</script>`)); err != nil {
@@ -103,7 +118,11 @@ func exerciseObjectBackend(t *testing.T, p Platform, b *bridge) {
 			close(release)
 		}
 	}()
-	if err := w.Bind("slow", func() string { close(entered); <-release; return "finished" }); err != nil {
+	if err := w.Bind("slow", func() string {
+		close(entered)
+		<-release
+		return "finished"
+	}); err != nil {
 		t.Fatal(err)
 	}
 	eval(`window.waiting=slow(); void 0`)

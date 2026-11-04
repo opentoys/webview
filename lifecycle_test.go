@@ -17,10 +17,22 @@ type lifecyclePlatform struct {
 	request                      func()
 }
 
-func (p *lifecyclePlatform) Start() error                 { p.starts.Add(1); return p.startErr }
-func (p *lifecyclePlatform) Close() error                 { p.closes.Add(1); return nil }
-func (p *lifecyclePlatform) Show() error                  { p.shows.Add(1); return nil }
-func (p *lifecyclePlatform) Hidden() error                { p.hides.Add(1); return nil }
+func (p *lifecyclePlatform) Start() error {
+	p.starts.Add(1)
+	return p.startErr
+}
+func (p *lifecyclePlatform) Close() error {
+	p.closes.Add(1)
+	return nil
+}
+func (p *lifecyclePlatform) Show() error {
+	p.shows.Add(1)
+	return nil
+}
+func (p *lifecyclePlatform) Hidden() error {
+	p.hides.Add(1)
+	return nil
+}
 func (p *lifecyclePlatform) SetCloseRequest(fn func())    { p.request = fn }
 func (p *lifecyclePlatform) SetInitialHidden(hidden bool) { p.initialHidden = hidden }
 
@@ -29,8 +41,14 @@ type lifecycleTray struct {
 	closes atomic.Int32
 }
 
-func (p *lifecycleTray) Update(opts SystrayOptions) error { p.opts = opts; return nil }
-func (p *lifecycleTray) Close() error                     { p.closes.Add(1); return nil }
+func (p *lifecycleTray) Update(opts SystrayOptions) error {
+	p.opts = opts
+	return nil
+}
+func (p *lifecycleTray) Close() error {
+	p.closes.Add(1)
+	return nil
+}
 
 func isolatedApplication(t *testing.T) {
 	t.Helper()
@@ -45,7 +63,10 @@ func isolatedApplication(t *testing.T) {
 	}
 	app.stopNative = func() error { return nil }
 	app.makeTray = func(opts SystrayOptions) (trayBackend, error) { return &lifecycleTray{opts: opts}, nil }
-	t.Cleanup(func() { _ = Quit(); app = previous })
+	t.Cleanup(func() {
+		_ = Quit()
+		app = previous
+	})
 }
 func pendingWindow(p *lifecyclePlatform) *W {
 	w := &W{p: p, bridge: newBridge()}
@@ -69,7 +90,11 @@ func running(t *testing.T) <-chan error {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() { result <- Run() }()
-	waitFor(t, func() bool { app.mu.Lock(); defer app.mu.Unlock(); return app.running })
+	waitFor(t, func() bool {
+		app.mu.Lock()
+		defer app.mu.Unlock()
+		return app.running
+	})
 	return result
 }
 func stillRunning(t *testing.T, result <-chan error) {
@@ -217,7 +242,13 @@ func TestWindowCloseCallback(t *testing.T) {
 	w := pendingWindow(p)
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	if err := w.OnClose(func() { calls.Add(1); close(entered); <-release; _ = w.Hidden(); close(finished) }); err != nil {
+	if err := w.OnClose(func() {
+		calls.Add(1)
+		close(entered)
+		<-release
+		_ = w.Hidden()
+		close(finished)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	w.requestClose()
@@ -230,7 +261,11 @@ func TestWindowCloseCallback(t *testing.T) {
 	}
 	close(release)
 	<-finished
-	waitFor(t, func() bool { w.lifeMu.Lock(); defer w.lifeMu.Unlock(); return !w.closePending })
+	waitFor(t, func() bool {
+		w.lifeMu.Lock()
+		defer w.lifeMu.Unlock()
+		return !w.closePending
+	})
 	if err := w.OnClose(func() { _ = w.Close() }); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +289,11 @@ func TestQuitInsideCallbackDoesNotWaitForCallbacks(t *testing.T) {
 	isolatedApplication(t)
 	w := pendingWindow(&lifecyclePlatform{})
 	release, finished := make(chan struct{}), make(chan struct{})
-	_ = w.OnClose(func() { _ = Quit(); close(finished); <-release })
+	_ = w.OnClose(func() {
+		_ = Quit()
+		close(finished)
+		<-release
+	})
 	result := running(t)
 	w.requestClose()
 	select {
@@ -268,7 +307,11 @@ func TestQuitInsideCallbackDoesNotWaitForCallbacks(t *testing.T) {
 		t.Fatal("Run waited for user callback")
 	}
 	close(release)
-	waitFor(t, func() bool { w.lifeMu.Lock(); defer w.lifeMu.Unlock(); return !w.closePending })
+	waitFor(t, func() bool {
+		w.lifeMu.Lock()
+		defer w.lifeMu.Unlock()
+		return !w.closePending
+	})
 }
 func TestChromeWindowLifecycleUnsupported(t *testing.T) {
 	w := &W{p: chrome.New(chrome.Options{})}
@@ -290,8 +333,15 @@ type waitingPlatform struct {
 	entered, release chan struct{}
 }
 
-func (p *waitingPlatform) Eval(string) error { close(p.entered); <-p.release; return nil }
-func (p *waitingPlatform) Close() error      { close(p.release); return nil }
+func (p *waitingPlatform) Eval(string) error {
+	close(p.entered)
+	<-p.release
+	return nil
+}
+func (p *waitingPlatform) Close() error {
+	close(p.release)
+	return nil
+}
 func TestQuitInterruptsWaitingWindowOperation(t *testing.T) {
 	isolatedApplication(t)
 	p := &waitingPlatform{entered: make(chan struct{}), release: make(chan struct{})}
@@ -299,7 +349,10 @@ func TestQuitInterruptsWaitingWindowOperation(t *testing.T) {
 	app.windows[w] = struct{}{}
 	result := running(t)
 	evaluated := make(chan struct{})
-	go func() { _ = w.Eval("pending promise"); close(evaluated) }()
+	go func() {
+		_ = w.Eval("pending promise")
+		close(evaluated)
+	}()
 	<-p.entered
 	quit := make(chan error, 1)
 	go func() { quit <- Quit() }()

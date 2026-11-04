@@ -101,7 +101,10 @@ func (p *Platform) SetSystray(opts types.SystrayOptions) error {
 	}
 	p.mu.Unlock()
 	var err error
-	p.MainThread(func() { p.trayOptions = &opts; err = p.applySystray() })
+	p.MainThread(func() {
+		p.trayOptions = &opts
+		err = p.applySystray()
+	})
 	return err
 }
 func (p *Platform) RemoveSystray() error {
@@ -114,7 +117,10 @@ func (p *Platform) RemoveSystray() error {
 		return nil
 	}
 	p.mu.Unlock()
-	p.MainThread(func() { p.trayOptions = nil; p.removeSystray() })
+	p.MainThread(func() {
+		p.trayOptions = nil
+		p.removeSystray()
+	})
 	return nil
 }
 func (p *Platform) trayData() notifyIconData {

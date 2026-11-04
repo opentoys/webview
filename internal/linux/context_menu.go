@@ -95,7 +95,12 @@ func (p *gtk) extendContextMenu(menu uintptr) bool {
 		return false
 	}
 	// These are WebKitContextMenuAction enum values, independent of locale.
-	stock := map[types.MenuItemRole]int{types.MenuItemRoleCopy: 14, types.MenuItemRoleCut: 15, types.MenuItemRolePaste: 16, types.MenuItemRoleSelectAll: 18}
+	stock := map[types.MenuItemRole]int{
+		types.MenuItemRoleCopy:      14,
+		types.MenuItemRoleCut:       15,
+		types.MenuItemRolePaste:     16,
+		types.MenuItemRoleSelectAll: 18,
+	}
 	list := contextGetItems(menu)
 	items := make([]uintptr, 0, gListLength(list))
 	for i := uint(0); i < uint(gListLength(list)); i++ {

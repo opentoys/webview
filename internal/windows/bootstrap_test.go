@@ -5,10 +5,13 @@ package windows
 import (
 	"strings"
 	"testing"
+
+	"github.com/opentoys/webview/internal/bridgejs"
 )
 
 func TestBootstrapJS(t *testing.T) {
-	js := bootstrapJS([]string{"greet", "add"})
+	p := &Platform{BindingScript: func() string { return bridgejs.Proxies(bridgejs.Functions([]string{"greet", "add"})) }}
+	js := p.bootstrapScript()
 	if !strings.Contains(js, "window.chrome.webview.postMessage") {
 		t.Fatal("missing chrome.webview.postMessage")
 	}
@@ -24,7 +27,7 @@ func TestBootstrapJS(t *testing.T) {
 }
 
 func TestBootstrapJSEmpty(t *testing.T) {
-	js := bootstrapJS(nil)
+	js := bootstrapJS()
 	if !strings.Contains(js, "window.webviewBridge") {
 		t.Fatal("missing webviewBridge")
 	}

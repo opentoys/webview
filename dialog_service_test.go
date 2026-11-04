@@ -62,7 +62,11 @@ func TestStandaloneDialogEntrypoints(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		}
-		calls := []func() (string, error){ChooseDir, func() (string, error) { return ChooseFile(FileFilter{Name: "Text", Extensions: []string{"txt"}}) }, func() (string, error) { return SaveFile(FileDialogOptions{Filename: "report.txt"}) }}
+		calls := []func() (string, error){
+			ChooseDir,
+			func() (string, error) { return ChooseFile(FileFilter{Name: "Text", Extensions: []string{"txt"}}) },
+			func() (string, error) { return SaveFile(FileDialogOptions{Filename: "report.txt"}) },
+		}
 		for _, call := range calls {
 			path, err := call()
 			if err != nil || !filepath.IsAbs(path) {
@@ -117,10 +121,19 @@ func TestDialogQueueSnapshotAndReentry(t *testing.T) {
 		return "/tmp/file", nil
 	}
 	results := make(chan error, 3)
-	go func() { _, err := d.choose(types.DialogSave, FileDialogOptions{Filename: "first"}); results <- err }()
+	go func() {
+		_, err := d.choose(types.DialogSave, FileDialogOptions{Filename: "first"})
+		results <- err
+	}()
 	awaitDialog(t, entered)
-	opts := FileDialogOptions{Filename: "second", Filters: []FileFilter{{Extensions: []string{"txt"}, MIMETypes: []string{"text/plain"}}}}
-	go func() { _, err := d.choose(types.DialogSave, opts); results <- err }()
+	opts := FileDialogOptions{
+		Filename: "second",
+		Filters:  []FileFilter{{Extensions: []string{"txt"}, MIMETypes: []string{"text/plain"}}},
+	}
+	go func() {
+		_, err := d.choose(types.DialogSave, opts)
+		results <- err
+	}()
 	// The queue lock is also the handoff that proves the snapshot has completed.
 	for {
 		d.mu.Lock()
@@ -161,13 +174,22 @@ func TestDialogQuitInterruptsActiveAndQueued(t *testing.T) {
 		return "", ErrDialogCancelled
 	}
 	results := make(chan error, 8)
-	go func() { _, err := d.choose(types.DialogOpen, FileDialogOptions{}); results <- err }()
+	go func() {
+		_, err := d.choose(types.DialogOpen, FileDialogOptions{})
+		results <- err
+	}()
 	awaitDialog(t, entered)
 	for range 7 {
-		go func() { _, err := d.choose(types.DialogOpen, FileDialogOptions{}); results <- err }()
+		go func() {
+			_, err := d.choose(types.DialogOpen, FileDialogOptions{})
+			results <- err
+		}()
 	}
 	stopped := make(chan struct{})
-	go func() { d.stop(); close(stopped) }()
+	go func() {
+		d.stop()
+		close(stopped)
+	}()
 	awaitDialog(t, stopped)
 	for range 8 {
 		if err := awaitDialog(t, results); !errors.Is(err, ErrApplicationStopped) {
@@ -180,13 +202,20 @@ func TestDialogQuitDuringPreparation(t *testing.T) {
 	d := fakeDialogs()
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	d.prepare = func() error { close(entered); <-release; return nil }
+	d.prepare = func() error {
+		close(entered)
+		<-release
+		return nil
+	}
 	d.show = func(types.DialogKind, FileDialogOptions, func() bool) (string, error) {
 		t.Error("show after shutdown")
 		return "", nil
 	}
 	result := make(chan error, 1)
-	go func() { _, err := d.choose(types.DialogOpen, FileDialogOptions{}); result <- err }()
+	go func() {
+		_, err := d.choose(types.DialogOpen, FileDialogOptions{})
+		result <- err
+	}()
 	awaitDialog(t, entered)
 	d.cancel = func() { close(release) }
 	d.stop()
@@ -209,7 +238,10 @@ func TestClosingLastWindowLeavesDialogActive(t *testing.T) {
 	}
 	w := pendingWindow(&lifecyclePlatform{})
 	result := make(chan error, 1)
-	go func() { _, err := ChooseDir(); result <- err }()
+	go func() {
+		_, err := ChooseDir()
+		result <- err
+	}()
 	awaitDialog(t, entered)
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -245,7 +277,10 @@ func TestQuitFromDialogUIThreadUnwinds(t *testing.T) {
 		return "", ErrDialogCancelled
 	}
 	result := make(chan error, 1)
-	go func() { _, err := ChooseDir(); result <- err }()
+	go func() {
+		_, err := ChooseDir()
+		result <- err
+	}()
 	if err := awaitDialog(t, result); !errors.Is(err, ErrApplicationStopped) {
 		t.Fatal(err)
 	}

@@ -63,7 +63,10 @@ func RunApplication(start func() error) error {
 	}
 	hostOnce.Do(initializeHost)
 	ownsLoop := false
-	hostPumpOnce.Do(func() { ownsLoop = true; hostRunning.Store(true) })
+	hostPumpOnce.Do(func() {
+		ownsLoop = true
+		hostRunning.Store(true)
+	})
 	if err := start(); err != nil {
 		if ownsLoop {
 			hostDoneOnce.Do(func() { close(hostDone) })
@@ -98,11 +101,18 @@ func mainThread(fn func()) {
 	}
 	done := make(chan struct{})
 	select {
-	case commandChan <- func() { fn(); close(done) }:
+	case commandChan <- func() {
+		fn()
+		close(done)
+	}:
 	case <-hostDone:
 		return
 	}
-	modes := []objc.ID{nsString("NSDefaultRunLoopMode"), nsString("NSModalPanelRunLoopMode"), nsString("NSEventTrackingRunLoopMode")}
+	modes := []objc.ID{
+		nsString("NSDefaultRunLoopMode"),
+		nsString("NSModalPanelRunLoopMode"),
+		nsString("NSEventTrackingRunLoopMode"),
+	}
 	array := objc.ID(nsArrayClass).Send(arrayWithObjectsCountSel, unsafe.Pointer(&modes[0]), uintptr(len(modes)))
 	commandTarget.Send(objc.RegisterName("performSelector:onThread:withObject:waitUntilDone:modes:"), objc.RegisterName("runCommand:"), hostThread, objc.ID(0), false, array)
 	runtime.KeepAlive(modes)
@@ -142,9 +152,6 @@ type Platform struct {
 	// window.webkit.messageHandlers.webviewBridge.
 	MessageFunc   func(string)
 	BindingScript func() string
-	// BoundFuncs returns the JS-visible func names; the bootstrap script
-	// defines window.<name> stubs from it at page start.
-	BoundFuncs func() []string
 	// OpenPanelFunc overrides the native NSOpenPanel sheet for <input type=file>.
 	// When set, WebKit does not show the default panel; the app must call
 	// callback with the absolute paths the user chose, or (nil,false) to
@@ -253,12 +260,18 @@ func (p *Platform) Run() error {
 	mainThread(func() { setupErr = p.setup() })
 	if setupErr != nil {
 		_ = p.Close()
-		mainThread(func() { p.closeExtendedMenus(); p.endOffscreenActivity() })
+		mainThread(func() {
+			p.closeExtendedMenus()
+			p.endOffscreenActivity()
+		})
 		p.Logger.Log(BackendName, "error", map[string]string{"operation": "setup", "error": debuglog.Error(setupErr)})
 		return setupErr
 	}
 	<-p.runDone
-	mainThread(func() { p.closeExtendedMenus(); p.endOffscreenActivity() })
+	mainThread(func() {
+		p.closeExtendedMenus()
+		p.endOffscreenActivity()
+	})
 	p.Logger.Log(BackendName, "closed", nil)
 	return nil
 }

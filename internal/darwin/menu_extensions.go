@@ -203,7 +203,11 @@ func (p *Platform) extendContextMenu(menu objc.ID) {
 			// WKWebView forwards default commands through one selector and WebKit's
 			// native ContextMenuAction tags, rather than the AppKit responder actions.
 			if action == objc.ID(objc.RegisterName("forwardContextMenuAction:")) {
-				tags := map[types.MenuItemRole]uintptr{types.MenuItemRoleCopy: 8, types.MenuItemRoleCut: 13, types.MenuItemRolePaste: 14}
+				tags := map[types.MenuItemRole]uintptr{
+					types.MenuItemRoleCopy:  8,
+					types.MenuItemRoleCut:   13,
+					types.MenuItemRolePaste: 14,
+				}
 				if tag := tags[role]; tag != 0 && uintptr(item.Send(objc.RegisterName("tag"))) == tag {
 					matches = true
 				}

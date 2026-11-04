@@ -104,7 +104,6 @@ type Chrome struct {
 	scriptMu          sync.Mutex
 	documentScriptIDs []string
 	BindingScript     func() string
-	BoundFuncs        func() []string
 	MessageFunc       func(string)
 }
 

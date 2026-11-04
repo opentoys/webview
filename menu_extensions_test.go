@@ -29,8 +29,14 @@ func (p *menuPlatformStub) ApplyContextMenu(opts types.ContextMenuConfig) error 
 	p.calls++
 	return nil
 }
-func (p *menuPlatformStub) SetSystray(opts SystrayOptions) error { p.tray = opts; return p.err }
-func (p *menuPlatformStub) RemoveSystray() error                 { p.tray = SystrayOptions{}; return p.err }
+func (p *menuPlatformStub) SetSystray(opts SystrayOptions) error {
+	p.tray = opts
+	return p.err
+}
+func (p *menuPlatformStub) RemoveSystray() error {
+	p.tray = SystrayOptions{}
+	return p.err
+}
 func menuTestIcon(t *testing.T) []byte {
 	t.Helper()
 	var b bytes.Buffer
@@ -132,10 +138,18 @@ func TestSystraySnapshotsAndRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func traySnapshotError(opts SystrayOptions) error { _, err := traySnapshot(opts); return err }
+func traySnapshotError(opts SystrayOptions) error {
+	_, err := traySnapshot(opts)
+	return err
+}
 func TestChromeMenuExtensionsUnsupported(t *testing.T) {
 	w := &W{p: chrome.New(chrome.Options{})}
-	errorsToCheck := []error{w.SetContextMenu(nil), w.AddContextMenuItem(MenuItem{ID: "x"}), w.RemoveContextMenuItem("x"), w.RemoveContextMenuItemRole(MenuItemRoleCopy)}
+	errorsToCheck := []error{
+		w.SetContextMenu(nil),
+		w.AddContextMenuItem(MenuItem{ID: "x"}),
+		w.RemoveContextMenuItem("x"),
+		w.RemoveContextMenuItemRole(MenuItemRoleCopy),
+	}
 	for _, err := range errorsToCheck {
 		if !errors.Is(err, ErrMenuUnsupported) {
 			t.Fatalf("got %v", err)

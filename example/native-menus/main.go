@@ -51,12 +51,20 @@ func main() {
 	tray = func() error {
 		trayMu.Lock()
 		defer trayMu.Unlock()
-		opts := webview.SystrayOptions{Icon: pngData.Bytes(), Title: fmt.Sprintf("WebView %d", count.Load()), Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()), Items: []webview.MenuItem{
-			{ID: "update", Label: "Update tray", Action: func() { count.Add(1); report(tray()) }},
-			{ID: "remove", Label: "Remove tray", Action: func() { report(removeTray()) }},
-			{ID: "separator", Separator: true},
-			{ID: "quit", Label: "Quit", Action: func() { report(webview.Quit()) }},
-		}}
+		opts := webview.SystrayOptions{
+			Icon:    pngData.Bytes(),
+			Title:   fmt.Sprintf("WebView %d", count.Load()),
+			Tooltip: fmt.Sprintf("WebView tray — updated %d times", count.Load()),
+			Items: []webview.MenuItem{
+				{ID: "update", Label: "Update tray", Action: func() {
+					count.Add(1)
+					report(tray())
+				}},
+				{ID: "remove", Label: "Remove tray", Action: func() { report(removeTray()) }},
+				{ID: "separator", Separator: true},
+				{ID: "quit", Label: "Quit", Action: func() { report(webview.Quit()) }},
+			},
+		}
 		if nativeTray == nil {
 			var err error
 			nativeTray, err = webview.NewSystray(opts)
@@ -67,7 +75,11 @@ func main() {
 	report(tray())
 	for _, item := range []webview.MenuItem{
 		{ID: "hello", Label: "Go callback", Action: func() { report(w.Eval(`alert('Hello from Go')`)) }},
-		{ID: "remove-self", Label: "Remove this item", Action: func() { report(w.RemoveContextMenuItem("remove-self")) }},
+		{
+			ID:     "remove-self",
+			Label:  "Remove this item",
+			Action: func() { report(w.RemoveContextMenuItem("remove-self")) },
+		},
 	} {
 		report(w.AddContextMenuItem(item))
 	}
@@ -75,7 +87,11 @@ func main() {
 	report(w.Bind("restoreTray", tray))
 	report(w.Bind("removeTray", removeTray))
 	report(w.Bind("addItem", func() error {
-		return w.AddContextMenuItem(webview.MenuItem{ID: "added", Label: "Added at runtime", Action: func() { report(w.Eval(`alert('Added item clicked')`)) }})
+		return w.AddContextMenuItem(webview.MenuItem{
+			ID:     "added",
+			Label:  "Added at runtime",
+			Action: func() { report(w.Eval(`alert('Added item clicked')`)) },
+		})
 	}))
 	report(w.Bind("removeItem", func() error { return w.RemoveContextMenuItem("added") }))
 	report(w.Bind("resetContext", func() error { return w.SetContextMenu(nil) }))

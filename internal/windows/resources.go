@@ -5,7 +5,6 @@ package windows
 // Custom scheme rewriting and WebView2 resource interception.
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,14 +20,7 @@ func (p *Platform) rewriteSchemeURL(rawURL string) string {
 			if err != nil {
 				return rawURL
 			}
-			out := fmt.Sprintf("https://%s.localhost/%s", scheme, strings.TrimPrefix(u.Path, "/"))
-			if u.RawQuery != "" {
-				out += "?" + u.RawQuery
-			}
-			if u.Fragment != "" {
-				out += "#" + u.Fragment
-			}
-			return out
+			return types.LocalhostURL(scheme, u)
 		}
 	}
 	return rawURL

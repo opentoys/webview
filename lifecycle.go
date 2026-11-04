@@ -32,7 +32,15 @@ var app *application
 func init() { app = newApplication() }
 
 func newApplication() *application {
-	return &application{dialogs: newDialogService(), runNative: runNativeApplication, makeTray: newNativeTray, stopNative: stopNativeApplication, done: make(chan struct{}), windows: make(map[*W]struct{}), trays: make(map[*Systray]struct{})}
+	return &application{
+		dialogs:    newDialogService(),
+		runNative:  runNativeApplication,
+		makeTray:   newNativeTray,
+		stopNative: stopNativeApplication,
+		done:       make(chan struct{}),
+		windows:    make(map[*W]struct{}),
+		trays:      make(map[*Systray]struct{}),
+	}
 }
 
 // Run owns the process lifetime. Closing the last window or tray does not stop it.
@@ -191,7 +199,11 @@ func (w *W) requestClose() {
 	w.closePending = true
 	w.lifeMu.Unlock()
 	go func() {
-		defer func() { w.lifeMu.Lock(); w.closePending = false; w.lifeMu.Unlock() }()
+		defer func() {
+			w.lifeMu.Lock()
+			w.closePending = false
+			w.lifeMu.Unlock()
+		}()
 		w.lifeMu.Lock()
 		valid := !w.closed && !app.quitting.Load()
 		w.lifeMu.Unlock()

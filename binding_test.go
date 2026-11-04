@@ -121,7 +121,11 @@ func TestBindingReplacementAndInvalidValues(t *testing.T) {
 func TestCallDuringUnbindAndConcurrentReplacement(t *testing.T) {
 	b := newBridge()
 	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan string, 1)
-	b.Bind("slow", func() string { close(entered); <-release; return "finished" })
+	b.Bind("slow", func() string {
+		close(entered)
+		<-release
+		return "finished"
+	})
 	go func() { done <- bridgeReply(b, "slow", nil, []any{}) }()
 	select {
 	case <-entered:
@@ -157,7 +161,10 @@ func TestFunctionConversionsAndPanic(t *testing.T) {
 	type payload struct {
 		Value int `json:"value"`
 	}
-	b.Bind("convert", func(p payload) (payload, error) { p.Value++; return p, nil })
+	b.Bind("convert", func(p payload) (payload, error) {
+		p.Value++
+		return p, nil
+	})
 	if got := bridgeReply(b, "convert", nil, []any{map[string]any{"value": 3}}); got != `webviewBridge.resolve(1, {"value":4})` {
 		t.Fatal(got)
 	}
@@ -172,7 +179,10 @@ func TestBridgeCallsRunOutsideRegistryLock(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
 	defer close(release)
-	b.Bind("parallel", func() { entered <- struct{}{}; <-release })
+	b.Bind("parallel", func() {
+		entered <- struct{}{}
+		<-release
+	})
 	for i := 0; i < 2; i++ {
 		go bridgeReply(b, "parallel", nil, []any{})
 	}
@@ -191,7 +201,10 @@ type bindingPlatform struct {
 	refreshes int
 }
 
-func (p *bindingPlatform) RefreshBindings() error { p.refreshes++; return nil }
+func (p *bindingPlatform) RefreshBindings() error {
+	p.refreshes++
+	return nil
+}
 
 func TestWindowBindingRefresh(t *testing.T) {
 	p := &bindingPlatform{}

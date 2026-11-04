@@ -28,81 +28,103 @@ type binding struct {
 }
 
 func (b *bridge) Bind(name string, value any) error {
-	v := reflect.ValueOf(value)
-	if !v.IsValid() {
-		return fmt.Errorf("webview: nil binding for %q", name)
-	}
-	next := binding{}
-	switch v.Kind() {
-	case reflect.Func:
-		if v.IsNil() {
-			return fmt.Errorf("webview: nil func for %q", name)
-		}
-		next.fn = value
-	case reflect.Pointer, reflect.Struct:
-		if v.Kind() == reflect.Pointer && (v.IsNil() || v.Type().Elem().Kind() != reflect.Struct) {
-			return fmt.Errorf("webview: %q requires a non-nil *struct", name)
-		}
-		next.methods = make(map[string]any)
-		for i := 0; i < v.NumMethod(); i++ {
-			method := v.Type().Method(i)
-			if method.PkgPath == "" {
-				next.methods[method.Name] = v.Method(i).Interface()
-			}
-		}
-		fields := v
-		if fields.Kind() == reflect.Pointer {
-			fields = fields.Elem()
-		}
-		next.properties = make(map[string]json.RawMessage)
-		for _, field := range reflect.VisibleFields(fields.Type()) {
-			if field.PkgPath != "" {
-				continue
-			}
-			fv, err := fields.FieldByIndexErr(field.Index)
-			if err != nil {
-				continue
-			} // Promoted field behind a nil embedded pointer.
-			if _, exists := next.methods[field.Name]; exists {
-				return fmt.Errorf("webview: field and method %q conflict on %q", field.Name, name)
-			}
-			data, err := json.Marshal(fv.Interface())
-			if err != nil {
-				return fmt.Errorf("webview: field %q on %q: %w", field.Name, name, err)
-			}
-			next.properties[field.Name] = data
-		}
-		if len(next.methods) == 0 && len(next.properties) == 0 {
-			return fmt.Errorf("webview: %q has no exported fields or methods", name)
-		}
-	case reflect.Map:
-		values, ok := value.(map[string]any)
-		if !ok || values == nil {
-			return fmt.Errorf("webview: %q requires a non-nil map[string]any", name)
-		}
-		next.methods = make(map[string]any)
-		next.properties = make(map[string]json.RawMessage)
-		for key, member := range values {
-			mv := reflect.ValueOf(member)
-			if mv.IsValid() && mv.Kind() == reflect.Func {
-				if mv.IsNil() {
-					return fmt.Errorf("webview: nil func %q on %q", key, name)
-				}
-				next.methods[key] = member
-			} else {
-				data, err := json.Marshal(member)
-				if err != nil {
-					return fmt.Errorf("webview: property %q on %q: %w", key, name, err)
-				}
-				next.properties[key] = data
-			}
-		}
-	default:
-		return fmt.Errorf("webview: %q requires a func, struct, *struct, or map[string]any", name)
+	next, err := buildBinding(name, value)
+	if err != nil {
+		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.funcs[name] = next
+	return nil
+}
+
+func buildBinding(name string, value any) (binding, error) {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return binding{}, fmt.Errorf("webview: nil binding for %q", name)
+	}
+	switch v.Kind() {
+	case reflect.Func:
+		if v.IsNil() {
+			return binding{}, fmt.Errorf("webview: nil func for %q", name)
+		}
+		return binding{fn: value}, nil
+	case reflect.Pointer, reflect.Struct:
+		if v.Kind() == reflect.Pointer && (v.IsNil() || v.Type().Elem().Kind() != reflect.Struct) {
+			return binding{}, fmt.Errorf("webview: %q requires a non-nil *struct", name)
+		}
+		return structBinding(name, v)
+	case reflect.Map:
+		values, ok := value.(map[string]any)
+		if !ok || values == nil {
+			return binding{}, fmt.Errorf("webview: %q requires a non-nil map[string]any", name)
+		}
+		return mapBinding(name, values)
+	default:
+		return binding{}, fmt.Errorf("webview: %q requires a func, struct, *struct, or map[string]any", name)
+	}
+}
+
+func structBinding(name string, v reflect.Value) (binding, error) {
+	next := binding{methods: make(map[string]any)}
+	for i := 0; i < v.NumMethod(); i++ {
+		method := v.Type().Method(i)
+		if method.PkgPath == "" {
+			next.methods[method.Name] = v.Method(i).Interface()
+		}
+	}
+	fields := v
+	if fields.Kind() == reflect.Pointer {
+		fields = fields.Elem()
+	}
+	next.properties = make(map[string]json.RawMessage)
+	for _, field := range reflect.VisibleFields(fields.Type()) {
+		if field.PkgPath != "" {
+			continue
+		}
+		fv, err := fields.FieldByIndexErr(field.Index)
+		if err != nil {
+			// Promoted field behind a nil embedded pointer.
+			continue
+		}
+		if _, exists := next.methods[field.Name]; exists {
+			return binding{}, fmt.Errorf("webview: field and method %q conflict on %q", field.Name, name)
+		}
+		if err := next.addProperty(name, "field", field.Name, fv.Interface()); err != nil {
+			return binding{}, err
+		}
+	}
+	if len(next.methods) == 0 && len(next.properties) == 0 {
+		return binding{}, fmt.Errorf("webview: %q has no exported fields or methods", name)
+	}
+	return next, nil
+}
+
+func mapBinding(name string, values map[string]any) (binding, error) {
+	next := binding{methods: make(map[string]any)}
+	next.properties = make(map[string]json.RawMessage)
+	for key, member := range values {
+		mv := reflect.ValueOf(member)
+		if mv.IsValid() && mv.Kind() == reflect.Func {
+			if mv.IsNil() {
+				return binding{}, fmt.Errorf("webview: nil func %q on %q", key, name)
+			}
+			next.methods[key] = member
+		} else {
+			if err := next.addProperty(name, "property", key, member); err != nil {
+				return binding{}, err
+			}
+		}
+	}
+	return next, nil
+}
+
+func (b *binding) addProperty(name, kind, key string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("webview: %s %q on %q: %w", kind, key, name, err)
+	}
+	b.properties[key] = data
 	return nil
 }
 
@@ -240,7 +262,12 @@ func callFunc(fn any, raw json.RawMessage) (result any, err error) {
 		return nil, fmt.Errorf("webview: too many return values")
 	}
 }
-func (b *bridge) Close() { b.mu.Lock(); b.closed = true; clear(b.funcs); b.mu.Unlock() }
+func (b *bridge) Close() {
+	b.mu.Lock()
+	b.closed = true
+	clear(b.funcs)
+	b.mu.Unlock()
+}
 
 // Keep the internal file-input capture ordered with native chooser requests;
 // application bindings always run outside native callback stacks.

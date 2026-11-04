@@ -18,7 +18,12 @@ func (*propertyObject) Hello() string { return "hello" }
 
 func TestReadOnlyPropertySnapshots(t *testing.T) {
 	b := newBridge()
-	obj := &propertyObject{propertyEmbedded: propertyEmbedded{Promoted: "visible"}, Name: "first", Nested: map[string]any{"n": 1}, hidden: "secret"}
+	obj := &propertyObject{
+		propertyEmbedded: propertyEmbedded{Promoted: "visible"},
+		Name:             "first",
+		Nested:           map[string]any{"n": 1},
+		hidden:           "secret",
+	}
 	if err := b.Bind("app", obj); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +54,12 @@ func TestReadOnlyPropertySnapshots(t *testing.T) {
 
 func TestMapBindings(t *testing.T) {
 	b := newBridge()
-	values := map[string]any{"version": "1.0", "nil": nil, "nested": map[string]any{"__proto__": "safe"}, "greet": func(name string) string { return "hi " + name }}
+	values := map[string]any{
+		"version": "1.0",
+		"nil":     nil,
+		"nested":  map[string]any{"__proto__": "safe"},
+		"greet":   func(name string) string { return "hi " + name },
+	}
 	if err := b.Bind("app", values); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +88,13 @@ func TestMapBindings(t *testing.T) {
 	var nilFn func()
 	cyclic := map[string]any{}
 	cyclic["self"] = cyclic
-	for _, invalid := range []any{nilMap, map[string]any{"fn": nilFn}, map[string]any{"bad": make(chan int)}, cyclic, struct{ Bad chan int }{make(chan int)}} {
+	for _, invalid := range []any{
+		nilMap,
+		map[string]any{"fn": nilFn},
+		map[string]any{"bad": make(chan int)},
+		cyclic,
+		struct{ Bad chan int }{make(chan int)},
+	} {
 		if err := b.Bind("app", invalid); err == nil {
 			t.Fatalf("accepted %T", invalid)
 		}

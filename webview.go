@@ -236,7 +236,11 @@ func (w *W) Close() error {
 	if w.bridge != nil {
 		w.bridge.Close()
 	}
-	defer func() { app.registryMu.Lock(); delete(app.windows, w); app.registryMu.Unlock() }()
+	defer func() {
+		app.registryMu.Lock()
+		delete(app.windows, w)
+		app.registryMu.Unlock()
+	}()
 	w.dropMu.Lock()
 	w.dropClosed = true
 	w.dropQueue = nil
@@ -255,7 +259,10 @@ func (w *W) SetTitle(title string) error {
 	return w.windowCall(func() error { return w.p.SetTitle(title) })
 }
 func (w *W) SetSize(width, height int, hint types.SizeHint) error {
-	return w.windowCall(func() error { w.p.SetSize(width, height, hint); return nil })
+	return w.windowCall(func() error {
+		w.p.SetSize(width, height, hint)
+		return nil
+	})
 }
 func (w *W) Navigate(url string) error {
 	return w.windowCall(func() error { return w.p.Navigate(url) })

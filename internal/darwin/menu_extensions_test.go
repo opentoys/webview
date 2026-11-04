@@ -21,7 +21,10 @@ func TestNativeContextMenuExtension(t *testing.T) {
 	}
 	startAppHost()
 	called := make(chan string, 4)
-	if err = p.ApplyContextMenu(types.ContextMenuConfig{RemoveDefault: []types.MenuItemRole{types.MenuItemRoleCopy}, Items: []MenuItem{{ID: "custom", Label: "Custom", Action: func() { called <- "context" }}}}); err != nil {
+	if err = p.ApplyContextMenu(types.ContextMenuConfig{
+		RemoveDefault: []types.MenuItemRole{types.MenuItemRoleCopy},
+		Items:         []MenuItem{{ID: "custom", Label: "Custom", Action: func() { called <- "context" }}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var failure string
@@ -102,7 +105,12 @@ func TestNativeSystrayLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	opts := types.SystrayOptions{Icon: data.Bytes(), Title: "Visible title", Tooltip: "WebView test", Items: []MenuItem{{ID: "remove", Label: "Remove", Action: func() { done <- p.RemoveSystray() }}}}
+	opts := types.SystrayOptions{
+		Icon:    data.Bytes(),
+		Title:   "Visible title",
+		Tooltip: "WebView test",
+		Items:   []MenuItem{{ID: "remove", Label: "Remove", Action: func() { done <- p.RemoveSystray() }}},
+	}
 	if err := p.SetSystray(opts); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +133,10 @@ func TestNativeSystrayLifecycle(t *testing.T) {
 	if nativeErr != nil {
 		t.Fatal(nativeErr)
 	}
-	defer mainThread(func() { old.Send(releaseSel); p.closeExtendedMenus() })
+	defer mainThread(func() {
+		old.Send(releaseSel)
+		p.closeExtendedMenus()
+	})
 	opts.Tooltip = "Updated"
 	opts.Title = ""
 	if err := p.SetSystray(opts); err != nil {
