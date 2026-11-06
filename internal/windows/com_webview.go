@@ -232,3 +232,8 @@ type iCoreWebView2SettingsVtbl struct {
 	GetIsBuiltInErrorPageEnabled      ComProc
 	PutIsBuiltInErrorPageEnabled      ComProc
 }
+
+func (w *iCoreWebView2) OpenDevToolsWindow() uintptr {
+	hr, _, _ := w.vtbl.OpenDevToolsWindow.Call(uintptr(unsafe.Pointer(w)))
+	return hr
+}

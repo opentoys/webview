@@ -45,6 +45,7 @@ type Gtk interface {
 	Navigate(url string) error
 	SetHTML(html string) error
 	Eval(js string) error
+	ShowDevTools() error
 	Init(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)

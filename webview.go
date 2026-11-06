@@ -63,6 +63,8 @@ type FileDialogOptions = types.FileDialogOptions
 var (
 	// ErrDialogCancelled is returned when a native chooser is dismissed.
 	ErrDialogCancelled = types.ErrDialogCancelled
+	// ErrDevToolsUnsupported reports that the backend cannot open developer tools.
+	ErrDevToolsUnsupported = types.ErrDevToolsUnsupported
 	// ErrDialogUnsupported is returned when native UI capabilities are unavailable.
 	ErrDialogUnsupported = types.ErrDialogUnsupported
 	// ErrDropUnsupported is returned when a backend cannot receive native file
@@ -81,6 +83,7 @@ type Platform interface {
 	Navigate(url string) error
 	SetHTML(html string) error
 	Eval(js string) error
+	ShowDevTools() error
 	Init(js string) error
 	InterceptResource(scheme string, handler ResourceHandler)
 	SetMenus(menus []Menu)
@@ -490,4 +493,14 @@ func (w *W) refreshBindings() error {
 		return p.RefreshBindings()
 	}
 	return nil
+}
+
+// ShowDevTools opens or shows existing developer tools after the window starts.
+// It requires Options.Debug=true and returns an error before startup; it never
+// starts the window or queues the request. Success means the native request was submitted.
+// macOS WebKit, Windows WebView2 and Linux WebKitGTK are supported; Chrome returns
+// ErrDevToolsUnsupported. macOS uses private WebKit API and may be unsupported
+// on some system versions. A closed window returns ErrClosed.
+func (w *W) ShowDevTools() error {
+	return w.windowCall(func() error { return w.p.ShowDevTools() })
 }

@@ -14,3 +14,5 @@ func (p *dialogPlatformStub) InterceptResource(string, ResourceHandler) {}
 func (p *dialogPlatformStub) SetMenus([]Menu)                           {}
 func (p *dialogPlatformStub) MainThread(f func())                       { f() }
 func (p *dialogPlatformStub) SetFilesDropped(func([]string)) error      { return nil }
+
+func (p *dialogPlatformStub) ShowDevTools() error { return nil }

@@ -114,6 +114,8 @@ var (
 
 	webkitWebViewNew                              func() uintptr
 	webkitWebViewGetUserContentManager            func(webview uintptr) uintptr
+	webkitWebViewGetInspector                     func(uintptr) uintptr
+	webkitWebInspectorShow                        func(uintptr)
 	webkitWebViewGetSettings                      func(webview uintptr) uintptr
 	webkitSettingsSetJavascriptCanAccessClipboard func(settings uintptr, enabled bool)
 	webkitSettingsSetEnableWriteConsoleToStdout   func(settings uintptr, enabled bool)
@@ -237,6 +239,8 @@ func registerWebKit(webkit uintptr) {
 
 	purego.RegisterLibFunc(&webkitWebViewNew, webkit, "webkit_web_view_new")
 	purego.RegisterLibFunc(&webkitWebViewGetUserContentManager, webkit, "webkit_web_view_get_user_content_manager")
+	purego.RegisterLibFunc(&webkitWebViewGetInspector, webkit, "webkit_web_view_get_inspector")
+	purego.RegisterLibFunc(&webkitWebInspectorShow, webkit, "webkit_web_inspector_show")
 	purego.RegisterLibFunc(&webkitWebViewGetSettings, webkit, "webkit_web_view_get_settings")
 	purego.RegisterLibFunc(&webkitSettingsSetJavascriptCanAccessClipboard, webkit, "webkit_settings_set_javascript_can_access_clipboard")
 	purego.RegisterLibFunc(&webkitSettingsSetEnableWriteConsoleToStdout, webkit, "webkit_settings_set_enable_write_console_messages_to_stdout")

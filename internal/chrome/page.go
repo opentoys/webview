@@ -122,3 +122,5 @@ func jsString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func (c *Chrome) ShowDevTools() error { return types.ErrDevToolsUnsupported }
